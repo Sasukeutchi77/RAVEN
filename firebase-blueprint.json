@@ -1,0 +1,66 @@
+{
+  "entities": {
+    "User": {
+      "collection": "users",
+      "fields": {
+        "userId": { "type": "string", "required": true },
+        "name": { "type": "string", "required": true },
+        "email": { "type": "string", "required": false },
+        "avatarUrl": { "type": "string", "required": false },
+        "status": { "type": "string", "required": false },
+        "customStatus": { "type": "string", "required": false },
+        "role": { "type": "string", "required": false },
+        "createdAt": { "type": "timestamp", "required": false }
+      }
+    },
+    "Server": {
+      "collection": "servers",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "name": { "type": "string", "required": true },
+        "iconText": { "type": "string", "required": false },
+        "ownerId": { "type": "string", "required": true },
+        "memberIds": { "type": "array", "required": false },
+        "createdAt": { "type": "timestamp", "required": false }
+      }
+    },
+    "Channel": {
+      "collection": "channels",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "serverId": { "type": "string", "required": true },
+        "name": { "type": "string", "required": true },
+        "type": { "type": "string", "required": true },
+        "category": { "type": "string", "required": false },
+        "isPrivate": { "type": "boolean", "required": false },
+        "allowedRoles": { "type": "array", "required": false },
+        "createdAt": { "type": "timestamp", "required": false }
+      }
+    },
+    "Message": {
+      "collection": "messages",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "channelId": { "type": "string", "required": true },
+        "senderId": { "type": "string", "required": true },
+        "senderName": { "type": "string", "required": true },
+        "text": { "type": "string", "required": false },
+        "imageUrl": { "type": "string", "required": false },
+        "audioUrl": { "type": "string", "required": false },
+        "replyToText": { "type": "string", "required": false },
+        "isPinned": { "type": "boolean", "required": false },
+        "createdAt": { "type": "timestamp", "required": false }
+      }
+    },
+    "DirectConversation": {
+      "collection": "direct_conversations",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "participantIds": { "type": "array", "required": true },
+        "lastMessage": { "type": "string", "required": false },
+        "lastMessageTime": { "type": "string", "required": false },
+        "updatedAt": { "type": "timestamp", "required": false }
+      }
+    }
+  }
+}
