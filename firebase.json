@@ -4,5 +4,18 @@
       "database": "ai-studio-android-raven-27cb5ccd-742b-487a-9038-3661ba8d45ce",
       "rules": "firestore.rules"
     }
-  ]
+  ],
+  "emulators": {
+    "firestore": {
+      "host": "127.0.0.1",
+      "port": 8085
+    },
+    "auth": {
+      "host": "127.0.0.1",
+      "port": 9099
+    },
+    "ui": {
+      "enabled": false
+    }
+  }
 }

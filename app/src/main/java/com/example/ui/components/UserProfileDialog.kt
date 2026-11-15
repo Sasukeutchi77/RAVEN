@@ -72,6 +72,11 @@ fun UserProfileDialog(
     onStartDirectMessage: ((User) -> Unit)? = null,
     onToggleBadge: (String) -> Unit = {},
     onOpenOrbsShop: () -> Unit = {},
+    onOpenAppSettings: (() -> Unit)? = null,
+    privateNote: String = "",
+    onSavePrivateNote: (String) -> Unit = {},
+    onSaveClanTag: (String) -> Unit = {},
+    onFirebaseAuthChanged: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -123,6 +128,12 @@ fun UserProfileDialog(
                                 contentScale = ContentScale.Crop
                             )
                         }
+
+                        // Live animated profile banner effect (Orbs shop items)
+                        ProfileEffectOverlay(
+                            effectKey = user.profileEffect,
+                            modifier = Modifier.matchParentSize()
+                        )
 
                         // Top Badges Row (Super Badges - Clickable to open showcase)
                         Row(
@@ -210,13 +221,25 @@ fun UserProfileDialog(
                                 )
                                 AvatarDecorationOverlay(
                                     decorationKey = user.avatarDecoration,
-                                    size = 80.dp
+                                    size = 80.dp,
+                                    modifier = Modifier.align(Alignment.Center)
                                 )
                             }
 
                             // Quick Action Buttons
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (isCurrentUser) {
+                                    if (onOpenAppSettings != null) {
+                                        IconButton(
+                                            onClick = {
+                                                onDismiss()
+                                                onOpenAppSettings()
+                                            },
+                                            modifier = Modifier.size(34.dp).padding(end = 4.dp)
+                                        ) {
+                                            Icon(Icons.Default.Tune, contentDescription = "Paramètres", tint = DiscordTextLight, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
                                     // Orbs shop quick button
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
@@ -276,6 +299,27 @@ fun UserProfileDialog(
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.Bold
                                 )
+                                if (!user.clanTag.isNullOrBlank()) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Surface(
+                                        color = DiscordBlurple.copy(alpha = 0.25f),
+                                        shape = RoundedCornerShape(5.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            AppStatusIcon(iconKey = user.clanBadgeIcon, size = 12.dp, tint = DiscordBlurple)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = user.clanTag,
+                                                color = DiscordBlurple,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.ExtraBold
+                                            )
+                                        }
+                                    }
+                                }
                                 if (user.pronouns.isNotBlank()) {
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Surface(
@@ -364,6 +408,54 @@ fun UserProfileDialog(
             }
 
             if (selectedTab == 0) {
+                // Section: Progression XP & Niveau
+                ProfileSectionCard(title = "NIVEAU & PROGRESSION RAVEN") {
+                    val xpTarget = (user.level * 100).coerceAtLeast(100)
+                    val progress = (user.xp.toFloat() / xpTarget.toFloat()).coerceIn(0f, 1f)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(color = DiscordBlurple, shape = RoundedCornerShape(6.dp)) {
+                                Text(
+                                    text = "NIVEAU ${user.level}",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "${user.xp} / $xpTarget XP",
+                                color = DiscordTextWhite,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Text(
+                            text = "+50 Orbs / niv.",
+                            color = DiscordAmber,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        color = DiscordBlurple,
+                        trackColor = DiscordDarkInput
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 // Section: À propos de moi (Bio)
                 ProfileSectionCard(title = "À PROPOS DE MOI") {
                     Text(
@@ -444,6 +536,59 @@ fun UserProfileDialog(
                             ) {
                                 Text("Ouvrir la vitrine", color = DiscordBlurple, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Section: Note privée sur ce profil
+                var noteDraft by remember(user.id, privateNote) { mutableStateOf(privateNote) }
+                var noteSaved by remember { mutableStateOf(false) }
+                ProfileSectionCard(title = "NOTE PRIVÉE (VISIBLE UNIQUEMENT PAR VOUS)") {
+                    OutlinedTextField(
+                        value = noteDraft,
+                        onValueChange = {
+                            noteDraft = it
+                            noteSaved = false
+                        },
+                        placeholder = {
+                            Text("Ajouter une note privée sur ${user.name}...", color = DiscordTextMuted, fontSize = 12.sp)
+                        },
+                        minLines = 2,
+                        maxLines = 4,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("profile_private_note_input"),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = DiscordDarkInput,
+                            unfocusedContainerColor = DiscordDarkInput,
+                            focusedBorderColor = DiscordBlurple,
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedTextColor = DiscordTextWhite,
+                            unfocusedTextColor = DiscordTextLight
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (noteSaved) "Note enregistrée" else "",
+                            color = DiscordGreen,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        TextButton(
+                            onClick = {
+                                onSavePrivateNote(noteDraft)
+                                noteSaved = true
+                            },
+                            modifier = Modifier.testTag("profile_private_note_save")
+                        ) {
+                            Text("Enregistrer la note", color = DiscordBlurple, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -531,6 +676,7 @@ fun UserProfileDialog(
                                                     val authCredential = GoogleAuthProvider.getCredential(token, null)
                                                     Firebase.auth.signInWithCredential(authCredential).await()
                                                     authUser = Firebase.auth.currentUser
+                                                    onFirebaseAuthChanged()
                                                 }
                                             } catch (e: GetCredentialCancellationException) {
                                                 Log.w("Auth", "User cancelled Google sign in", e)
@@ -557,6 +703,7 @@ fun UserProfileDialog(
                                             Log.w("Auth", "Sign out error", e)
                                         }
                                         authUser = null
+                                        onFirebaseAuthChanged()
                                     }
                                 ) {
                                     Text("Déconnexion", color = DiscordRed, fontSize = 12.sp)
@@ -616,7 +763,15 @@ fun UserProfileDialog(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text("Hébergeur Cloudinary", color = DiscordTextWhite, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                Text("Cloud: ${CloudinaryHelper.cloudName}", color = DiscordTextMuted, fontSize = 11.sp)
+                                Text(
+                                    text = if (CloudinaryHelper.isConfigured()) {
+                                        "Actif • Cloud: ${CloudinaryHelper.cloudName}"
+                                    } else {
+                                        "Mode Local (configurez votre cloud)"
+                                    },
+                                    color = if (CloudinaryHelper.isConfigured()) DiscordGreen else DiscordTextMuted,
+                                    fontSize = 11.sp
+                                )
                             }
                         }
                         Icon(Icons.Default.ChevronRight, contentDescription = null, tint = DiscordTextMuted)
@@ -636,7 +791,8 @@ fun UserProfileDialog(
                     name, pronouns, bio, avUrl, avCol, banUrl, banCol, statusMsg, emoji, activity, email, phone
                 )
                 showEditProfileDialog = false
-            }
+            },
+            onSaveClanTag = onSaveClanTag
         )
     }
 
@@ -700,8 +856,7 @@ fun UserProfileDialog(
             confirmButton = {
                 Button(
                     onClick = {
-                        CloudinaryHelper.cloudName = cloudNameInput.trim()
-                        CloudinaryHelper.uploadPreset = presetInput.trim()
+                        CloudinaryHelper.saveConfig(context, cloudNameInput, presetInput)
                         showCloudinaryDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)

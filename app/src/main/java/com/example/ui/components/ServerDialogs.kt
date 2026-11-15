@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
@@ -25,10 +26,12 @@ import com.example.ui.theme.*
 @Composable
 fun CreateServerDialog(
     onDismiss: () -> Unit,
-    onCreateServer: (name: String, iconText: String) -> Unit
+    onCreateServer: (name: String, iconText: String, isPublic: Boolean, categoryTag: String) -> Unit
 ) {
     var serverName by remember { mutableStateOf("") }
     var selectedIconKey by remember { mutableStateOf("initials") }
+    var isPublic by remember { mutableStateOf(false) }
+    var selectedCategory by remember { mutableStateOf("Communauté") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -49,7 +52,7 @@ fun CreateServerDialog(
                     fontSize = 13.sp
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 // Vector icon / initials selector
                 Text(
@@ -88,7 +91,7 @@ fun CreateServerDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 Text(
                     text = "NOM DU SERVEUR",
@@ -112,6 +115,36 @@ fun CreateServerDialog(
                     ),
                     modifier = Modifier.fillMaxWidth().testTag("create_server_name_input")
                 )
+
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Publier dans Découvrir", color = DiscordTextWhite, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Visible dans le Hub public", color = DiscordTextMuted, fontSize = 11.sp)
+                    }
+                    Switch(
+                        checked = isPublic,
+                        onCheckedChange = { isPublic = it },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = DiscordGreen)
+                    )
+                }
+
+                if (isPublic) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        listOf("Gaming", "Développement", "Musique", "Chill").forEach { cat ->
+                            FilterChip(
+                                selected = selectedCategory == cat,
+                                onClick = { selectedCategory = cat },
+                                label = { Text(cat, fontSize = 10.sp) }
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -123,7 +156,7 @@ fun CreateServerDialog(
                         } else {
                             selectedIconKey
                         }
-                        onCreateServer(serverName.trim(), icon)
+                        onCreateServer(serverName.trim(), icon, isPublic, selectedCategory)
                         onDismiss()
                     }
                 },
@@ -217,6 +250,32 @@ fun CreateChannelDialog(
                     RadioButton(
                         selected = channelType == ChannelType.VOICE,
                         onClick = { channelType = ChannelType.VOICE },
+                        colors = RadioButtonDefaults.colors(selectedColor = DiscordBlurple)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Stage Channel option
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (channelType == ChannelType.STAGE) DiscordDarkInput else Color.Transparent)
+                        .clickable { channelType = ChannelType.STAGE }
+                        .padding(10.dp)
+                        .testTag("create_channel_type_stage"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Podcasts, contentDescription = null, tint = DiscordAmber)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Scène / Conférence", color = DiscordTextWhite, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Orateurs sur scène, auditoire et mains levées", color = DiscordTextMuted, fontSize = 11.sp)
+                    }
+                    RadioButton(
+                        selected = channelType == ChannelType.STAGE,
+                        onClick = { channelType = ChannelType.STAGE },
                         colors = RadioButtonDefaults.colors(selectedColor = DiscordBlurple)
                     )
                 }

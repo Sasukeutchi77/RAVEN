@@ -1,6 +1,8 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -12,8 +14,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChatBubble
-import androidx.compose.material.icons.filled.Diamond
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -27,22 +31,33 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.Server
+import com.example.model.ServerFolder
 import com.example.ui.theme.*
 
 @Composable
 fun ServerRail(
     servers: List<Server>,
     selectedServerId: String,
+    serverFolders: List<ServerFolder> = emptyList(),
     onSelectServer: (String) -> Unit,
+    onToggleFolder: (String) -> Unit = {},
+    onCreateFolderClick: () -> Unit = {},
     onCreateServerClick: () -> Unit,
+    onJoinServerClick: () -> Unit = {},
+    onExploreServersClick: () -> Unit = {},
     onOpenOrbsShop: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val palette = ravenPalette()
+    val serverList = servers.filterNot { it.isDmTab }
+    val groupedServerIds = serverFolders.flatMap { it.serverIds }.toSet()
+    val ungroupedServers = serverList.filterNot { it.id in groupedServerIds }
+
     Surface(
         modifier = modifier
             .width(72.dp)
             .fillMaxHeight(),
-        color = DiscordDarkPrimary
+        color = palette.primaryBg
     ) {
         LazyColumn(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -82,47 +97,110 @@ fun ServerRail(
                 )
             }
 
-            // Normal Servers list
-            val serverList = servers.filterNot { it.isDmTab }
-            items(serverList, key = { it.id }) { server ->
-                val isSelected = server.id == selectedServerId
-                ServerRailItem(
-                    isSelected = isSelected,
-                    unreadCount = server.unreadCount,
-                    onClick = { onSelectServer(server.id) },
-                    testTag = "server_rail_${server.id}"
-                ) {
-                    Box(
+            // Collapsible Server Folders
+            items(serverFolders, key = { "folder_${it.id}" }) { folder ->
+                val folderServers = serverList.filter { it.id in folder.serverIds }
+                if (folderServers.isNotEmpty()) {
+                    val folderColor = Color(folder.colorHex)
+                    Surface(
+                        color = folderColor.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(18.dp),
+                        border = BorderStroke(1.dp, folderColor.copy(alpha = 0.4f)),
                         modifier = Modifier
-                            .size(48.dp)
-                            .clip(if (isSelected) RoundedCornerShape(16.dp) else CircleShape)
-                            .background(if (isSelected) DiscordBlurple else Color(server.iconBgColor)),
-                        contentAlignment = Alignment.Center
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .fillMaxWidth()
+                            .testTag("server_folder_${folder.id}")
                     ) {
-                        val iconKeys = listOf("game", "code", "rocket", "star", "shield", "bolt", "headset")
-                        if (iconKeys.contains(server.iconText.lowercase())) {
-                            AppStatusIcon(iconKey = server.iconText, size = 22.dp, tint = Color.White)
-                        } else {
-                            Text(
-                                text = server.iconText,
-                                color = Color.White,
-                                fontSize = if (server.iconText.length > 2) 15.sp else 18.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(folderColor.copy(alpha = 0.35f))
+                                    .clickable { onToggleFolder(folder.id) }
+                                    .testTag("toggle_folder_${folder.id}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (folder.isExpanded) {
+                                    Icon(
+                                        imageVector = Icons.Default.Folder,
+                                        contentDescription = folder.name,
+                                        tint = folderColor,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                } else {
+                                    // Mini 2x2 grid preview when collapsed
+                                    Column(
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        folderServers.take(4).chunked(2).forEach { rowSrvs ->
+                                            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                                rowSrvs.forEach { s ->
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(13.dp)
+                                                            .clip(CircleShape)
+                                                            .background(Color(s.iconBgColor)),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Text(
+                                                            text = s.iconText.take(1),
+                                                            color = Color.White,
+                                                            fontSize = 7.sp,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            AnimatedVisibility(visible = folder.isExpanded) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                ) {
+                                    folderServers.forEach { server ->
+                                        val isSelected = server.id == selectedServerId
+                                        ServerRailIconButton(
+                                            server = server,
+                                            isSelected = isSelected,
+                                            onSelectServer = { onSelectServer(server.id) }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
+                    Spacer(modifier = Modifier.height(6.dp))
                 }
+            }
+
+            // Ungrouped Normal Servers list
+            items(ungroupedServers, key = { it.id }) { server ->
+                val isSelected = server.id == selectedServerId
+                ServerRailIconButton(
+                    server = server,
+                    isSelected = isSelected,
+                    onSelectServer = { onSelectServer(server.id) }
+                )
                 Spacer(modifier = Modifier.height(6.dp))
             }
 
-            // Add server button (+)
+            // Add server & Folder & Join buttons
             item {
                 Spacer(modifier = Modifier.height(4.dp))
                 Box(
                     modifier = Modifier
                         .size(48.dp)
                         .clip(CircleShape)
-                        .background(DiscordDarkInput)
+                        .background(palette.inputBg)
                         .clickable { onCreateServerClick() }
                         .testTag("add_server_button"),
                     contentAlignment = Alignment.Center
@@ -132,6 +210,65 @@ fun ServerRail(
                         contentDescription = "Ajouter un serveur",
                         tint = DiscordGreen,
                         modifier = Modifier.size(26.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(palette.inputBg)
+                        .clickable { onCreateFolderClick() }
+                        .testTag("create_folder_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CreateNewFolder,
+                        contentDescription = "Créer un dossier de serveurs",
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Explore public servers catalog
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(palette.accent.copy(alpha = 0.2f))
+                        .clickable { onExploreServersClick() }
+                        .testTag("explore_servers_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Explore,
+                        contentDescription = "Découvrir les serveurs publics",
+                        tint = palette.accent,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Join server by invite code
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(palette.inputBg)
+                        .clickable { onJoinServerClick() }
+                        .testTag("join_server_code_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.GroupAdd,
+                        contentDescription = "Rejoindre par code d'invitation",
+                        tint = DiscordGreen,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
@@ -155,6 +292,40 @@ fun ServerRail(
                         modifier = Modifier.size(22.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServerRailIconButton(
+    server: Server,
+    isSelected: Boolean,
+    onSelectServer: () -> Unit
+) {
+    ServerRailItem(
+        isSelected = isSelected,
+        unreadCount = server.unreadCount,
+        onClick = onSelectServer,
+        testTag = "server_rail_${server.id}"
+    ) {
+        Box(
+            modifier = Modifier
+                .size(46.dp)
+                .clip(if (isSelected) RoundedCornerShape(16.dp) else CircleShape)
+                .background(if (isSelected) DiscordBlurple else Color(server.iconBgColor)),
+            contentAlignment = Alignment.Center
+        ) {
+            val iconKeys = listOf("game", "code", "rocket", "star", "shield", "bolt", "headset")
+            if (iconKeys.contains(server.iconText.lowercase())) {
+                AppStatusIcon(iconKey = server.iconText, size = 22.dp, tint = Color.White)
+            } else {
+                Text(
+                    text = server.iconText,
+                    color = Color.White,
+                    fontSize = if (server.iconText.length > 2) 14.sp else 17.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }

@@ -2,46 +2,276 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isAuthenticated() {
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
       return request.auth != null;
     }
 
-    // Users profile
-    match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && request.auth.uid == userId;
+    function incoming() {
+      return request.resource.data;
     }
 
-    // Servers
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function serverDoc(serverId) {
+      return get(/databases/$(database)/documents/servers/$(serverId));
+    }
+
+    function isServerOwner(serverId) {
+      return exists(/databases/$(database)/documents/servers/$(serverId)) &&
+             serverDoc(serverId).data.ownerId == request.auth.uid;
+    }
+
+    function isServerMemberOrPublic(serverId) {
+      return exists(/databases/$(database)/documents/servers/$(serverId)) &&
+             (serverDoc(serverId).data.isPublic == true ||
+              serverDoc(serverId).data.ownerId == request.auth.uid ||
+              request.auth.uid in serverDoc(serverId).data.memberIds);
+    }
+
+    function isValidUser(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 64 &&
+             (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 160)) &&
+             (!('bio' in data) || data.bio == null || (data.bio is string && data.bio.size() <= 500)) &&
+             (!('pronouns' in data) || data.pronouns == null || (data.pronouns is string && data.pronouns.size() <= 40)) &&
+             (!('clanTag' in data) || data.clanTag == null || (data.clanTag is string && data.clanTag.size() <= 8)) &&
+             (!('fcmToken' in data) || data.fcmToken == null || (data.fcmToken is string && data.fcmToken.size() <= 512)) &&
+             (!('orbsBalance' in data) || data.orbsBalance is int) &&
+             (!('xp' in data) || data.xp is int) &&
+             (!('level' in data) || data.level is int);
+    }
+
+    function isValidPublicProfile(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 64 &&
+             (!('clanTag' in data) || data.clanTag == null || (data.clanTag is string && data.clanTag.size() <= 8)) &&
+             (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 500)) &&
+             (!('xp' in data) || data.xp is int) &&
+             (!('level' in data) || data.level is int);
+    }
+
+    function isValidNotification(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.body is string && data.body.size() <= 500 &&
+             (!('sourceLabel' in data) || data.sourceLabel == null || (data.sourceLabel is string && data.sourceLabel.size() <= 100)) &&
+             (!('type' in data) || data.type == null || (data.type is string && data.type.size() <= 40)) &&
+             (!('isRead' in data) || data.isRead is bool);
+    }
+
+    function isValidServer(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+             data.memberIds is list && data.memberIds.size() >= 1 && data.memberIds.size() <= 100 &&
+             (!('iconText' in data) || data.iconText == null || (data.iconText is string && data.iconText.size() <= 8)) &&
+             (!('inviteCode' in data) || data.inviteCode == null || (data.inviteCode is string && data.inviteCode.size() <= 40)) &&
+             (!('categoryTag' in data) || data.categoryTag == null || (data.categoryTag is string && data.categoryTag.size() <= 40)) &&
+             (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 300)) &&
+             (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('boostCount' in data) || data.boostCount is int) &&
+             (!('boostLevel' in data) || data.boostLevel is int);
+    }
+
+    function isValidChannel(data) {
+      return data.serverId is string && data.serverId.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.type is string && data.type in ['TEXT', 'VOICE', 'ANNOUNCEMENT', 'STAGE'] &&
+             data.memberIds is list && data.memberIds.size() <= 100 &&
+             (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('slowmodeSeconds' in data) || data.slowmodeSeconds is int) &&
+             (!('isReadOnly' in data) || data.isReadOnly is bool) &&
+             (!('lastTypingUid' in data) || data.lastTypingUid == null || (data.lastTypingUid is string && data.lastTypingUid.size() <= 128)) &&
+             (!('lastTypingName' in data) || data.lastTypingName == null || (data.lastTypingName is string && data.lastTypingName.size() <= 64));
+    }
+
+    function isValidMessage(data) {
+      return data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
+             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 64 &&
+             (!('text' in data) || data.text == null || (data.text is string && data.text.size() <= 2000)) &&
+             (!('imageUrl' in data) || data.imageUrl == null || (data.imageUrl is string && data.imageUrl.size() <= 800)) &&
+             (!('audioUrl' in data) || data.audioUrl == null || (data.audioUrl is string && data.audioUrl.size() <= 800)) &&
+             (!('attachmentName' in data) || data.attachmentName == null || (data.attachmentName is string && data.attachmentName.size() <= 200)) &&
+             (!('stickerId' in data) || data.stickerId == null || (data.stickerId is string && data.stickerId.size() <= 80)) &&
+             (!('replyToText' in data) || data.replyToText == null || (data.replyToText is string && data.replyToText.size() <= 200)) &&
+             (!('isPinned' in data) || data.isPinned is bool) &&
+             (!('isEdited' in data) || data.isEdited is bool) &&
+             (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('memberIds' in data) || (data.memberIds is list && data.memberIds.size() <= 100)) &&
+             (!('participantIds' in data) || (data.participantIds is list && data.participantIds.size() <= 50));
+    }
+
+    function isValidWhiteboard(data) {
+      return data.serverId is string && data.serverId.size() <= 128 &&
+             data.updatedBy is string && data.updatedBy.size() <= 128 &&
+             data.memberIds is list && data.memberIds.size() <= 100 &&
+             (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('strokes' in data) || (data.strokes is list && data.strokes.size() <= 150));
+    }
+
+    function isValidJukebox(data) {
+      return data.serverId is string && data.serverId.size() <= 128 &&
+             data.updatedBy is string && data.updatedBy.size() <= 128 &&
+             data.isPlaying is bool &&
+             data.memberIds is list && data.memberIds.size() <= 100 &&
+             (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('elapsedSec' in data) || data.elapsedSec is int);
+    }
+
+    function isValidVoicePeer(data) {
+      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 64 &&
+             data.memberIds is list && data.memberIds.size() <= 100 &&
+             (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('isMuted' in data) || data.isMuted is bool) &&
+             (!('isDeafened' in data) || data.isDeafened is bool) &&
+             (!('isCameraOn' in data) || data.isCameraOn is bool) &&
+             (!('isScreenSharing' in data) || data.isScreenSharing is bool);
+    }
+
+    function isValidRtcSignal(data) {
+      return data.fromUid is string && data.fromUid.size() >= 1 && data.fromUid.size() <= 128 &&
+             data.toUid is string && data.toUid.size() >= 1 && data.toUid.size() <= 128 &&
+             data.type is string && data.type in ['OFFER', 'ANSWER', 'ICE'] &&
+             data.payload is string && data.payload.size() <= 16000;
+    }
+
+    function isValidDirectConversation(data) {
+      return data.participantIds is list && data.participantIds.size() >= 1 && data.participantIds.size() <= 25 &&
+             (!('lastMessage' in data) || data.lastMessage == null || (data.lastMessage is string && data.lastMessage.size() <= 500)) &&
+             (!('lastMessageTime' in data) || data.lastMessageTime == null || (data.lastMessageTime is string && data.lastMessageTime.size() <= 40));
+    }
+
+    // 1. Private User Profile (PII isolated to owner)
+    match /users/{userId} {
+      allow get, list: if isSignedIn() && request.auth.uid == userId;
+      allow create, update: if isSignedIn() && isValidId(userId) && request.auth.uid == userId &&
+                               incoming().userId == request.auth.uid && isValidUser(incoming());
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+
+      match /notifications/{notificationId} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create, update: if isSignedIn() && isValidId(notificationId) && request.auth.uid == userId &&
+                                 incoming().userId == request.auth.uid && isValidNotification(incoming());
+      }
+    }
+
+    // 2. Public Non-PII User Profiles (for leaderboard, clan tags & member lists)
+    match /public_profiles/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn() && resource.data.isPublic == true;
+      allow create, update: if isSignedIn() && isValidId(userId) && request.auth.uid == userId &&
+                               incoming().userId == request.auth.uid && incoming().isPublic == true &&
+                               isValidPublicProfile(incoming());
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+
+    // 3. Servers & Nested Collaborative Resources
     match /servers/{serverId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || request.auth.uid in resource.data.memberIds);
+      allow get: if isSignedIn() && isValidId(serverId) &&
+                    (resource == null || existing().isPublic == true || existing().ownerId == request.auth.uid || request.auth.uid in existing().memberIds);
+      allow list: if isSignedIn() &&
+                     (resource.data.isPublic == true || resource.data.ownerId == request.auth.uid || request.auth.uid in resource.data.memberIds);
+      allow create: if isSignedIn() && isValidId(serverId) && isValidServer(incoming()) &&
+                       incoming().ownerId == request.auth.uid && request.auth.uid in incoming().memberIds;
+      allow update: if isSignedIn() && isValidId(serverId) && isValidServer(incoming()) &&
+                       incoming().ownerId == existing().ownerId && (
+                         existing().ownerId == request.auth.uid ||
+                         (request.auth.uid in existing().memberIds &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['boostCount', 'boostLevel', 'customBannerColorHex', 'shopItems', 'customRoles', 'events', 'memberIds', 'updatedAt'])) ||
+                         (existing().isPublic == true &&
+                          !(request.auth.uid in existing().memberIds) &&
+                          request.auth.uid in incoming().memberIds &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt']))
+                       );
+      allow delete: if isSignedIn() && isValidId(serverId) && existing().ownerId == request.auth.uid;
 
-      // Server channels
       match /channels/{channelId} {
-        allow read: if isAuthenticated();
-        allow write: if isAuthenticated();
+        allow get: if isSignedIn() && isValidId(channelId) && isServerMemberOrPublic(serverId);
+        allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
+        allow create, update: if isSignedIn() && isValidId(channelId) && isValidChannel(incoming()) && isServerMemberOrPublic(serverId);
+        allow delete: if isSignedIn() && isValidId(channelId) && isServerOwner(serverId);
 
-        // Channel messages
         match /messages/{messageId} {
-          allow read: if isAuthenticated();
-          allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid;
-          allow update, delete: if isAuthenticated() && (resource.data.senderId == request.auth.uid || get(/databases/$(database)/documents/servers/$(serverId)).data.ownerId == request.auth.uid);
+          allow get: if isSignedIn() && isValidId(messageId) && isServerMemberOrPublic(serverId);
+          allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
+          allow create: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
+                           incoming().senderId == request.auth.uid && isServerMemberOrPublic(serverId);
+          allow update: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
+                           incoming().senderId == existing().senderId && isServerMemberOrPublic(serverId) && (
+                             (existing().senderId == request.auth.uid &&
+                              incoming().diff(existing()).affectedKeys().hasOnly(['text', 'isEdited', 'isPinned', 'reactions', 'poll', 'threadCount', 'updatedAt'])) ||
+                             incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'isPinned', 'poll', 'threadCount', 'updatedAt'])
+                           );
+          allow delete: if isSignedIn() && isValidId(messageId) && isServerMemberOrPublic(serverId) &&
+                           (existing().senderId == request.auth.uid || isServerOwner(serverId));
+        }
+
+        match /whiteboard/{canvasId} {
+          allow get: if isSignedIn() && isValidId(canvasId) && isServerMemberOrPublic(serverId);
+          allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
+          allow create, update: if isSignedIn() && isValidId(canvasId) && isValidWhiteboard(incoming()) &&
+                                   incoming().updatedBy == request.auth.uid && isServerMemberOrPublic(serverId);
+        }
+
+        match /jukebox/{jukeboxId} {
+          allow get: if isSignedIn() && isValidId(jukeboxId) && isServerMemberOrPublic(serverId);
+          allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
+          allow create, update: if isSignedIn() && isValidId(jukeboxId) && isValidJukebox(incoming()) &&
+                                   incoming().updatedBy == request.auth.uid && isServerMemberOrPublic(serverId);
+        }
+
+        match /voice_peers/{peerId} {
+          allow get: if isSignedIn() && isValidId(peerId) && isServerMemberOrPublic(serverId);
+          allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
+          allow create, update: if isSignedIn() && isValidId(peerId) && peerId == request.auth.uid &&
+                                   incoming().uid == request.auth.uid && isValidVoicePeer(incoming()) && isServerMemberOrPublic(serverId);
+          allow delete: if isSignedIn() && isValidId(peerId) && peerId == request.auth.uid && isServerMemberOrPublic(serverId);
+        }
+
+        match /rtc_signals/{signalId} {
+          allow get: if isSignedIn() && isValidId(signalId) &&
+                        (existing().toUid == request.auth.uid || existing().fromUid == request.auth.uid);
+          allow list: if isSignedIn() &&
+                         (resource.data.toUid == request.auth.uid || resource.data.fromUid == request.auth.uid);
+          allow create: if isSignedIn() && isValidId(signalId) && isValidRtcSignal(incoming()) &&
+                           incoming().fromUid == request.auth.uid && isServerMemberOrPublic(serverId);
+          allow delete: if isSignedIn() && isValidId(signalId) &&
+                           (existing().toUid == request.auth.uid || existing().fromUid == request.auth.uid);
         }
       }
     }
 
-    // Direct Conversations
+    // 4. Direct Conversations
     match /direct_conversations/{conversationId} {
-      allow read: if isAuthenticated() && (request.auth.uid in resource.data.participantIds);
-      allow create: if isAuthenticated() && (request.auth.uid in request.resource.data.participantIds);
-      allow update: if isAuthenticated() && (request.auth.uid in resource.data.participantIds);
+      allow get: if isSignedIn() && isValidId(conversationId) && (resource == null || request.auth.uid in existing().participantIds);
+      allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
+      allow create: if isSignedIn() && isValidId(conversationId) && isValidDirectConversation(incoming()) &&
+                       request.auth.uid in incoming().participantIds;
+      allow update: if isSignedIn() && isValidId(conversationId) && isValidDirectConversation(incoming()) &&
+                       request.auth.uid in existing().participantIds && request.auth.uid in incoming().participantIds;
 
       match /messages/{messageId} {
-        allow read: if isAuthenticated() && (request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds);
-        allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid && (request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds);
-        allow update, delete: if isAuthenticated() && resource.data.senderId == request.auth.uid;
+        allow get: if isSignedIn() && isValidId(messageId) &&
+                      request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds;
+        allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
+        allow create: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
+                         incoming().senderId == request.auth.uid &&
+                         request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds;
+        allow update: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
+                         incoming().senderId == existing().senderId &&
+                         request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds;
+        allow delete: if isSignedIn() && isValidId(messageId) && existing().senderId == request.auth.uid;
       }
     }
   }

@@ -53,7 +53,8 @@ fun EditProfileDialog(
         activity: String,
         email: String,
         phone: String
-    ) -> Unit
+    ) -> Unit,
+    onSaveClanTag: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -67,6 +68,7 @@ fun EditProfileDialog(
     var activityText by remember { mutableStateOf(user.activity) }
     var emailText by remember { mutableStateOf(user.email ?: "") }
     var phoneText by remember { mutableStateOf(user.phone ?: "") }
+    var clanTag by remember { mutableStateOf(user.clanTag.orEmpty()) }
 
     var avatarUrl by remember { mutableStateOf(user.avatarUrl) }
     var avatarColor by remember { mutableStateOf(user.avatarColor) }
@@ -281,6 +283,18 @@ fun EditProfileDialog(
                                             fontSize = 17.sp,
                                             fontWeight = FontWeight.Bold
                                         )
+                                        if (clanTag.isNotBlank()) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Surface(color = DiscordBlurple.copy(alpha = 0.25f), shape = RoundedCornerShape(4.dp)) {
+                                                Text(
+                                                    text = clanTag.uppercase().take(4),
+                                                    color = DiscordBlurple,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
                                         if (pronouns.isNotBlank()) {
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(
@@ -400,6 +414,16 @@ fun EditProfileDialog(
                         onValueChange = { pronouns = it },
                         placeholder = "ex: il/lui, elle/la, iel, they/them",
                         testTag = "edit_pronouns_input"
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    ProfileInputField(
+                        label = "TAG DE CLAN (MAX 4 CARACTÈRES)",
+                        value = clanTag,
+                        onValueChange = { clanTag = it.uppercase().take(4) },
+                        placeholder = "ex: RVN, PRO, DEV",
+                        testTag = "edit_clan_tag_input"
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
@@ -563,6 +587,7 @@ fun EditProfileDialog(
                                     emailText.trim(),
                                     phoneText.trim()
                                 )
+                                onSaveClanTag(clanTag.trim())
                                 onDismiss()
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),

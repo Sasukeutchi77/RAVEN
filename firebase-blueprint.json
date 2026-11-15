@@ -1,66 +1,239 @@
 {
   "entities": {
     "User": {
-      "collection": "users",
-      "fields": {
-        "userId": { "type": "string", "required": true },
-        "name": { "type": "string", "required": true },
-        "email": { "type": "string", "required": false },
-        "avatarUrl": { "type": "string", "required": false },
-        "status": { "type": "string", "required": false },
-        "customStatus": { "type": "string", "required": false },
-        "role": { "type": "string", "required": false },
-        "createdAt": { "type": "timestamp", "required": false }
-      }
+      "title": "User",
+      "description": "Private authenticated user profile, settings, and progression.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "bio": { "type": "string" },
+        "pronouns": { "type": "string" },
+        "status": { "type": "string" },
+        "customStatus": { "type": "string" },
+        "orbsBalance": { "type": "integer" },
+        "xp": { "type": "integer" },
+        "level": { "type": "integer" },
+        "clanTag": { "type": "string" },
+        "clanBadgeIcon": { "type": "string" },
+        "fcmToken": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name"]
+    },
+    "PublicProfile": {
+      "title": "PublicProfile",
+      "description": "Public non-PII user summary for leaderboards and member lists.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "avatarColor": { "type": "integer" },
+        "xp": { "type": "integer" },
+        "level": { "type": "integer" },
+        "clanTag": { "type": "string" },
+        "clanBadgeIcon": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name"]
+    },
+    "UserNotification": {
+      "title": "UserNotification",
+      "description": "Personal inbox notification or scheduled reminder.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "sourceLabel": { "type": "string" },
+        "type": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "title", "body"]
     },
     "Server": {
-      "collection": "servers",
-      "fields": {
-        "id": { "type": "string", "required": true },
-        "name": { "type": "string", "required": true },
-        "iconText": { "type": "string", "required": false },
-        "ownerId": { "type": "string", "required": true },
-        "memberIds": { "type": "array", "required": false },
-        "createdAt": { "type": "timestamp", "required": false }
-      }
+      "title": "Server",
+      "description": "Community server with channels, roles, boosts, and internal Orbs shop.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "iconText": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "inviteCode": { "type": "string" },
+        "isPublic": { "type": "boolean" },
+        "categoryTag": { "type": "string" },
+        "description": { "type": "string" },
+        "boostCount": { "type": "integer" },
+        "boostLevel": { "type": "integer" },
+        "memberIds": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "ownerId", "memberIds"]
     },
     "Channel": {
-      "collection": "channels",
-      "fields": {
-        "id": { "type": "string", "required": true },
-        "serverId": { "type": "string", "required": true },
-        "name": { "type": "string", "required": true },
-        "type": { "type": "string", "required": true },
-        "category": { "type": "string", "required": false },
-        "isPrivate": { "type": "boolean", "required": false },
-        "allowedRoles": { "type": "array", "required": false },
-        "createdAt": { "type": "timestamp", "required": false }
-      }
+      "title": "Channel",
+      "description": "Text, voice, announcement, or stage channel inside a server.",
+      "type": "object",
+      "properties": {
+        "serverId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "category": { "type": "string" },
+        "isPublic": { "type": "boolean" },
+        "slowmodeSeconds": { "type": "integer" },
+        "isReadOnly": { "type": "boolean" },
+        "memberIds": { "type": "array" },
+        "lastTypingUid": { "type": "string" },
+        "lastTypingName": { "type": "string" },
+        "lastTypingMs": { "type": "integer" }
+      },
+      "required": ["serverId", "name", "type", "memberIds"]
     },
     "Message": {
-      "collection": "messages",
-      "fields": {
-        "id": { "type": "string", "required": true },
-        "channelId": { "type": "string", "required": true },
-        "senderId": { "type": "string", "required": true },
-        "senderName": { "type": "string", "required": true },
-        "text": { "type": "string", "required": false },
-        "imageUrl": { "type": "string", "required": false },
-        "audioUrl": { "type": "string", "required": false },
-        "replyToText": { "type": "string", "required": false },
-        "isPinned": { "type": "boolean", "required": false },
-        "createdAt": { "type": "timestamp", "required": false }
-      }
+      "title": "Message",
+      "description": "Chat message inside a channel or direct conversation.",
+      "type": "object",
+      "properties": {
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "audioUrl": { "type": "string" },
+        "replyToText": { "type": "string" },
+        "isPinned": { "type": "boolean" },
+        "isEdited": { "type": "boolean" },
+        "isPublic": { "type": "boolean" },
+        "memberIds": { "type": "array" },
+        "participantIds": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderId", "senderName"]
+    },
+    "WhiteboardCanvas": {
+      "title": "WhiteboardCanvas",
+      "description": "Collaborative whiteboard strokes for a channel or voice room.",
+      "type": "object",
+      "properties": {
+        "serverId": { "type": "string" },
+        "updatedBy": { "type": "string" },
+        "strokes": { "type": "array" },
+        "memberIds": { "type": "array" },
+        "isPublic": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["serverId", "updatedBy", "memberIds"]
+    },
+    "JukeboxState": {
+      "title": "JukeboxState",
+      "description": "Synchronized voice jukebox track and queue state.",
+      "type": "object",
+      "properties": {
+        "serverId": { "type": "string" },
+        "updatedBy": { "type": "string" },
+        "isPlaying": { "type": "boolean" },
+        "elapsedSec": { "type": "integer" },
+        "memberIds": { "type": "array" },
+        "isPublic": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["serverId", "updatedBy", "isPlaying", "memberIds"]
+    },
+    "VoicePeer": {
+      "title": "VoicePeer",
+      "description": "Active WebRTC peer presence in a voice channel.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "isMuted": { "type": "boolean" },
+        "isDeafened": { "type": "boolean" },
+        "isCameraOn": { "type": "boolean" },
+        "isScreenSharing": { "type": "boolean" },
+        "memberIds": { "type": "array" },
+        "isPublic": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "memberIds"]
+    },
+    "RtcSignal": {
+      "title": "RtcSignal",
+      "description": "WebRTC SDP offer/answer and ICE candidate signaling payload.",
+      "type": "object",
+      "properties": {
+        "fromUid": { "type": "string" },
+        "toUid": { "type": "string" },
+        "type": { "type": "string" },
+        "payload": { "type": "string" },
+        "sdpMid": { "type": "string" },
+        "sdpMLineIndex": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fromUid", "toUid", "type", "payload"]
     },
     "DirectConversation": {
-      "collection": "direct_conversations",
-      "fields": {
-        "id": { "type": "string", "required": true },
-        "participantIds": { "type": "array", "required": true },
-        "lastMessage": { "type": "string", "required": false },
-        "lastMessageTime": { "type": "string", "required": false },
-        "updatedAt": { "type": "timestamp", "required": false }
-      }
+      "title": "DirectConversation",
+      "description": "Private 1-on-1 or group direct message conversation.",
+      "type": "object",
+      "properties": {
+        "participantIds": { "type": "array" },
+        "lastMessage": { "type": "string" },
+        "lastMessageTime": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["participantIds"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Private authenticated user settings and progression."
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/UserNotification" },
+      "description": "User-scoped notifications inbox."
+    },
+    "/public_profiles/{userId}": {
+      "schema": { "$ref": "#/entities/PublicProfile" },
+      "description": "Non-PII public profile summary for leaderboard and badges."
+    },
+    "/servers/{serverId}": {
+      "schema": { "$ref": "#/entities/Server" },
+      "description": "Servers created or joined by users."
+    },
+    "/servers/{serverId}/channels/{channelId}": {
+      "schema": { "$ref": "#/entities/Channel" },
+      "description": "Channels within a server."
+    },
+    "/servers/{serverId}/channels/{channelId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Messages posted inside a server channel."
+    },
+    "/servers/{serverId}/channels/{channelId}/whiteboard/{canvasId}": {
+      "schema": { "$ref": "#/entities/WhiteboardCanvas" },
+      "description": "Collaborative whiteboard canvas per channel."
+    },
+    "/servers/{serverId}/channels/{channelId}/jukebox/{jukeboxId}": {
+      "schema": { "$ref": "#/entities/JukeboxState" },
+      "description": "Synchronized voice jukebox state per channel."
+    },
+    "/servers/{serverId}/channels/{channelId}/voice_peers/{peerId}": {
+      "schema": { "$ref": "#/entities/VoicePeer" },
+      "description": "Active WebRTC peers in a voice room."
+    },
+    "/servers/{serverId}/channels/{channelId}/rtc_signals/{signalId}": {
+      "schema": { "$ref": "#/entities/RtcSignal" },
+      "description": "WebRTC SDP/ICE signaling messages between voice peers."
+    },
+    "/direct_conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/DirectConversation" },
+      "description": "Private direct conversations."
+    },
+    "/direct_conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Messages inside a direct conversation."
     }
   }
 }

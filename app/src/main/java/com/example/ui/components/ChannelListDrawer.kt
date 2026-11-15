@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -35,24 +36,47 @@ fun ChannelListDrawer(
     isUserDeafened: Boolean,
     onSelectChannel: (Channel) -> Unit,
     onCreateChannelClick: (category: String) -> Unit,
+    onInvitePeople: () -> Unit = {},
+    onOpenEvents: () -> Unit = {},
+    onOpenGlobalSearch: () -> Unit = {},
+    onOpenLeaderboard: () -> Unit = {},
+    onOpenServerShop: () -> Unit = {},
+    onOpenServerSettings: () -> Unit = {},
+    onOpenNotifications: () -> Unit = {},
     onUserClick: () -> Unit,
+    onOpenAppSettings: () -> Unit = onUserClick,
     onToggleMute: () -> Unit,
     onToggleDeafen: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val palette = ravenPalette()
     var isMenuOpen by remember { mutableStateOf(false) }
 
     Surface(
         modifier = modifier.fillMaxHeight(),
-        color = DiscordDarkSidebar
+        color = palette.sidebarBg
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Server Header
+            // Server Header (with optional Boosted gradient banner)
+            val boostHex = server.customBannerColorHex
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp)
-                    .background(DiscordDarkSidebar)
+                    .height(if (server.boostLevel > 0) 68.dp else 56.dp)
+                    .then(
+                        if (boostHex != null && server.boostLevel > 0) {
+                            Modifier.background(
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        Color(boostHex).copy(alpha = 0.5f),
+                                        palette.sidebarBg
+                                    )
+                                )
+                            )
+                        } else {
+                            Modifier.background(palette.sidebarBg)
+                        }
+                    )
                     .clickable { isMenuOpen = true }
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterStart
@@ -62,15 +86,33 @@ fun ChannelListDrawer(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = server.name,
-                        color = DiscordTextWhite,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = server.name,
+                            color = palette.textPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (server.boostLevel > 0) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.RocketLaunch,
+                                    contentDescription = "Serveur Boosté",
+                                    tint = Color(0xFFEB459E),
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Niv. ${server.boostLevel} • ${server.boostCount} Boost(s)",
+                                    color = Color(0xFFEB459E),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
                     IconButton(
                         onClick = { isMenuOpen = true },
                         modifier = Modifier.size(28.dp)
@@ -78,7 +120,7 @@ fun ChannelListDrawer(
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowDown,
                             contentDescription = "Options du serveur",
-                            tint = DiscordTextWhite
+                            tint = palette.textPrimary
                         )
                     }
                 }
@@ -86,35 +128,179 @@ fun ChannelListDrawer(
                 DropdownMenu(
                     expanded = isMenuOpen,
                     onDismissRequest = { isMenuOpen = false },
-                    modifier = Modifier.background(DiscordDarkCard)
+                    modifier = Modifier.background(palette.cardBg)
                 ) {
                     DropdownMenuItem(
                         text = { Text("Inviter des personnes", color = DiscordBlurple) },
                         leadingIcon = { Icon(Icons.Default.PersonAdd, contentDescription = null, tint = DiscordBlurple) },
-                        onClick = { isMenuOpen = false }
+                        onClick = {
+                            isMenuOpen = false
+                            onInvitePeople()
+                        }
                     )
                     DropdownMenuItem(
-                        text = { Text("Créer un salon", color = DiscordTextWhite) },
-                        leadingIcon = { Icon(Icons.Default.AddCircle, contentDescription = null, tint = DiscordTextWhite) },
+                        text = { Text("Créer un salon", color = palette.textPrimary) },
+                        leadingIcon = { Icon(Icons.Default.AddCircle, contentDescription = null, tint = palette.textPrimary) },
                         onClick = {
                             isMenuOpen = false
                             onCreateChannelClick("SALONS TEXTUELS")
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Paramètres du serveur", color = DiscordTextWhite) },
-                        leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null, tint = DiscordTextLight) },
-                        onClick = { isMenuOpen = false }
+                        text = { Text("Classement & Podium", color = palette.textPrimary) },
+                        leadingIcon = { Icon(Icons.Default.EmojiEvents, contentDescription = null, tint = Color(0xFFFACC15)) },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenLeaderboard()
+                        }
                     )
                     DropdownMenuItem(
-                        text = { Text("Paramètres des notifications", color = DiscordTextWhite) },
-                        leadingIcon = { Icon(Icons.Default.Notifications, contentDescription = null, tint = DiscordTextLight) },
-                        onClick = { isMenuOpen = false }
+                        text = { Text("Boutique du serveur", color = palette.textPrimary) },
+                        leadingIcon = { Icon(Icons.Default.Storefront, contentDescription = null, tint = DiscordAmber) },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenServerShop()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Paramètres du serveur", color = palette.textPrimary) },
+                        leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null, tint = palette.textSecondary) },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenServerSettings()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Boîte de réception", color = palette.textPrimary) },
+                        leadingIcon = { Icon(Icons.Default.Notifications, contentDescription = null, tint = palette.textSecondary) },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenNotifications()
+                        }
                     )
                 }
             }
 
             HorizontalDivider(color = DiscordDarkBorder, thickness = 1.dp)
+
+            // Quick Pills: Events & Global Search
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    color = palette.cardBg,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onOpenEvents)
+                        .testTag("drawer_events_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Event,
+                                contentDescription = "Événements du serveur",
+                                tint = DiscordBlurple,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Événements",
+                                color = palette.textPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (server.events.isNotEmpty()) {
+                            Surface(
+                                color = DiscordBlurple.copy(alpha = 0.2f),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = server.events.size.toString(),
+                                    color = DiscordBlurple,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    color = palette.cardBg,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onOpenLeaderboard)
+                        .testTag("drawer_leaderboard_button")
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.EmojiEvents,
+                            contentDescription = "Classement du serveur",
+                            tint = Color(0xFFFACC15),
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+
+                Surface(
+                    color = palette.cardBg,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onOpenServerShop)
+                        .testTag("drawer_server_shop_button")
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Storefront,
+                            contentDescription = "Boutique du serveur",
+                            tint = DiscordAmber,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+
+                Surface(
+                    color = palette.cardBg,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onOpenGlobalSearch)
+                        .testTag("drawer_global_search_button")
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ManageSearch,
+                            contentDescription = "Recherche globale",
+                            tint = palette.textPrimary,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+            }
 
             // Channels List
             val categories = server.channels.groupBy { it.category }
@@ -150,6 +336,7 @@ fun ChannelListDrawer(
                 isMuted = isUserMuted,
                 isDeafened = isUserDeafened,
                 onUserClick = onUserClick,
+                onOpenAppSettings = onOpenAppSettings,
                 onToggleMute = onToggleMute,
                 onToggleDeafen = onToggleDeafen
             )
@@ -207,6 +394,7 @@ fun ChannelRow(
     onClick: () -> Unit
 ) {
     val isVoice = channel.type == ChannelType.VOICE
+    val isStage = channel.type == ChannelType.STAGE
     val isAnnouncement = channel.type == ChannelType.ANNOUNCEMENT
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -224,12 +412,17 @@ fun ChannelRow(
             Icon(
                 imageVector = when {
                     channel.isPrivate -> Icons.Default.Lock
+                    isStage -> Icons.Default.Podcasts
                     isVoice -> Icons.Default.VolumeUp
                     isAnnouncement -> Icons.Default.Campaign
                     else -> Icons.Default.Tag
                 },
                 contentDescription = null,
-                tint = if (isSelected) DiscordTextWhite else DiscordTextMuted,
+                tint = when {
+                    isStage -> DiscordGreen
+                    isSelected -> DiscordTextWhite
+                    else -> DiscordTextMuted
+                },
                 modifier = Modifier.size(18.dp)
             )
 
@@ -244,6 +437,24 @@ fun ChannelRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
+
+            if (channel.isReadOnly) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = "Lecture seule",
+                    tint = DiscordAmber,
+                    modifier = Modifier.size(13.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+            } else if (channel.slowmodeSeconds > 0) {
+                Icon(
+                    imageVector = Icons.Default.Timer,
+                    contentDescription = "Mode lent",
+                    tint = DiscordTextMuted,
+                    modifier = Modifier.size(13.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+            }
 
             if (channel.unreadCount > 0 && !isSelected) {
                 Box(
@@ -319,14 +530,16 @@ fun UserBottomBar(
     isMuted: Boolean,
     isDeafened: Boolean,
     onUserClick: () -> Unit,
+    onOpenAppSettings: () -> Unit = onUserClick,
     onToggleMute: () -> Unit,
     onToggleDeafen: () -> Unit
 ) {
+    val palette = ravenPalette()
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp),
-        color = DiscordDarkCard
+            .height(58.dp),
+        color = palette.cardBg
     ) {
         Row(
             modifier = Modifier
@@ -368,7 +581,6 @@ fun UserBottomBar(
                         }
                     }
 
-                    // Online indicator
                     val statusColor = when (user.status) {
                         UserStatus.ONLINE -> DiscordGreen
                         UserStatus.IDLE -> DiscordAmber
@@ -387,23 +599,53 @@ fun UserBottomBar(
                 Spacer(modifier = Modifier.width(8.dp))
 
                 Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = user.name,
+                            color = palette.textPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (!user.clanTag.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Surface(
+                                color = palette.accent.copy(alpha = 0.2f),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = user.clanTag,
+                                    color = palette.accent,
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Surface(
+                            color = palette.accent.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "Niv.${user.level}",
+                                color = palette.accent,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
                     Text(
-                        text = user.name,
-                        color = DiscordTextWhite,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = user.tag,
-                        color = DiscordTextMuted,
-                        fontSize = 11.sp
+                        text = "${user.xp}/${user.level * 100} XP",
+                        color = palette.textMuted,
+                        fontSize = 10.sp
                     )
                 }
             }
 
-            // Quick Voice & Audio controls
             IconButton(
                 onClick = onToggleMute,
                 modifier = Modifier.size(32.dp).testTag("bottom_mute_button")
@@ -411,7 +653,7 @@ fun UserBottomBar(
                 Icon(
                     imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
                     contentDescription = if (isMuted) "Réactiver micro" else "Couper micro",
-                    tint = if (isMuted) DiscordRed else DiscordTextMuted,
+                    tint = if (isMuted) DiscordRed else palette.textMuted,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -423,19 +665,19 @@ fun UserBottomBar(
                 Icon(
                     imageVector = if (isDeafened) Icons.Default.HeadsetOff else Icons.Default.Headset,
                     contentDescription = if (isDeafened) "Réactiver casque" else "Couper son",
-                    tint = if (isDeafened) DiscordRed else DiscordTextMuted,
+                    tint = if (isDeafened) DiscordRed else palette.textMuted,
                     modifier = Modifier.size(18.dp)
                 )
             }
 
             IconButton(
-                onClick = onUserClick,
+                onClick = onOpenAppSettings,
                 modifier = Modifier.size(32.dp).testTag("bottom_settings_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Settings,
-                    contentDescription = "Paramètres utilisateur",
-                    tint = DiscordTextMuted,
+                    contentDescription = "Paramètres de l'application",
+                    tint = palette.textMuted,
                     modifier = Modifier.size(18.dp)
                 )
             }

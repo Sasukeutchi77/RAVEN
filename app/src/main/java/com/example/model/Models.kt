@@ -17,7 +17,8 @@ enum class UserRole(val title: String) {
 enum class ChannelType {
     TEXT,
     VOICE,
-    ANNOUNCEMENT
+    ANNOUNCEMENT,
+    STAGE
 }
 
 data class User(
@@ -44,7 +45,14 @@ data class User(
     val role: UserRole = UserRole.MEMBER,
     val isSpeaking: Boolean = false,
     val isMuted: Boolean = false,
-    val isDeafened: Boolean = false
+    val isDeafened: Boolean = false,
+    val xp: Int = 140,
+    val level: Int = 2,
+    val isTimedOut: Boolean = false,
+    val customRoleId: String? = null,
+    val clanTag: String? = "RVN",
+    val clanBadgeIcon: String = "bolt",
+    val unlockedStickers: List<String> = listOf("stk_wave", "stk_gg", "stk_hype", "stk_heart")
 )
 
 data class Reaction(
@@ -66,9 +74,14 @@ data class Message(
     val audioDurationSec: Int = 0,
     val attachmentName: String? = null,
     val attachmentType: String? = null,
+    val attachmentSizeLabel: String? = null,
+    val stickerId: String? = null,
+    val isSystemAnnouncement: Boolean = false,
     val isPinned: Boolean = false,
     val mentions: List<String> = emptyList(),
-    val poll: Poll? = null
+    val poll: Poll? = null,
+    val isEdited: Boolean = false,
+    val threadCount: Int = 0
 )
 
 data class Channel(
@@ -80,8 +93,12 @@ data class Channel(
     val topic: String = "",
     val unreadCount: Int = 0,
     val isPrivate: Boolean = false,
+    val slowmodeSeconds: Int = 0,
+    val isReadOnly: Boolean = false,
     val allowedRoles: List<UserRole> = emptyList(),
-    val activeVoiceUsers: List<User> = emptyList()
+    val activeVoiceUsers: List<User> = emptyList(),
+    val stageSpeakerIds: List<String> = emptyList(),
+    val stageRaisedHandIds: List<String> = emptyList()
 )
 
 data class Server(
@@ -93,7 +110,18 @@ data class Server(
     val members: List<User> = emptyList(),
     val unreadCount: Int = 0,
     val isDmTab: Boolean = false,
-    val ownerId: String = ""
+    val ownerId: String = "",
+    val inviteCode: String = "RAVEN-2026",
+    val boostCount: Int = 0,
+    val boostLevel: Int = 0,
+    val customBannerColorHex: Long? = null,
+    val isPublic: Boolean = false,
+    val categoryTag: String = "Communauté",
+    val description: String = "Serveur communautaire Raven.",
+    val shopItems: List<ServerShopItem> = emptyList(),
+    val customRoles: List<CustomRole> = defaultServerRoles(),
+    val auditLogs: List<AuditLogEntry> = emptyList(),
+    val events: List<ServerEvent> = emptyList()
 )
 
 data class DirectConversation(
@@ -101,5 +129,9 @@ data class DirectConversation(
     val friend: User = User(),
     val lastMessage: String = "",
     val lastMessageTime: String = "",
-    val unreadCount: Int = 0
+    val unreadCount: Int = 0,
+    val isGroup: Boolean = false,
+    val groupName: String? = null,
+    val groupMembers: List<User> = emptyList(),
+    val groupIconColor: Long = 0xFF5865F2
 )

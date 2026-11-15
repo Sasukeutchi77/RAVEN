@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
+import com.example.model.CustomRole
 import com.example.model.User
 import com.example.model.UserRole
 import com.example.model.UserStatus
@@ -30,15 +31,17 @@ import com.example.ui.theme.*
 @Composable
 fun MemberListDrawer(
     members: List<User>,
+    customRoles: List<CustomRole> = emptyList(),
     onClose: () -> Unit,
     onMemberClick: (User) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val palette = ravenPalette()
     Surface(
         modifier = modifier
             .fillMaxHeight()
             .width(260.dp),
-        color = DiscordDarkSidebar
+        color = palette.sidebarBg
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Row(
@@ -50,7 +53,7 @@ fun MemberListDrawer(
             ) {
                 Text(
                     text = "Membres (${members.size})",
-                    color = DiscordTextWhite,
+                    color = palette.textPrimary,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -61,7 +64,7 @@ fun MemberListDrawer(
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Fermer",
-                        tint = DiscordTextLight
+                        tint = palette.textSecondary
                     )
                 }
             }
@@ -81,35 +84,40 @@ fun MemberListDrawer(
                 if (admins.isNotEmpty()) {
                     item { RoleCategoryHeader("ADMINISTRATEURS — ${admins.size}") }
                     items(admins, key = { it.id }) { user ->
-                        MemberItemRow(user = user, onClick = { onMemberClick(user) })
+                        val customRole = customRoles.find { it.id == user.customRoleId }
+                        MemberItemRow(user = user, customRole = customRole, onClick = { onMemberClick(user) })
                     }
                 }
 
                 if (mods.isNotEmpty()) {
                     item { RoleCategoryHeader("MODÉRATEURS — ${mods.size}") }
                     items(mods, key = { it.id }) { user ->
-                        MemberItemRow(user = user, onClick = { onMemberClick(user) })
+                        val customRole = customRoles.find { it.id == user.customRoleId }
+                        MemberItemRow(user = user, customRole = customRole, onClick = { onMemberClick(user) })
                     }
                 }
 
                 if (bots.isNotEmpty()) {
                     item { RoleCategoryHeader("BOTS — ${bots.size}") }
                     items(bots, key = { it.id }) { user ->
-                        MemberItemRow(user = user, onClick = { onMemberClick(user) })
+                        val customRole = customRoles.find { it.id == user.customRoleId }
+                        MemberItemRow(user = user, customRole = customRole, onClick = { onMemberClick(user) })
                     }
                 }
 
                 if (online.isNotEmpty()) {
                     item { RoleCategoryHeader("EN LIGNE — ${online.size}") }
                     items(online, key = { it.id }) { user ->
-                        MemberItemRow(user = user, onClick = { onMemberClick(user) })
+                        val customRole = customRoles.find { it.id == user.customRoleId }
+                        MemberItemRow(user = user, customRole = customRole, onClick = { onMemberClick(user) })
                     }
                 }
 
                 if (offline.isNotEmpty()) {
                     item { RoleCategoryHeader("HORS LIGNE — ${offline.size}") }
                     items(offline, key = { it.id }) { user ->
-                        MemberItemRow(user = user, onClick = { onMemberClick(user) })
+                        val customRole = customRoles.find { it.id == user.customRoleId }
+                        MemberItemRow(user = user, customRole = customRole, onClick = { onMemberClick(user) })
                     }
                 }
             }
@@ -129,7 +137,12 @@ private fun RoleCategoryHeader(title: String) {
 }
 
 @Composable
-private fun MemberItemRow(user: User, onClick: () -> Unit) {
+private fun MemberItemRow(
+    user: User,
+    customRole: CustomRole? = null,
+    onClick: () -> Unit
+) {
+    val palette = ravenPalette()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -186,39 +199,95 @@ private fun MemberItemRow(user: User, onClick: () -> Unit) {
 
         Column {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = user.name,
-                    color = if (user.status == UserStatus.OFFLINE) DiscordTextMuted else DiscordTextWhite,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (user.role == UserRole.BOT) {
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Surface(
-                        color = DiscordBlurple,
-                        shape = RoundedCornerShape(3.dp)
+                    Text(
+                        text = user.name,
+                        color = when {
+                            customRole != null -> Color(customRole.colorHex)
+                            user.status == UserStatus.OFFLINE -> palette.textMuted
+                            else -> palette.textPrimary
+                        },
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (!user.clanTag.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Surface(
+                            color = palette.accent.copy(alpha = 0.18f),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = user.clanTag,
+                                color = palette.accent,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                    if (user.role == UserRole.BOT) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Surface(
+                            color = DiscordBlurple,
+                            shape = RoundedCornerShape(3.dp)
+                        ) {
+                            Text(
+                                text = "BOT",
+                                color = Color.White,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                    if (user.isTimedOut) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Surface(
+                            color = DiscordAmber.copy(alpha = 0.25f),
+                            shape = RoundedCornerShape(3.dp)
+                        ) {
+                            Text(
+                                text = "TIMEOUT",
+                                color = DiscordAmber,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
+                if (customRole != null && customRole.secondaryColorHex != null) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(
+                                androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                    listOf(Color(customRole.colorHex), Color(customRole.secondaryColorHex))
+                                )
+                            )
+                            .padding(horizontal = 6.dp, vertical = 1.dp)
                     ) {
                         Text(
-                            text = "BOT",
+                            text = customRole.name,
                             color = Color.White,
-                            fontSize = 8.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                } else {
+                    val subline = customRole?.name ?: user.customStatus
+                    if (subline.isNotBlank()) {
+                        Text(
+                            text = subline,
+                            color = palette.textMuted,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
-            }
-            if (user.customStatus.isNotBlank()) {
-                Text(
-                    text = user.customStatus,
-                    color = DiscordTextMuted,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
         }
     }
 }

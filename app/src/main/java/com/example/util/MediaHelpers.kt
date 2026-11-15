@@ -18,13 +18,40 @@ import java.io.File
 import java.io.FileOutputStream
 
 object CloudinaryHelper {
+    private const val PREFS_NAME = "raven_cloudinary_prefs"
+    private const val KEY_CLOUD_NAME = "cloud_name"
+    private const val KEY_UPLOAD_PRESET = "upload_preset"
+
     // Cloudinary credentials can be set by the user or dynamically configured
     var cloudName: String = "demo"
     var uploadPreset: String = "unsigned_preset"
 
+    fun init(context: Context) {
+        try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            cloudName = prefs.getString(KEY_CLOUD_NAME, "demo") ?: "demo"
+            uploadPreset = prefs.getString(KEY_UPLOAD_PRESET, "unsigned_preset") ?: "unsigned_preset"
+        } catch (_: Exception) {
+        }
+    }
+
+    fun saveConfig(context: Context, name: String, preset: String) {
+        cloudName = name.trim().ifBlank { "demo" }
+        uploadPreset = preset.trim().ifBlank { "unsigned_preset" }
+        try {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_CLOUD_NAME, cloudName)
+                .putString(KEY_UPLOAD_PRESET, uploadPreset)
+                .apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun isConfigured(): Boolean = cloudName != "demo" && uploadPreset != "unsigned_preset" && cloudName.isNotBlank() && uploadPreset.isNotBlank()
+
     suspend fun uploadImage(context: Context, imageUri: Uri): String = withContext(Dispatchers.IO) {
         try {
-            // First copy URI stream to a cache file
             val inputStream = context.contentResolver.openInputStream(imageUri) ?: return@withContext imageUri.toString()
             val tempFile = File(context.cacheDir, "upload_${System.currentTimeMillis()}.jpg")
             val outputStream = FileOutputStream(tempFile)
@@ -32,8 +59,7 @@ object CloudinaryHelper {
             inputStream.close()
             outputStream.close()
 
-            // If user has demo/default, we still return the local cache URI for instant preview
-            if (cloudName == "demo" || uploadPreset == "unsigned_preset") {
+            if (!isConfigured()) {
                 return@withContext tempFile.absolutePath
             }
 
@@ -60,6 +86,42 @@ object CloudinaryHelper {
         } catch (e: Exception) {
             Log.e("Cloudinary", "Error uploading to Cloudinary", e)
             imageUri.toString()
+        }
+    }
+
+    suspend fun uploadFile(context: Context, fileUri: Uri, mimeType: String = "application/octet-stream"): String = withContext(Dispatchers.IO) {
+        try {
+            val inputStream = context.contentResolver.openInputStream(fileUri) ?: return@withContext fileUri.toString()
+            val tempFile = File(context.cacheDir, "file_${System.currentTimeMillis()}")
+            FileOutputStream(tempFile).use { out -> inputStream.copyTo(out) }
+            inputStream.close()
+
+            if (!isConfigured()) {
+                return@withContext tempFile.absolutePath
+            }
+
+            val client = OkHttpClient()
+            val requestBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("file", tempFile.name, tempFile.asRequestBody(mimeType.toMediaTypeOrNull()))
+                .addFormDataPart("upload_preset", uploadPreset)
+                .build()
+
+            val request = Request.Builder()
+                .url("https://api.cloudinary.com/v1_1/$cloudName/auto/upload")
+                .post(requestBody)
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val json = JSONObject(response.body?.string() ?: "")
+                json.optString("secure_url", tempFile.absolutePath)
+            } else {
+                tempFile.absolutePath
+            }
+        } catch (e: Exception) {
+            Log.e("Cloudinary", "Error uploading file", e)
+            fileUri.toString()
         }
     }
 }
