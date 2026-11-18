@@ -1,7 +1,10 @@
 package com.example.ui.components
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
@@ -34,14 +37,18 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.example.model.Channel
+import com.example.model.CustomRole
 import com.example.model.User
+import com.example.model.UserRole
 import com.example.model.VoiceJukeboxState
 import com.example.ui.theme.*
+import com.example.util.VoiceConnectionPhase
 import com.example.util.WebRtcSessionState
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoTrack
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,35 +60,67 @@ fun VoiceRoomView(
     isUserDeafened: Boolean,
     jukeboxState: VoiceJukeboxState = VoiceJukeboxState(),
     rtcSessionState: WebRtcSessionState = WebRtcSessionState(),
+    localVideoTrack: VideoTrack? = null,
     remoteVideoTracks: Map<String, VideoTrack> = emptyMap(),
     eglContext: EglBase.Context? = null,
+    serverCustomRoles: List<CustomRole> = emptyList(),
+    canManageVoice: Boolean = false,
+    canSpeak: Boolean = true,
+    canStreamVideo: Boolean = true,
+    canShareScreen: Boolean = true,
+    participantVolumes: Map<String, Float> = emptyMap(),
     onCameraToggle: (Boolean, Boolean) -> Unit = { _, _ -> },
     onScreenShareToggle: (Boolean) -> Unit = {},
+    onStartScreenShareWithIntent: (Int, Intent?) -> Unit = { _, _ -> },
+    onStopScreenShare: () -> Unit = {},
     onToggleMute: () -> Unit,
     onToggleDeafen: () -> Unit,
+    onToggleSpeakerphone: () -> Unit = {},
+    onReconnect: () -> Unit = {},
     onLeaveVoice: () -> Unit,
     onMinimize: () -> Unit,
     onInviteClick: () -> Unit = {},
     onOpenJukebox: () -> Unit = {},
     onOpenMixer: () -> Unit = {},
     onOpenWhiteboard: () -> Unit = {},
+    onParticipantVolumeChange: (String, Float) -> Unit = { _, _ -> },
+    onKickParticipant: (String) -> Unit = {},
+    onUpdateVoiceSettings: (isLocked: Boolean, maxParticipants: Int, allowedRoles: List<UserRole>, allowedRoleIds: List<String>) -> Unit = { _, _, _, _ -> },
     onRewardXpAndOrbs: (xp: Int, orbs: Int, reason: String) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
     val context = LocalContext.current
-    var isCameraOn by remember { mutableStateOf(false) }
-    var useFrontCamera by remember { mutableStateOf(true) }
-    var isScreenSharing by remember { mutableStateOf(false) }
+
+    // Persist camera/screenshare state via rtcSessionState across rotation when connected
+    val isCameraOn = rtcSessionState.isCameraStreaming
+    val useFrontCamera = rtcSessionState.useFrontCamera
+    val isScreenSharing = rtcSessionState.isScreenSharing
+
     var showActivitiesSheetTab by remember { mutableStateOf<Int?>(null) }
+    var selectedParticipantForControl by remember { mutableStateOf<User?>(null) }
+    var showChannelAccessDialog by remember { mutableStateOf(false) }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            isCameraOn = true
             onCameraToggle(true, useFrontCamera)
         }
+    }
+
+    val screenProjectionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.data != null) {
+            onStartScreenShareWithIntent(result.resultCode, result.data)
+        }
+    }
+
+    val phaseColor = when (rtcSessionState.connectionPhase) {
+        VoiceConnectionPhase.NETWORK_LOST, VoiceConnectionPhase.FAILED -> DiscordRed
+        VoiceConnectionPhase.RECONNECTING, VoiceConnectionPhase.CONNECTING -> DiscordAmber
+        else -> DiscordGreen
     }
 
     Scaffold(
@@ -93,23 +132,42 @@ fun VoiceRoomView(
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Default.VolumeUp,
+                                imageVector = if (channel.isLocked) Icons.Default.Lock else Icons.Default.VolumeUp,
                                 contentDescription = null,
-                                tint = DiscordGreen,
-                                modifier = Modifier.size(20.dp)
+                                tint = if (channel.isLocked) DiscordAmber else phaseColor,
+                                modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = channel.name,
                                 color = palette.textPrimary,
                                 fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
+                            if (channel.maxParticipants > 0) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = palette.cardBg,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = "${channel.activeVoiceUsers.size}/${channel.maxParticipants}",
+                                        color = palette.textMuted,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                         }
                         Text(
-                            text = "$serverName • ${rtcSessionState.iceStatusLabel} (${rtcSessionState.pingMs}ms)",
-                            color = DiscordGreen,
-                            fontSize = 11.sp
+                            text = "$serverName • ${rtcSessionState.iceStatusLabel} • ${rtcSessionState.networkTypeLabel} (${rtcSessionState.pingMs}ms)",
+                            color = phaseColor,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 },
@@ -126,6 +184,28 @@ fun VoiceRoomView(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = onToggleSpeakerphone,
+                        modifier = Modifier.testTag("voice_speaker_button")
+                    ) {
+                        Icon(
+                            imageVector = if (rtcSessionState.isSpeakerphoneOn) Icons.Default.VolumeUp else Icons.Default.PhoneInTalk,
+                            contentDescription = if (rtcSessionState.isSpeakerphoneOn) "Haut-parleur actif" else "Écouteur",
+                            tint = if (rtcSessionState.isSpeakerphoneOn) DiscordGreen else palette.textSecondary
+                        )
+                    }
+                    if (canManageVoice) {
+                        IconButton(
+                            onClick = { showChannelAccessDialog = true },
+                            modifier = Modifier.testTag("voice_channel_settings_button")
+                        ) {
+                            Icon(
+                                imageVector = if (channel.isLocked) Icons.Default.Lock else Icons.Default.Tune,
+                                contentDescription = "Paramètres & Verrouillage",
+                                tint = if (channel.isLocked) DiscordAmber else palette.textSecondary
+                            )
+                        }
+                    }
                     IconButton(onClick = onInviteClick, modifier = Modifier.testTag("voice_invite_button")) {
                         Icon(
                             imageVector = Icons.Default.PersonAdd,
@@ -164,21 +244,22 @@ fun VoiceRoomView(
                 ) {
                     VoiceControlButton(
                         icon = if (isUserMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                        label = if (isUserMuted) "Muet" else "Micro",
+                        label = if (!canSpeak) "Restreint" else if (isUserMuted) "Muet" else "Micro",
                         isActive = isUserMuted,
                         activeColor = DiscordRed,
+                        enabled = canSpeak,
                         onClick = onToggleMute,
                         testTag = "voice_control_mute"
                     )
 
                     VoiceControlButton(
                         icon = if (isCameraOn) Icons.Default.Videocam else Icons.Default.VideocamOff,
-                        label = "Vidéo",
+                        label = if (rtcSessionState.cameraPausedInBackground) "En pause" else "Vidéo",
                         isActive = isCameraOn,
                         activeColor = palette.accent,
+                        enabled = canStreamVideo,
                         onClick = {
                             if (isCameraOn) {
-                                isCameraOn = false
                                 onCameraToggle(false, useFrontCamera)
                             } else {
                                 val granted = ContextCompat.checkSelfPermission(
@@ -186,7 +267,6 @@ fun VoiceRoomView(
                                     Manifest.permission.CAMERA
                                 ) == PackageManager.PERMISSION_GRANTED
                                 if (granted) {
-                                    isCameraOn = true
                                     onCameraToggle(true, useFrontCamera)
                                 } else {
                                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
@@ -201,9 +281,27 @@ fun VoiceRoomView(
                         label = "Écran",
                         isActive = isScreenSharing,
                         activeColor = DiscordGreen,
+                        enabled = canShareScreen,
                         onClick = {
-                            isScreenSharing = !isScreenSharing
-                            onScreenShareToggle(isScreenSharing)
+                            if (isScreenSharing) {
+                                onStopScreenShare()
+                                onScreenShareToggle(false)
+                            } else {
+                                val mpm = try {
+                                    context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+                                } catch (_: Throwable) {
+                                    null
+                                }
+                                if (mpm != null) {
+                                    try {
+                                        screenProjectionLauncher.launch(mpm.createScreenCaptureIntent())
+                                    } catch (_: Throwable) {
+                                        onScreenShareToggle(true)
+                                    }
+                                } else {
+                                    onScreenShareToggle(true)
+                                }
+                            }
                         },
                         testTag = "voice_control_screenshare"
                     )
@@ -252,40 +350,92 @@ fun VoiceRoomView(
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
+            // Reconnection / Network-loss recovery banner
+            if (rtcSessionState.connectionPhase == VoiceConnectionPhase.RECONNECTING ||
+                rtcSessionState.connectionPhase == VoiceConnectionPhase.NETWORK_LOST ||
+                rtcSessionState.connectionPhase == VoiceConnectionPhase.FAILED
+            ) {
+                Surface(
+                    color = phaseColor.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, phaseColor),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 10.dp)
+                        .testTag("voice_connection_warning_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.WifiOff, contentDescription = null, tint = phaseColor, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = rtcSessionState.iceStatusLabel,
+                                color = palette.textPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 2
+                            )
+                        }
+                        if (rtcSessionState.networkAvailable) {
+                            TextButton(
+                                onClick = onReconnect,
+                                modifier = Modifier.testTag("voice_reconnect_button")
+                            ) {
+                                Text("Reconnecter", color = phaseColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
             if (isScreenSharing) {
                 Surface(
                     color = Color(0xFF111318),
                     shape = RoundedCornerShape(14.dp),
-                    border = androidx.compose.foundation.BorderStroke(2.dp, DiscordGreen),
+                    border = BorderStroke(2.dp, DiscordGreen),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(150.dp)
+                        .height(140.dp)
                         .padding(bottom = 12.dp)
                         .testTag("voice_screenshare_preview")
                 ) {
                     Box(modifier = Modifier.fillMaxSize().padding(14.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.align(Alignment.TopStart)
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter)
                         ) {
                             Surface(color = DiscordRed, shape = RoundedCornerShape(4.dp)) {
                                 Text(
-                                    text = "EN DIRECT • 1080p 60FPS",
+                                    text = "PARTAGE D'ÉCRAN EN DIRECT",
                                     color = Color.White,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
                             }
+                            TextButton(onClick = {
+                                onStopScreenShare()
+                                onScreenShareToggle(false)
+                            }) {
+                                Text("Arrêter", color = DiscordRed, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
                         }
                         Column(
                             modifier = Modifier.align(Alignment.Center),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Icon(Icons.Default.ScreenShare, contentDescription = null, tint = DiscordGreen, modifier = Modifier.size(34.dp))
+                            Icon(Icons.Default.ScreenShare, contentDescription = null, tint = DiscordGreen, modifier = Modifier.size(32.dp))
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Vous partagez votre écran avec ${channel.activeVoiceUsers.size} membres",
+                                text = "Diffusion active vers ${channel.activeVoiceUsers.size} membre(s)",
                                 color = Color.White,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold
@@ -295,7 +445,7 @@ fun VoiceRoomView(
                 }
             }
 
-            // Mini Jukebox & Quick Collaborative Pills
+            // Mini Jukebox Card
             jukeboxState.currentTrack?.let { track ->
                 Surface(
                     color = palette.sidebarBg,
@@ -373,13 +523,23 @@ fun VoiceRoomView(
                 }
             }
 
-            Text(
-                text = "Participants dans le salon (${channel.activeVoiceUsers.size})",
-                color = palette.textMuted,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Participants (${channel.activeVoiceUsers.size}${if (channel.maxParticipants > 0) "/${channel.maxParticipants}" else ""})",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Appuyez sur un membre pour le volume",
+                    color = palette.textMuted,
+                    fontSize = 10.sp
+                )
+            }
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
@@ -392,10 +552,12 @@ fun VoiceRoomView(
                     val isMuted = if (isMe) isUserMuted else user.isMuted
                     val isDeafened = if (isMe) isUserDeafened else user.isDeafened
                     val isSpeaking = if (isMe) {
-                        !isMuted && (rtcSessionState.localMicSpeaking || rtcSessionState.localMicLevel == 0f)
+                        !isMuted && !isDeafened && rtcSessionState.localMicSpeaking
                     } else {
-                        user.isSpeaking
+                        !isMuted && !isDeafened && user.isSpeaking
                     }
+                    val remotePeer = rtcSessionState.remotePeers.find { it.uid == user.id }
+                    val vol = participantVolumes[user.id] ?: 1f
 
                     VoiceParticipantCard(
                         user = user,
@@ -403,18 +565,46 @@ fun VoiceRoomView(
                         isSpeaking = isSpeaking,
                         isMuted = isMuted,
                         isDeafened = isDeafened,
-                        isCameraOn = isMe && isCameraOn,
+                        isCameraOn = if (isMe) isCameraOn else (remotePeer?.isCameraOn == true),
+                        isRemoteScreenSharing = !isMe && (remotePeer?.isScreenSharing == true),
+                        volumePercent = if (isMe) null else (vol * 100).roundToInt(),
+                        peerIceState = rtcSessionState.peerConnectionStates[user.id] ?: remotePeer?.connectionState,
+                        localVideoTrack = if (isMe) localVideoTrack else null,
                         remoteVideoTrack = if (!isMe) remoteVideoTracks[user.id] else null,
                         eglContext = eglContext,
-                        useFrontCamera = useFrontCamera,
                         onFlipCamera = {
-                            useFrontCamera = !useFrontCamera
-                            if (isCameraOn) onCameraToggle(true, useFrontCamera)
+                            if (isCameraOn) onCameraToggle(true, !useFrontCamera)
+                        },
+                        onCardClick = {
+                            if (!isMe) {
+                                selectedParticipantForControl = user
+                            }
                         }
                     )
                 }
             }
         }
+    }
+
+    selectedParticipantForControl?.let { target ->
+        ParticipantVoiceControlDialog(
+            participant = target,
+            currentVolume = participantVolumes[target.id] ?: 1f,
+            canModerateVoice = canManageVoice && target.id != currentUser.id,
+            connectionStateLabel = rtcSessionState.peerConnectionStates[target.id],
+            onVolumeChange = { vol -> onParticipantVolumeChange(target.id, vol) },
+            onKickFromVoice = { onKickParticipant(target.id) },
+            onDismiss = { selectedParticipantForControl = null }
+        )
+    }
+
+    if (showChannelAccessDialog) {
+        VoiceChannelAccessDialog(
+            channel = channel,
+            serverCustomRoles = serverCustomRoles,
+            onSave = onUpdateVoiceSettings,
+            onDismiss = { showChannelAccessDialog = false }
+        )
     }
 
     if (showActivitiesSheetTab != null) {
@@ -434,10 +624,14 @@ fun VoiceParticipantCard(
     isMuted: Boolean,
     isDeafened: Boolean,
     isCameraOn: Boolean = false,
+    isRemoteScreenSharing: Boolean = false,
+    volumePercent: Int? = null,
+    peerIceState: String? = null,
+    localVideoTrack: VideoTrack? = null,
     remoteVideoTrack: VideoTrack? = null,
     eglContext: EglBase.Context? = null,
-    useFrontCamera: Boolean = true,
-    onFlipCamera: () -> Unit = {}
+    onFlipCamera: () -> Unit = {},
+    onCardClick: () -> Unit = {}
 ) {
     val palette = ravenPalette()
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -451,15 +645,22 @@ fun VoiceParticipantCard(
         label = "pulseBorder"
     )
 
-    val hasActiveVideo = isCameraOn || (remoteVideoTrack != null && eglContext != null)
+    val activeTrack = if (isMe) localVideoTrack else remoteVideoTrack
+    val hasHardwareVideo = activeTrack != null && eglContext != null && (isCameraOn || isRemoteScreenSharing)
+    val hasActiveVideo = isCameraOn || isRemoteScreenSharing || hasHardwareVideo
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(160.dp),
+            .height(166.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = !isMe, onClick = onCardClick)
+            .testTag("voice_participant_card_${user.id}"),
         color = if (hasActiveVideo) Color(0xFF172038) else palette.sidebarBg,
         shape = RoundedCornerShape(12.dp),
         border = when {
             isSpeaking && !isMuted -> BorderStroke(pulseBorder.dp, DiscordGreen)
+            isRemoteScreenSharing -> BorderStroke(2.dp, DiscordGreen)
             hasActiveVideo -> BorderStroke(2.dp, palette.accent)
             else -> BorderStroke(1.dp, palette.border)
         }
@@ -468,31 +669,76 @@ fun VoiceParticipantCard(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            if (isCameraOn && isMe) {
-                CameraXPreviewBox(
-                    useFrontCamera = useFrontCamera,
-                    onFlipCamera = onFlipCamera,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else if (remoteVideoTrack != null && eglContext != null) {
-                AndroidView(
-                    factory = { ctx ->
-                        SurfaceViewRenderer(ctx).apply {
-                            init(eglContext, null)
-                            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
-                            setEnableHardwareScaler(true)
-                            remoteVideoTrack.addSink(this)
+            if (hasHardwareVideo && activeTrack != null && eglContext != null) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    AndroidView(
+                        factory = { ctx ->
+                            SurfaceViewRenderer(ctx).apply {
+                                init(eglContext, null)
+                                setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+                                setEnableHardwareScaler(true)
+                                setMirror(isMe)
+                                activeTrack.addSink(this)
+                            }
+                        },
+                        onRelease = { renderer ->
+                            try {
+                                activeTrack.removeSink(renderer)
+                                renderer.release()
+                            } catch (_: Throwable) {
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp))
+                    )
+                    if (isMe && isCameraOn) {
+                        IconButton(
+                            onClick = onFlipCamera,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(6.dp)
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xAA000000))
+                                .testTag("camera_flip_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Cameraswitch,
+                                contentDescription = "Inverser la caméra",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
-                    },
-                    onRelease = { renderer ->
-                        try {
-                            remoteVideoTrack.removeSink(renderer)
-                            renderer.release()
-                        } catch (_: Throwable) {
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp))
-                )
+                    }
+                }
+            } else if (isMe && isCameraOn) {
+                // Graceful fallback when running without hardware GL surface (e.g., unit tests/emulator)
+                Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0E1320))) {
+                    Column(
+                        modifier = Modifier.align(Alignment.Center).padding(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.Videocam, contentDescription = "Caméra WebRTC active", tint = palette.accent, modifier = Modifier.size(32.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Caméra WebRTC active", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    IconButton(
+                        onClick = onFlipCamera,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(6.dp)
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xAA000000))
+                            .testTag("camera_flip_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Cameraswitch,
+                            contentDescription = "Inverser la caméra",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             } else {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -500,7 +746,7 @@ fun VoiceParticipantCard(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(72.dp)
+                            .size(70.dp)
                             .clip(CircleShape)
                             .background(Color(user.avatarColor))
                             .then(
@@ -513,37 +759,80 @@ fun VoiceParticipantCard(
                         Text(
                             text = user.name.take(1).uppercase(),
                             color = Color.White,
-                            fontSize = 28.sp,
+                            fontSize = 26.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                    Text(
+                        text = if (isMe) "${user.name} (Vous)" else user.name,
+                        color = if (isSpeaking && !isMuted) DiscordGreen else palette.textPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                }
+            }
+
+            // Top-left status badges (connection & individual volume)
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (!isMe && peerIceState != null) {
+                    val dotColor = when (peerIceState) {
+                        "CONNECTED", "COMPLETED" -> DiscordGreen
+                        "CHECKING", "RECONNECTING" -> DiscordAmber
+                        else -> DiscordRed
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(dotColor)
+                    )
+                }
+                if (volumePercent != null && volumePercent != 100) {
+                    Surface(
+                        color = Color(0x99000000),
+                        shape = RoundedCornerShape(6.dp)
                     ) {
                         Text(
-                            text = if (isMe) "${user.name} (Vous)" else user.name,
-                            color = if (isSpeaking && !isMuted) DiscordGreen else palette.textPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            text = "$volumePercent%",
+                            color = if (volumePercent == 0) DiscordRed else Color.White,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                         )
                     }
                 }
             }
 
-            // Status icons in top corners
+            // Status icons in top right
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
                     .align(Alignment.TopEnd)
                     .padding(8.dp),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                if (isRemoteScreenSharing) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(DiscordGreen),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.ScreenShare, contentDescription = "Partage écran", tint = Color.White, modifier = Modifier.size(14.dp))
+                    }
+                }
                 if (isCameraOn) {
                     Box(
                         modifier = Modifier
@@ -552,14 +841,8 @@ fun VoiceParticipantCard(
                             .background(DiscordBlurple),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Videocam,
-                            contentDescription = "Caméra active",
-                            tint = Color.White,
-                            modifier = Modifier.size(14.dp)
-                        )
+                        Icon(Icons.Default.Videocam, contentDescription = "Caméra active", tint = Color.White, modifier = Modifier.size(14.dp))
                     }
-                    Spacer(modifier = Modifier.width(4.dp))
                 }
                 if (isMuted) {
                     Box(
@@ -569,16 +852,10 @@ fun VoiceParticipantCard(
                             .background(palette.cardBg),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.MicOff,
-                            contentDescription = "Muet",
-                            tint = DiscordRed,
-                            modifier = Modifier.size(14.dp)
-                        )
+                        Icon(Icons.Default.MicOff, contentDescription = "Muet", tint = DiscordRed, modifier = Modifier.size(14.dp))
                     }
                 }
                 if (isDeafened) {
-                    Spacer(modifier = Modifier.width(4.dp))
                     Box(
                         modifier = Modifier
                             .size(24.dp)
@@ -586,12 +863,7 @@ fun VoiceParticipantCard(
                             .background(palette.cardBg),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.HeadsetOff,
-                            contentDescription = "Sourdine",
-                            tint = DiscordRed,
-                            modifier = Modifier.size(14.dp)
-                        )
+                        Icon(Icons.Default.HeadsetOff, contentDescription = "Sourdine", tint = DiscordRed, modifier = Modifier.size(14.dp))
                     }
                 }
             }
@@ -631,31 +903,44 @@ fun VoiceControlButton(
     label: String,
     isActive: Boolean,
     activeColor: Color,
+    enabled: Boolean = true,
     onClick: () -> Unit,
     testTag: String
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable(onClick = onClick).testTag(testTag)
+        modifier = Modifier
+            .clickable(enabled = enabled, onClick = onClick)
+            .testTag(testTag)
     ) {
         Box(
             modifier = Modifier
-                .size(46.dp)
+                .size(48.dp)
                 .clip(CircleShape)
-                .background(if (isActive) activeColor else DiscordDarkInput),
+                .background(
+                    when {
+                        !enabled -> DiscordDarkInput.copy(alpha = 0.4f)
+                        isActive -> activeColor
+                        else -> DiscordDarkInput
+                    }
+                ),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (isActive) Color.White else DiscordTextLight,
+                tint = when {
+                    !enabled -> DiscordTextMuted.copy(alpha = 0.5f)
+                    isActive -> Color.White
+                    else -> DiscordTextLight
+                },
                 modifier = Modifier.size(22.dp)
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = label,
-            color = if (isActive) activeColor else DiscordTextMuted,
+            color = if (!enabled) DiscordTextMuted.copy(alpha = 0.5f) else if (isActive) activeColor else DiscordTextMuted,
             fontSize = 11.sp
         )
     }

@@ -8,7 +8,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
+import com.example.data.CommunityPermissions
 import com.example.model.*
 import com.example.ui.theme.*
 
@@ -43,6 +47,14 @@ fun ChannelListDrawer(
     onOpenServerShop: () -> Unit = {},
     onOpenServerSettings: () -> Unit = {},
     onOpenNotifications: () -> Unit = {},
+    onOpenCommunityHome: () -> Unit = {},
+    onOpenCommunityInvites: () -> Unit = {},
+    onOpenRolesMatrix: () -> Unit = {},
+    onOpenCategoriesManager: () -> Unit = {},
+    onOpenBotsDashboard: () -> Unit = {},
+    onOpenAiAssistant: () -> Unit = {},
+    onEditCommunity: () -> Unit = {},
+    onLeaveCommunity: () -> Unit = {},
     onUserClick: () -> Unit,
     onOpenAppSettings: () -> Unit = onUserClick,
     onToggleMute: () -> Unit,
@@ -51,6 +63,17 @@ fun ChannelListDrawer(
 ) {
     val palette = ravenPalette()
     var isMenuOpen by remember { mutableStateOf(false) }
+    val isOwner = remember(server, currentUser.id) { CommunityPermissions.isOwner(server, currentUser.id) }
+    val canManageCommunity = remember(server, currentUser.id) {
+        CommunityPermissions.hasPermission(server, currentUser.id, RolePermission.MANAGE_COMMUNITY)
+    }
+    val canManageRoles = remember(server, currentUser.id) {
+        CommunityPermissions.hasPermission(server, currentUser.id, RolePermission.MANAGE_ROLES)
+    }
+    val canManageChannels = remember(server, currentUser.id) {
+        CommunityPermissions.hasPermission(server, currentUser.id, RolePermission.MANAGE_CHANNELS)
+    }
+    val onlineCount = remember(server.members) { CommunityPermissions.onlineMembersCount(server) }
 
     Surface(
         modifier = modifier.fillMaxHeight(),
@@ -131,8 +154,70 @@ fun ChannelListDrawer(
                     modifier = Modifier.background(palette.cardBg)
                 ) {
                     DropdownMenuItem(
-                        text = { Text("Inviter des personnes", color = DiscordBlurple) },
+                        text = { Text("Accueil Communauté", color = palette.textPrimary, fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(Icons.Default.Home, contentDescription = null, tint = palette.accent) },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenCommunityHome()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Gérer les invitations", color = DiscordBlurple) },
                         leadingIcon = { Icon(Icons.Default.PersonAdd, contentDescription = null, tint = DiscordBlurple) },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenCommunityInvites()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Bots & Automations", color = palette.textPrimary, fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(Icons.Default.SmartToy, contentDescription = null, tint = DiscordBlurple) },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenBotsDashboard()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Assistant RAVEN AI", color = Color(0xFFA855F7), fontWeight = FontWeight.Bold) },
+                        leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFFA855F7)) },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenAiAssistant()
+                        }
+                    )
+                    if (canManageRoles) {
+                        DropdownMenuItem(
+                            text = { Text("Rôles & Permissions", color = palette.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.Shield, contentDescription = null, tint = Color(0xFF00D4AA)) },
+                            onClick = {
+                                isMenuOpen = false
+                                onOpenRolesMatrix()
+                            }
+                        )
+                    }
+                    if (canManageChannels) {
+                        DropdownMenuItem(
+                            text = { Text("Catégories & Salons", color = palette.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.Category, contentDescription = null, tint = palette.textPrimary) },
+                            onClick = {
+                                isMenuOpen = false
+                                onOpenCategoriesManager()
+                            }
+                        )
+                    }
+                    if (canManageCommunity) {
+                        DropdownMenuItem(
+                            text = { Text("Modifier la communauté", color = palette.textPrimary) },
+                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = DiscordAmber) },
+                            onClick = {
+                                isMenuOpen = false
+                                onEditCommunity()
+                            }
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("Inviter rapidement", color = palette.textPrimary) },
+                        leadingIcon = { Icon(Icons.Default.Link, contentDescription = null, tint = palette.textSecondary) },
                         onClick = {
                             isMenuOpen = false
                             onInvitePeople()
@@ -178,6 +263,17 @@ fun ChannelListDrawer(
                             onOpenNotifications()
                         }
                     )
+                    if (!isOwner) {
+                        HorizontalDivider(color = DiscordDarkBorder)
+                        DropdownMenuItem(
+                            text = { Text("Quitter la communauté", color = DiscordRed, fontWeight = FontWeight.Bold) },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, tint = DiscordRed) },
+                            onClick = {
+                                isMenuOpen = false
+                                onLeaveCommunity()
+                            }
+                        )
+                    }
                 }
             }
 
@@ -302,16 +398,68 @@ fun ChannelListDrawer(
                 }
             }
 
-            // Channels List
-            val categories = server.channels.groupBy { it.category }
+            // Community Home Card right above channels list
+            Surface(
+                color = palette.cardBg,
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.35f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(onClick = onOpenCommunityHome)
+                    .testTag("drawer_community_home_btn")
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Home,
+                        contentDescription = "Page d'accueil de la communauté",
+                        tint = palette.accent,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Accueil Communauté",
+                            color = palette.textPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        val handleText = if (server.uniqueHandle.isNotBlank()) "@${server.uniqueHandle} • " else ""
+                        Text(
+                            text = "${handleText}$onlineCount en ligne • ${server.members.size} membres",
+                            color = palette.textMuted,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = palette.textMuted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            // Channels List (supports empty categories + permission visibility)
+            val groupedChannels = server.channels.groupBy { it.category }
+            val orderedCategories = (server.categories.map { it.name } + groupedChannels.keys).distinct()
 
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 12.dp)
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
             ) {
-                categories.forEach { (categoryName, channels) ->
+                orderedCategories.forEach { categoryName ->
+                    val channels = groupedChannels[categoryName].orEmpty().filter {
+                        CommunityPermissions.isChannelAccessible(server, it, currentUser.id)
+                    }
                     item(key = "cat_$categoryName") {
                         ChannelCategoryHeader(
                             name = categoryName,
@@ -411,7 +559,7 @@ fun ChannelRow(
         ) {
             Icon(
                 imageVector = when {
-                    channel.isPrivate -> Icons.Default.Lock
+                    channel.isLocked || channel.isPrivate -> Icons.Default.Lock
                     isStage -> Icons.Default.Podcasts
                     isVoice -> Icons.Default.VolumeUp
                     isAnnouncement -> Icons.Default.Campaign
@@ -419,6 +567,7 @@ fun ChannelRow(
                 },
                 contentDescription = null,
                 tint = when {
+                    channel.isLocked -> DiscordRed
                     isStage -> DiscordGreen
                     isSelected -> DiscordTextWhite
                     else -> DiscordTextMuted
@@ -437,6 +586,24 @@ fun ChannelRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
+
+            if ((isVoice || isStage) && (channel.maxParticipants > 0 || channel.activeVoiceUsers.isNotEmpty())) {
+                val count = channel.activeVoiceUsers.size
+                val isFull = channel.maxParticipants > 0 && count >= channel.maxParticipants
+                Surface(
+                    color = (if (isFull) DiscordRed else DiscordDarkInput).copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.padding(end = 4.dp)
+                ) {
+                    Text(
+                        text = if (channel.maxParticipants > 0) "$count/${channel.maxParticipants}" else "$count",
+                        color = if (isFull) Color.White else DiscordTextMuted,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                    )
+                }
+            }
 
             if (channel.isReadOnly) {
                 Icon(

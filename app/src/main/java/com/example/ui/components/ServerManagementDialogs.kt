@@ -137,19 +137,21 @@ fun ServerInviteDialog(
 
 @Composable
 fun JoinServerByCodeDialog(
-    onJoinCode: (String) -> Boolean,
-    onDismiss: () -> Unit
+    onJoinCode: (String) -> Boolean = { false },
+    onDismiss: () -> Unit,
+    onJoinCodeAsync: ((String, (Boolean, String?) -> Unit) -> Unit)? = null
 ) {
     val palette = ravenPalette()
     var inviteCode by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+    var isSubmitting by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = palette.cardBg,
         title = {
             Text(
-                text = "Rejoindre un serveur",
+                text = "Rejoindre une communauté",
                 color = palette.textPrimary,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
@@ -158,7 +160,7 @@ fun JoinServerByCodeDialog(
         text = {
             Column {
                 Text(
-                    text = "Entrez un code d'invitation reçu d'un ami ou d'une communauté.",
+                    text = "Entrez un code d'invitation ou un identifiant reçu d'une communauté.",
                     color = palette.textMuted,
                     fontSize = 13.sp
                 )
@@ -217,14 +219,22 @@ fun JoinServerByCodeDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    val ok = onJoinCode(inviteCode)
-                    if (ok) onDismiss() else errorMsg = "Code invalide ou vide."
+                    if (onJoinCodeAsync != null) {
+                        isSubmitting = true
+                        onJoinCodeAsync(inviteCode) { ok, err ->
+                            isSubmitting = false
+                            if (ok) onDismiss() else errorMsg = err ?: "Code invalide ou expiré."
+                        }
+                    } else {
+                        val ok = onJoinCode(inviteCode)
+                        if (ok) onDismiss() else errorMsg = "Code invalide ou vide."
+                    }
                 },
-                enabled = inviteCode.isNotBlank(),
+                enabled = inviteCode.isNotBlank() && !isSubmitting,
                 colors = ButtonDefaults.buttonColors(containerColor = DiscordGreen),
                 modifier = Modifier.testTag("join_server_submit")
             ) {
-                Text("Rejoindre", color = Color.White)
+                Text(if (isSubmitting) "Vérification..." else "Rejoindre", color = Color.White)
             }
         },
         dismissButton = {

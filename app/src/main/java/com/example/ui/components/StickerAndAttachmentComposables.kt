@@ -341,15 +341,18 @@ fun FileAttachmentCard(
 @Composable
 fun SlashCommandMenu(
     query: String,
+    extraBotCommands: List<SlashCommandOption> = emptyList(),
     onSelectCommand: (SlashCommandOption) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
-    val matching = remember(query) {
+    val matching = remember(query, extraBotCommands) {
         val cmdPrefix = query.substringBefore(" ").lowercase()
-        SlashCommandCatalog.commands.filter {
-            it.command.startsWith(cmdPrefix) || cmdPrefix == "/"
-        }
+        (SlashCommandCatalog.commands + AiSlashCommandCatalog.commands + extraBotCommands)
+            .distinctBy { it.command.lowercase() }
+            .filter {
+                it.command.lowercase().startsWith(cmdPrefix) || cmdPrefix == "/"
+            }
     }
     if (matching.isEmpty()) return
 

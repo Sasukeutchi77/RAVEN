@@ -104,6 +104,8 @@ fun ChatView(
     onSendScheduledNow: (String) -> Unit = {},
     onScheduleReminder: (message: Message, delayMs: Long, delayLabel: String) -> Unit = { _, _, _ -> },
     onOpenWhiteboard: () -> Unit = {},
+    onOpenAiAssistant: () -> Unit = {},
+    botSlashCommands: List<SlashCommandOption> = emptyList(),
     currentUserId: String = "",
     currentUserName: String = "",
     modifier: Modifier = Modifier
@@ -379,6 +381,17 @@ fun ChatView(
                         }
 
                         IconButton(
+                            onClick = onOpenAiAssistant,
+                            modifier = Modifier.testTag("chat_ai_assistant_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "Ouvrir RAVEN AI",
+                                tint = Color(0xFFA855F7)
+                            )
+                        }
+
+                        IconButton(
                             onClick = onToggleMemberList,
                             modifier = Modifier.testTag("chat_members_button")
                         ) {
@@ -486,6 +499,7 @@ fun ChatView(
                 if (inputText.startsWith("/")) {
                     SlashCommandMenu(
                         query = inputText,
+                        extraBotCommands = botSlashCommands,
                         onSelectCommand = { option ->
                             if (option.command in listOf("/pileouface", "/xp", "/clear")) {
                                 onExecuteSlashCommand(option.command)
@@ -1599,6 +1613,21 @@ fun MessageItem(
                                 ) {
                                     Text(
                                         text = "MOD",
+                                        color = Color.White,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                            UserRole.BOT -> {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = DiscordBlurple,
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = "BOT",
                                         color = Color.White,
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,

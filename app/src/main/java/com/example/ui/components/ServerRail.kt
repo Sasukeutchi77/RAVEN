@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GroupAdd
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -26,10 +27,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.model.Server
 import com.example.model.ServerFolder
 import com.example.ui.theme.*
@@ -46,6 +49,8 @@ fun ServerRail(
     onJoinServerClick: () -> Unit = {},
     onExploreServersClick: () -> Unit = {},
     onOpenOrbsShop: () -> Unit = {},
+    onOpenBotsDashboard: () -> Unit = {},
+    onOpenAiAssistant: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -292,6 +297,44 @@ fun ServerRail(
                         modifier = Modifier.size(22.dp)
                     )
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(palette.inputBg)
+                        .clickable { onOpenBotsDashboard() }
+                        .testTag("server_rail_bots_dashboard"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SmartToy,
+                        contentDescription = "Bots & Automations RAVEN",
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Brush.linearGradient(listOf(Color(0xFF7C3AED), Color(0xFF2563EB))))
+                        .clickable { onOpenAiAssistant() }
+                        .testTag("server_rail_ai_assistant"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "Assistant RAVEN AI",
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
         }
     }
@@ -316,16 +359,25 @@ private fun ServerRailIconButton(
                 .background(if (isSelected) DiscordBlurple else Color(server.iconBgColor)),
             contentAlignment = Alignment.Center
         ) {
-            val iconKeys = listOf("game", "code", "rocket", "star", "shield", "bolt", "headset")
-            if (iconKeys.contains(server.iconText.lowercase())) {
-                AppStatusIcon(iconKey = server.iconText, size = 22.dp, tint = Color.White)
-            } else {
-                Text(
-                    text = server.iconText,
-                    color = Color.White,
-                    fontSize = if (server.iconText.length > 2) 14.sp else 17.sp,
-                    fontWeight = FontWeight.Bold
+            if (!server.imageUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = server.imageUrl,
+                    contentDescription = "Logo ${server.name}",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
                 )
+            } else {
+                val iconKeys = listOf("game", "code", "rocket", "star", "shield", "bolt", "headset")
+                if (iconKeys.contains(server.iconText.lowercase())) {
+                    AppStatusIcon(iconKey = server.iconText, size = 22.dp, tint = Color.White)
+                } else {
+                    Text(
+                        text = server.iconText,
+                        color = Color.White,
+                        fontSize = if (server.iconText.length > 2) 14.sp else 17.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

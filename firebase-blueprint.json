@@ -41,7 +41,7 @@
     },
     "UserNotification": {
       "title": "UserNotification",
-      "description": "Personal inbox notification or scheduled reminder.",
+      "description": "Personal inbox notification, community announcement alert, or reminder.",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
@@ -54,37 +54,151 @@
       },
       "required": ["userId", "title", "body"]
     },
+    "CommunityHandle": {
+      "title": "CommunityHandle",
+      "description": "Unique handle reservation (@slug) mapped to a community.",
+      "type": "object",
+      "properties": {
+        "handle": { "type": "string" },
+        "serverId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "isPublic": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["handle", "serverId", "ownerId"]
+    },
+    "CommunityInvite": {
+      "title": "CommunityInvite",
+      "description": "Managed invite link/code with max usage limits, expiration, and revocation.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "serverId": { "type": "string" },
+        "serverName": { "type": "string" },
+        "createdByUid": { "type": "string" },
+        "createdByName": { "type": "string" },
+        "maxUses": { "type": "integer" },
+        "usesCount": { "type": "integer" },
+        "isRevoked": { "type": "boolean" },
+        "isPublic": { "type": "boolean" },
+        "expiresAtMs": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "serverId", "createdByUid", "isRevoked"]
+    },
     "Server": {
       "title": "Server",
-      "description": "Community server with channels, roles, boosts, and internal Orbs shop.",
+      "description": "Advanced Raven Community with metadata, roles, categories, channels, boosts, and internal Orbs shop.",
       "type": "object",
       "properties": {
         "name": { "type": "string" },
+        "uniqueHandle": { "type": "string" },
         "iconText": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "bannerUrl": { "type": "string" },
+        "customBannerColorHex": { "type": "integer" },
         "ownerId": { "type": "string" },
+        "adminIds": { "type": "array" },
+        "moderatorIds": { "type": "array" },
+        "memberIds": { "type": "array" },
         "inviteCode": { "type": "string" },
         "isPublic": { "type": "boolean" },
         "categoryTag": { "type": "string" },
         "description": { "type": "string" },
+        "rulesGuidelines": { "type": "string" },
+        "homeWelcomeMessage": { "type": "string" },
         "boostCount": { "type": "integer" },
         "boostLevel": { "type": "integer" },
-        "memberIds": { "type": "array" },
+        "categories": { "type": "array" },
+        "customRoles": { "type": "array" },
+        "events": { "type": "array" },
+        "shopItems": { "type": "array" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["name", "ownerId", "memberIds"]
     },
+    "CommunityMember": {
+      "title": "CommunityMember",
+      "description": "Per-community membership record storing assigned role, granular permissions, and online status.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "serverId": { "type": "string" },
+        "name": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "avatarColor": { "type": "integer" },
+        "role": { "type": "string" },
+        "customRoleId": { "type": "string" },
+        "permissions": { "type": "array" },
+        "status": { "type": "string" },
+        "isTimedOut": { "type": "boolean" },
+        "isPublic": { "type": "boolean" },
+        "xp": { "type": "integer" },
+        "level": { "type": "integer" },
+        "clanTag": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "serverId", "name", "role"]
+    },
+    "CommunityAnnouncement": {
+      "title": "CommunityAnnouncement",
+      "description": "Official pinned/published community announcement.",
+      "type": "object",
+      "properties": {
+        "serverId": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorRoleTitle": { "type": "string" },
+        "isPinned": { "type": "boolean" },
+        "isPublic": { "type": "boolean" },
+        "memberIds": { "type": "array" },
+        "createdAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["serverId", "title", "content", "authorId"]
+    },
+    "CommunityEvent": {
+      "title": "CommunityEvent",
+      "description": "Scheduled community event with RSVP tracking.",
+      "type": "object",
+      "properties": {
+        "serverId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "dateTimeLabel": { "type": "string" },
+        "locationLabel": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "creatorName": { "type": "string" },
+        "interestedUserIds": { "type": "array" },
+        "isPublic": { "type": "boolean" },
+        "memberIds": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["serverId", "title", "creatorId"]
+    },
     "Channel": {
       "title": "Channel",
-      "description": "Text, voice, announcement, or stage channel inside a server.",
+      "description": "Text, voice, announcement, or stage channel inside a community category.",
       "type": "object",
       "properties": {
         "serverId": { "type": "string" },
         "name": { "type": "string" },
         "type": { "type": "string" },
         "category": { "type": "string" },
+        "topic": { "type": "string" },
+        "isPrivate": { "type": "boolean" },
+        "isLocked": { "type": "boolean" },
+        "maxParticipants": { "type": "integer" },
+        "bitrateKbps": { "type": "integer" },
         "isPublic": { "type": "boolean" },
         "slowmodeSeconds": { "type": "integer" },
         "isReadOnly": { "type": "boolean" },
+        "allowedRoles": { "type": "array" },
+        "allowedRoleIds": { "type": "array" },
+        "kickedVoiceUids": { "type": "array" },
         "memberIds": { "type": "array" },
         "lastTypingUid": { "type": "string" },
         "lastTypingName": { "type": "string" },
@@ -152,6 +266,9 @@
         "isDeafened": { "type": "boolean" },
         "isCameraOn": { "type": "boolean" },
         "isScreenSharing": { "type": "boolean" },
+        "isSpeaking": { "type": "boolean" },
+        "connectionState": { "type": "string" },
+        "reconnectAttempt": { "type": "integer" },
         "memberIds": { "type": "array" },
         "isPublic": { "type": "boolean" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -184,6 +301,158 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["participantIds"]
+    },
+    "BotHandle": {
+      "title": "BotHandle",
+      "description": "Unique handle reservation mapped to a Raven bot.",
+      "type": "object",
+      "properties": {
+        "handle": { "type": "string" },
+        "botId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["handle", "botId", "ownerUid"]
+    },
+    "RavenBot": {
+      "title": "RavenBot",
+      "description": "Developer-managed Raven bot definition (no plaintext tokens or webhook secrets).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "name": { "type": "string" },
+        "handle": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "avatarColor": { "type": "integer" },
+        "description": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "isPublicCatalog": { "type": "boolean" },
+        "tokenPrefix": { "type": "string" },
+        "tokenVersion": { "type": "integer" },
+        "defaultPermissions": { "type": "array" },
+        "commands": { "type": "array" },
+        "subscribedEvents": { "type": "array" },
+        "autoResponses": { "type": "array" },
+        "webhooksPublicMeta": { "type": "array" },
+        "enabledPluginIds": { "type": "array" },
+        "rateLimit": { "type": "object" },
+        "createdAtMs": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "name", "handle", "isActive"]
+    },
+    "BotSecret": {
+      "title": "BotSecret",
+      "description": "Owner-only SHA-256 token hash and webhook secrets for a Raven bot.",
+      "type": "object",
+      "properties": {
+        "botId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "tokenHash": { "type": "string" },
+        "tokenPrefix": { "type": "string" },
+        "tokenVersion": { "type": "integer" },
+        "webhookSecrets": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["botId", "ownerUid", "tokenHash"]
+    },
+    "ServerBotInstallation": {
+      "title": "ServerBotInstallation",
+      "description": "Bot installation record scoped to a server with role and permissions.",
+      "type": "object",
+      "properties": {
+        "botId": { "type": "string" },
+        "serverId": { "type": "string" },
+        "botName": { "type": "string" },
+        "botHandle": { "type": "string" },
+        "botAvatarUrl": { "type": "string" },
+        "botAvatarColor": { "type": "integer" },
+        "ownerUid": { "type": "string" },
+        "grantedPermissions": { "type": "array" },
+        "assignedRoleTitle": { "type": "string" },
+        "assignedCustomRoleId": { "type": "string" },
+        "isEnabledInServer": { "type": "boolean" },
+        "installedByUid": { "type": "string" },
+        "installedAtMs": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["botId", "serverId", "botName", "ownerUid", "installedByUid"]
+    },
+    "BotActivityLog": {
+      "title": "BotActivityLog",
+      "description": "Execution, rate-limit, spam block, and webhook audit entry for a Raven bot.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "botId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "serverId": { "type": "string" },
+        "actorUid": { "type": "string" },
+        "actorName": { "type": "string" },
+        "eventType": { "type": "string" },
+        "summary": { "type": "string" },
+        "status": { "type": "string" },
+        "timestampLabel": { "type": "string" },
+        "createdAtMs": { "type": "integer" }
+      },
+      "required": ["id", "botId", "ownerUid", "actorUid", "eventType", "status"]
+    },
+    "AiConversation": {
+      "title": "AiConversation",
+      "description": "User-scoped RAVEN AI conversation session with mode and optional server context.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "mode": { "type": "string" },
+        "serverId": { "type": "string" },
+        "serverName": { "type": "string" },
+        "channelId": { "type": "string" },
+        "channelName": { "type": "string" },
+        "modelName": { "type": "string" },
+        "lastMessagePreview": { "type": "string" },
+        "messageCount": { "type": "integer" },
+        "createdAtMs": { "type": "integer" },
+        "updatedAtMs": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "title", "mode"]
+    },
+    "AiChatMessage": {
+      "title": "AiChatMessage",
+      "description": "Single message inside a user's RAVEN AI conversation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "conversationId": { "type": "string" },
+        "userId": { "type": "string" },
+        "role": { "type": "string" },
+        "content": { "type": "string" },
+        "taskCategory": { "type": "string" },
+        "timestampLabel": { "type": "string" },
+        "createdAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "conversationId", "userId", "role", "content"]
+    },
+    "AiUsageQuota": {
+      "title": "AiUsageQuota",
+      "description": "Daily rate-limiting and abuse-protection quota record for RAVEN AI.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "dayKey": { "type": "string" },
+        "requestsToday": { "type": "integer" },
+        "dailyLimit": { "type": "integer" },
+        "abuseStrikes": { "type": "integer" },
+        "blockedUntilMs": { "type": "integer" },
+        "estimatedCharsToday": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "dayKey", "requestsToday", "dailyLimit"]
     }
   },
   "firestore": {
@@ -195,21 +464,73 @@
       "schema": { "$ref": "#/entities/UserNotification" },
       "description": "User-scoped notifications inbox."
     },
+    "/users/{userId}/ai_conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/AiConversation" },
+      "description": "Private RAVEN AI conversation threads owned by the user."
+    },
+    "/users/{userId}/ai_conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/AiChatMessage" },
+      "description": "Messages belonging to a user's RAVEN AI conversation."
+    },
+    "/users/{userId}/ai_usage/{quotaId}": {
+      "schema": { "$ref": "#/entities/AiUsageQuota" },
+      "description": "Daily usage quota and abuse-strike record for RAVEN AI."
+    },
     "/public_profiles/{userId}": {
       "schema": { "$ref": "#/entities/PublicProfile" },
       "description": "Non-PII public profile summary for leaderboard and badges."
     },
+    "/community_handles/{handle}": {
+      "schema": { "$ref": "#/entities/CommunityHandle" },
+      "description": "Unique handle registry ensuring unique community slugs."
+    },
+    "/community_invites/{code}": {
+      "schema": { "$ref": "#/entities/CommunityInvite" },
+      "description": "Managed invitation codes for joining public or private communities."
+    },
+    "/bot_handles/{handle}": {
+      "schema": { "$ref": "#/entities/BotHandle" },
+      "description": "Unique handle registry for Raven bots."
+    },
+    "/bots/{botId}": {
+      "schema": { "$ref": "#/entities/RavenBot" },
+      "description": "Developer-managed Raven bot definitions and capabilities."
+    },
+    "/bots/{botId}/secrets/{secretId}": {
+      "schema": { "$ref": "#/entities/BotSecret" },
+      "description": "Strictly owner-only SHA-256 token hashes and webhook secrets."
+    },
+    "/bots/{botId}/logs/{logId}": {
+      "schema": { "$ref": "#/entities/BotActivityLog" },
+      "description": "Bot activity, rate-limit, spam, and webhook audit logs."
+    },
     "/servers/{serverId}": {
       "schema": { "$ref": "#/entities/Server" },
-      "description": "Servers created or joined by users."
+      "description": "Communities created or joined by users."
+    },
+    "/servers/{serverId}/bots/{botId}": {
+      "schema": { "$ref": "#/entities/ServerBotInstallation" },
+      "description": "Server-scoped bot installation, assigned role, and granted permissions."
+    },
+    "/servers/{serverId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/CommunityMember" },
+      "description": "Per-member roles, granular permissions, and online status in a community."
+    },
+    "/servers/{serverId}/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/CommunityAnnouncement" },
+      "description": "Official announcements posted by admins or moderators."
+    },
+    "/servers/{serverId}/events/{eventId}": {
+      "schema": { "$ref": "#/entities/CommunityEvent" },
+      "description": "Scheduled community events with live attendee counts."
     },
     "/servers/{serverId}/channels/{channelId}": {
       "schema": { "$ref": "#/entities/Channel" },
-      "description": "Channels within a server."
+      "description": "Channels organized by categories within a community."
     },
     "/servers/{serverId}/channels/{channelId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/Message" },
-      "description": "Messages posted inside a server channel."
+      "description": "Messages posted inside a community channel."
     },
     "/servers/{serverId}/channels/{channelId}/whiteboard/{canvasId}": {
       "schema": { "$ref": "#/entities/WhiteboardCanvas" },

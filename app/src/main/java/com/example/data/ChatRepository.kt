@@ -1,10 +1,15 @@
 package com.example.data
 
 import android.content.Context
+import android.content.Intent
 import android.util.Log
 import com.example.model.*
 import com.example.util.JukeboxAudioEngine
 import com.example.util.RemoteVoicePeerState
+import com.example.util.VoiceConnectionPhase
+import com.example.util.VoiceDisconnectReason
+import com.example.util.VoiceNotificationAction
+import com.example.util.VoiceServiceCallbacks
 import com.example.util.WebRtcSessionState
 import com.example.util.WebRtcVoiceManager
 import com.google.android.gms.tasks.Tasks
@@ -189,8 +194,14 @@ class ChatRepository(
     private val _rtcSessionState = MutableStateFlow(WebRtcSessionState())
     val rtcSessionState: StateFlow<WebRtcSessionState> = _rtcSessionState.asStateFlow()
 
+    private val _localVideoTrack = MutableStateFlow<VideoTrack?>(null)
+    val localVideoTrack: StateFlow<VideoTrack?> = _localVideoTrack.asStateFlow()
+
     private val _remoteVideoTracks = MutableStateFlow<Map<String, VideoTrack>>(emptyMap())
     val remoteVideoTracks: StateFlow<Map<String, VideoTrack>> = _remoteVideoTracks.asStateFlow()
+
+    private val _voiceError = MutableStateFlow<String?>(null)
+    val voiceError: StateFlow<String?> = _voiceError.asStateFlow()
 
     private val _jukeboxVolume = MutableStateFlow(0.85f)
     val jukeboxVolume: StateFlow<Float> = _jukeboxVolume.asStateFlow()
@@ -220,6 +231,110 @@ class ChatRepository(
         null
     }
 
+    internal fun firestoreDb(): FirebaseFirestore? = firestore
+    internal fun authInstance(): FirebaseAuth? = currentAuth()
+    internal val repoScope: CoroutineScope get() = scope
+    internal fun serversMutableFlow(): MutableStateFlow<List<Server>> = _servers
+    internal fun discoverMutableFlow(): MutableStateFlow<List<PublicServerListing>> = _discoverServers
+    internal fun selectedServerMutableFlow(): MutableStateFlow<String> = _selectedServerId
+    internal fun messagesMutableFlow(): MutableStateFlow<Map<String, List<Message>>> = _messages
+    internal fun notifyCommunityEvent(
+        title: String,
+        body: String,
+        sourceLabel: String,
+        type: NotificationType = NotificationType.SYSTEM
+    ) = addNotification(title, body, sourceLabel, type)
+
+    internal var botCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
+    internal var aiCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
+    internal var botMessageHandler: ((serverId: String, channelId: String, message: Message) -> Unit)? = null
+    internal var botCommunityEventHandler: ((serverId: String, eventType: String, actorUid: String, actorName: String, detail: String) -> Unit)? = null
+
+    internal fun postBotChannelMessage(
+        targetId: String,
+        botId: String,
+        botName: String,
+        botAvatarUrl: String?,
+        botAvatarColor: Long,
+        text: String,
+        isAnnouncement: Boolean = false
+    ) {
+        val currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val botSender = User(
+            id = "bot_$botId",
+            name = botName,
+            tag = "#BOT",
+            avatarUrl = botAvatarUrl,
+            avatarColor = botAvatarColor,
+            role = UserRole.BOT,
+            status = UserStatus.ONLINE
+        )
+        val botMsg = Message(
+            id = "bmsg_${UUID.randomUUID().toString().take(8)}",
+            channelId = targetId,
+            sender = botSender,
+            text = text,
+            timestamp = currentTime,
+            isSystemAnnouncement = isAnnouncement
+        )
+        val currentList = _messages.value[targetId] ?: emptyList()
+        _messages.value = _messages.value + (targetId to (currentList + botMsg))
+
+        val db = firestore ?: return
+        val user = currentAuth()?.currentUser ?: return
+        val targetChannel = findChannelById(targetId) ?: return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val (isPublic, memberIds) = ensureServerAndChannelInFirestore(db, targetChannel.serverId, targetChannel, user.uid)
+                val payload = hashMapOf<String, Any>(
+                    "senderId" to "bot_$botId",
+                    "senderName" to botName.take(60),
+                    "text" to text.take(1990),
+                    "isBotMessage" to true,
+                    "botId" to botId,
+                    "triggeredByUid" to user.uid,
+                    "isPinned" to false,
+                    "isEdited" to false,
+                    "threadCount" to 0,
+                    "isPublic" to isPublic,
+                    "memberIds" to memberIds,
+                    "createdAtMs" to System.currentTimeMillis(),
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+                Tasks.await(
+                    db.collection("servers").document(targetChannel.serverId)
+                        .collection("channels").document(targetId)
+                        .collection("messages").document(botMsg.id)
+                        .set(payload)
+                )
+            } catch (e: Exception) {
+                Log.w("ChatRepo", "Bot Firestore message write failed", e)
+            }
+        }
+    }
+
+    internal fun postLocalAssistantFeedback(targetId: String, text: String) {
+        val currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val aiSender = User(
+            id = "raven_ai",
+            name = "RAVEN AI",
+            tag = "#AI",
+            avatarColor = 0xFF7C3AEDL,
+            role = UserRole.BOT,
+            status = UserStatus.ONLINE
+        )
+        val msg = Message(
+            id = "ai_local_${UUID.randomUUID().toString().take(8)}",
+            channelId = targetId,
+            sender = aiSender,
+            text = text,
+            timestamp = currentTime,
+            isSystemAnnouncement = false
+        )
+        val currentList = _messages.value[targetId] ?: emptyList()
+        _messages.value = _messages.value + (targetId to (currentList + msg))
+    }
+
     private val jukeboxAudioEngine: JukeboxAudioEngine? by lazy {
         appContext?.let { ctx ->
             JukeboxAudioEngine(
@@ -242,23 +357,31 @@ class ChatRepository(
     }
 
     private val webRtcVoiceManager: WebRtcVoiceManager? by lazy {
-        appContext?.let { ctx -> WebRtcVoiceManager(ctx, scope) }
+        appContext?.let { ctx ->
+            WebRtcVoiceManager(
+                context = ctx,
+                scope = scope,
+                onAutoDisconnected = { reason ->
+                    handleVoiceAutoDisconnected(reason)
+                }
+            )
+        }
     }
 
     private var activeListener: ListenerRegistration? = null
     private var activeChannelMetaListener: ListenerRegistration? = null
+    private var activeVoiceChannelMetaListener: ListenerRegistration? = null
     private var activeWhiteboardListener: ListenerRegistration? = null
     private var activeJukeboxListener: ListenerRegistration? = null
     private var activeNotificationsListener: ListenerRegistration? = null
     private var activePublicProfilesListener: ListenerRegistration? = null
+    private var lastSyncedRemotePeerIds: Set<String> = emptySet()
 
     init {
-        // Voice heartbeat simulation + Jukebox playback ticker
+        // Jukebox playback ticker (speaking state now comes from real WebRTC metering & peers)
         scope.launch(Dispatchers.Default) {
-            var tickCount = 0
             while (true) {
                 delay(1000)
-                tickCount++
                 val jb = _jukeboxState.value
                 val track = jb.currentTrack
                 if (jb.isPlaying && track != null) {
@@ -276,31 +399,46 @@ class ChatRepository(
                         _jukeboxState.value = jb.copy(elapsedSec = nextElapsed)
                     }
                 }
-                if (tickCount % 3 == 0) {
-                    val voice = _connectedVoiceChannel.value ?: continue
-                    val updatedUsers = voice.activeVoiceUsers.map { user ->
-                        if (user.id != _currentUser.value.id) {
-                            user.copy(isSpeaking = (0..10).random() > 5)
-                        } else {
-                            user
-                        }
-                    }
-                    _connectedVoiceChannel.value = voice.copy(activeVoiceUsers = updatedUsers)
+            }
+        }
+
+        // Foreground service notification actions (Mute / Quitter)
+        scope.launch {
+            VoiceServiceCallbacks.actions.collect { action ->
+                when (action) {
+                    VoiceNotificationAction.TOGGLE_MUTE -> toggleMute()
+                    VoiceNotificationAction.LEAVE_VOICE -> leaveVoiceChannel()
                 }
             }
         }
-        // Forward WebRTC state & remote video tracks when runtime context is attached
+
+        // Forward WebRTC state, local camera track, & remote video tracks
         webRtcVoiceManager?.let { rtc ->
             scope.launch {
                 rtc.sessionState.collect { state ->
                     _rtcSessionState.value = state
                     val connected = _connectedVoiceChannel.value
-                    if (connected != null && state.remotePeers.isNotEmpty()) {
-                        val mergedUsers = mergeVoiceUsersWithRemotePeers(connected.activeVoiceUsers, state.remotePeers)
+                    if (connected != null && state.isConnected) {
+                        val meId = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+                        val mergedUsers = mergeVoiceUsersWithRemotePeers(
+                            localUsers = connected.activeVoiceUsers,
+                            remotePeers = state.remotePeers,
+                            previouslyTrackedRemoteIds = lastSyncedRemotePeerIds,
+                            selfUid = meId,
+                            selfSpeaking = state.localMicSpeaking && !_isUserMuted.value && !_isUserDeafened.value
+                        )
+                        lastSyncedRemotePeerIds = state.remotePeers.map { it.uid }.toSet()
                         if (mergedUsers != connected.activeVoiceUsers) {
-                            _connectedVoiceChannel.value = connected.copy(activeVoiceUsers = mergedUsers)
+                            val updatedCh = connected.copy(activeVoiceUsers = mergedUsers)
+                            _connectedVoiceChannel.value = updatedCh
+                            updateChannelParticipantsInServers(updatedCh)
                         }
                     }
+                }
+            }
+            scope.launch {
+                rtc.localVideoTrackFlow.collect { track ->
+                    _localVideoTrack.value = track
                 }
             }
             scope.launch {
@@ -319,9 +457,25 @@ class ChatRepository(
 
     private fun mergeVoiceUsersWithRemotePeers(
         localUsers: List<User>,
-        remotePeers: List<RemoteVoicePeerState>
+        remotePeers: List<RemoteVoicePeerState>,
+        previouslyTrackedRemoteIds: Set<String>,
+        selfUid: String,
+        selfSpeaking: Boolean
     ): List<User> {
-        val byId = localUsers.associateBy { it.id }.toMutableMap()
+        val currentRemoteIds = remotePeers.map { it.uid }.toSet()
+        val departedRemoteIds = previouslyTrackedRemoteIds - currentRemoteIds
+        val byId = localUsers
+            .filterNot { it.id in departedRemoteIds }
+            .associateBy { it.id }
+            .toMutableMap()
+
+        byId[selfUid]?.let { me ->
+            byId[selfUid] = me.copy(
+                isMuted = _isUserMuted.value,
+                isDeafened = _isUserDeafened.value,
+                isSpeaking = selfSpeaking
+            )
+        }
         remotePeers.forEach { peer ->
             val existing = byId[peer.uid]
             byId[peer.uid] = existing?.copy(
@@ -342,15 +496,95 @@ class ChatRepository(
         return byId.values.toList()
     }
 
+    private fun updateChannelParticipantsInServers(updatedChannel: Channel) {
+        _servers.value = _servers.value.map { server ->
+            if (server.id == updatedChannel.serverId) {
+                server.copy(channels = server.channels.map {
+                    if (it.id == updatedChannel.id) updatedChannel else it
+                })
+            } else server
+        }
+    }
+
     fun getWebRtcEglContext(): EglBase.Context? = webRtcVoiceManager?.getEglContext()
 
     fun setVoiceCameraEnabled(enabled: Boolean, useFrontCamera: Boolean = true) {
+        val voice = _connectedVoiceChannel.value
+        val srv = voice?.let { v -> _servers.value.find { it.id == v.serverId } }
+        if (enabled && srv != null && !srv.isDmTab && !CommunityPermissions.hasPermission(srv, _currentUser.value.id, RolePermission.STREAM_VIDEO)) {
+            _voiceError.value = "Votre rôle ne permet pas de partager la caméra dans ce salon."
+            return
+        }
         webRtcVoiceManager?.setCameraEnabled(enabled, useFrontCamera)
     }
 
     fun setVoiceScreenSharing(enabled: Boolean) {
+        val voice = _connectedVoiceChannel.value
+        val srv = voice?.let { v -> _servers.value.find { it.id == v.serverId } }
+        if (enabled && srv != null && !srv.isDmTab && !CommunityPermissions.hasPermission(srv, _currentUser.value.id, RolePermission.SHARE_SCREEN)) {
+            _voiceError.value = "Votre rôle ne permet pas de partager l'écran dans ce salon."
+            return
+        }
         webRtcVoiceManager?.setScreenSharing(enabled)
     }
+
+    fun startVoiceScreenShare(resultCode: Int, projectionData: Intent?): Boolean {
+        val voice = _connectedVoiceChannel.value ?: return false
+        val srv = _servers.value.find { it.id == voice.serverId }
+        if (srv != null && !srv.isDmTab && !CommunityPermissions.hasPermission(srv, _currentUser.value.id, RolePermission.SHARE_SCREEN)) {
+            _voiceError.value = "Votre rôle ne permet pas de partager l'écran dans ce salon."
+            return false
+        }
+        val started = webRtcVoiceManager?.startScreenSharing(resultCode, projectionData) ?: false
+        if (!started) {
+            _voiceError.value = "Partage d'écran annulé ou refusé par le système."
+        }
+        return started
+    }
+
+    fun stopVoiceScreenShare() {
+        webRtcVoiceManager?.stopScreenSharing()
+    }
+
+    fun toggleSpeakerphone() {
+        val next = !(_rtcSessionState.value.isSpeakerphoneOn)
+        webRtcVoiceManager?.setSpeakerphoneEnabled(next)
+    }
+
+    fun triggerVoiceReconnect() {
+        webRtcVoiceManager?.triggerReconnect()
+    }
+
+    fun onAppBackgroundStateChanged(isBackground: Boolean) {
+        webRtcVoiceManager?.onAppBackgroundChanged(isBackground)
+    }
+
+    fun clearVoiceError() {
+        _voiceError.value = null
+    }
+
+    private fun handleVoiceAutoDisconnected(reason: VoiceDisconnectReason) {
+        val channel = _connectedVoiceChannel.value
+        if (channel != null) {
+            val uid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+            val updatedParticipants = channel.activeVoiceUsers.filterNot { it.id == uid || it.id == _currentUser.value.id }
+            updateChannelParticipantsInServers(channel.copy(activeVoiceUsers = updatedParticipants))
+        }
+        activeVoiceChannelMetaListener?.remove()
+        activeVoiceChannelMetaListener = null
+        lastSyncedRemotePeerIds = emptySet()
+        _connectedVoiceChannel.value = null
+        jukeboxAudioEngine?.pause()
+        _voiceError.value = reason.userMessage
+        addNotification(
+            title = "Salon vocal déconnecté",
+            body = reason.userMessage,
+            sourceLabel = channel?.name ?: "Vocal Raven",
+            type = NotificationType.SYSTEM
+        )
+    }
+
+    internal fun webRtcManagerForTest(): WebRtcVoiceManager? = webRtcVoiceManager
 
     fun setJukeboxVolume(volume: Float) {
         val clamped = volume.coerceIn(0f, 1f)
@@ -377,12 +611,13 @@ class ChatRepository(
     fun releaseResources() {
         activeListener?.remove()
         activeChannelMetaListener?.remove()
+        activeVoiceChannelMetaListener?.remove()
         activeWhiteboardListener?.remove()
         activeJukeboxListener?.remove()
         activeNotificationsListener?.remove()
         activePublicProfilesListener?.remove()
         jukeboxAudioEngine?.stopAndRelease()
-        webRtcVoiceManager?.leaveRoom()
+        webRtcVoiceManager?.shutdown()
     }
 
     fun syncFirebaseUser() {
@@ -474,20 +709,29 @@ class ChatRepository(
             val srvSnap = try { Tasks.await(srvRef.get()) } catch (_: Exception) { null }
             if (srvSnap == null || !srvSnap.exists()) {
                 val initName = localServer?.name ?: "Serveur Raven"
+                val adminIds = ((localServer?.adminIds ?: emptyList()) + authUid).distinct()
+                val modIds = localServer?.moderatorIds ?: emptyList()
                 val payload = hashMapOf<String, Any>(
                     "id" to serverId,
                     "name" to initName,
                     "iconText" to (localServer?.iconText ?: initName.take(2).uppercase()),
                     "iconBgColor" to (localServer?.iconBgColor ?: 0xFF5865F2L),
                     "ownerId" to authUid,
+                    "adminIds" to adminIds,
+                    "moderatorIds" to modIds,
+                    "uniqueHandle" to (localServer?.uniqueHandle ?: ""),
                     "inviteCode" to (localServer?.inviteCode ?: "RAVEN-2026"),
                     "boostCount" to (localServer?.boostCount ?: 0),
                     "boostLevel" to (localServer?.boostLevel ?: 0),
                     "isPublic" to isPublic,
                     "categoryTag" to (localServer?.categoryTag ?: "Communauté"),
                     "description" to (localServer?.description ?: "Serveur communautaire Raven"),
+                    "rulesGuidelines" to (localServer?.rulesGuidelines ?: "Respect, entraide et bienveillance entre membres."),
+                    "homeWelcomeMessage" to (localServer?.homeWelcomeMessage ?: "Bienvenue dans la communauté !"),
                     "memberIds" to memberIds
                 )
+                localServer?.imageUrl?.let { payload["imageUrl"] = it }
+                localServer?.bannerUrl?.let { payload["bannerUrl"] = it }
                 Tasks.await(srvRef.set(payload))
             } else {
                 isPublic = srvSnap.getBoolean("isPublic") ?: isPublic
@@ -811,6 +1055,12 @@ class ChatRepository(
 
         // Sync with Firestore if available and authenticated
         syncNewMessageToFirestore(newMessage, targetId)
+
+        // Dispatch message event to installed Raven Bots
+        val ch = findChannelById(targetId)
+        if (ch != null && newMessage.sender.role != UserRole.BOT) {
+            botMessageHandler?.invoke(ch.serverId, targetId, newMessage)
+        }
     }
 
     private fun syncNewMessageToFirestore(newMessage: Message, targetId: String) {
@@ -972,63 +1222,269 @@ class ChatRepository(
         }
     }
 
-    fun joinVoiceChannel(channel: Channel) {
+    fun joinVoiceChannel(channel: Channel): Boolean {
+        val uid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        val server = _servers.value.find { it.id == channel.serverId }
+        val latestChannel = server?.channels?.find { it.id == channel.id } ?: channel
+        val existingCount = latestChannel.activeVoiceUsers.count { it.id != uid && it.id != _currentUser.value.id }
+        val accessCheck = CommunityPermissions.canJoinVoiceChannel(
+            server = server,
+            channel = latestChannel,
+            userId = uid,
+            currentParticipantsCount = existingCount
+        )
+        if (!accessCheck.allowed) {
+            _voiceError.value = accessCheck.reason ?: "Impossible de rejoindre ce salon vocal."
+            return false
+        }
+
+        val canSpeak = server == null || server.isDmTab ||
+            CommunityPermissions.hasPermission(server, uid, RolePermission.SPEAK_VOICE)
+        val effectiveMuted = _isUserMuted.value || !canSpeak
+        if (!canSpeak) {
+            _isUserMuted.value = true
+        }
+
+        _voiceError.value = null
+        lastSyncedRemotePeerIds = emptySet()
+
         val userInVoice = _currentUser.value.copy(
+            id = uid,
             isSpeaking = false,
-            isMuted = _isUserMuted.value,
+            isMuted = effectiveMuted,
             isDeafened = _isUserDeafened.value
         )
-        val currentParticipants = channel.activeVoiceUsers.filterNot { it.id == userInVoice.id }
-        val updatedChannel = channel.copy(activeVoiceUsers = currentParticipants + userInVoice)
+        val currentParticipants = latestChannel.activeVoiceUsers.filterNot { it.id == uid || it.id == _currentUser.value.id }
+        val updatedChannel = latestChannel.copy(activeVoiceUsers = currentParticipants + userInVoice)
         _connectedVoiceChannel.value = updatedChannel
-
-        _servers.value = _servers.value.map { server ->
-            if (server.id == channel.serverId) {
-                server.copy(channels = server.channels.map {
-                    if (it.id == channel.id) updatedChannel else it
-                })
-            } else server
-        }
+        updateChannelParticipantsInServers(updatedChannel)
         advanceQuest("q_voice")
 
-        val uid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
-        val (isPublic, memberIds) = serverScopeInfo(channel.serverId)
+        val (isPublic, memberIds) = serverScopeInfo(latestChannel.serverId)
         val db = firestore
-        if (db != null && channel.serverId != "dm_tab" && currentAuth()?.currentUser != null) {
+        if (db != null && latestChannel.serverId != "dm_tab" && currentAuth()?.currentUser != null) {
             scope.launch(Dispatchers.IO) {
-                ensureServerAndChannelInFirestore(db, channel.serverId, channel, uid)
+                ensureServerAndChannelInFirestore(db, latestChannel.serverId, latestChannel, uid)
             }
+            listenToConnectedVoiceChannelMeta(db, latestChannel.serverId, latestChannel.id, uid)
         }
         webRtcVoiceManager?.joinRoom(
-            serverId = channel.serverId,
-            channelId = channel.id,
+            serverId = latestChannel.serverId,
+            channelId = latestChannel.id,
+            channelName = latestChannel.name,
             currentUid = uid,
             displayName = _currentUser.value.name,
             isPublic = isPublic,
             memberIds = memberIds,
             firestore = if (currentAuth()?.currentUser != null) db else null,
-            isMuted = _isUserMuted.value,
+            isMuted = effectiveMuted,
             isDeafened = _isUserDeafened.value
         )
-        listenToWhiteboard(channel.id)
-        listenToJukebox(channel.id)
+        listenToWhiteboard(latestChannel.id)
+        listenToJukebox(latestChannel.id)
+        return true
+    }
+
+    private fun listenToConnectedVoiceChannelMeta(
+        db: FirebaseFirestore,
+        serverId: String,
+        channelId: String,
+        currentUid: String
+    ) {
+        activeVoiceChannelMetaListener?.remove()
+        activeVoiceChannelMetaListener = db.collection("servers").document(serverId)
+            .collection("channels").document(channelId)
+            .addSnapshotListener { snap, err ->
+                if (err != null) return@addSnapshotListener
+                val connected = _connectedVoiceChannel.value ?: return@addSnapshotListener
+                if (connected.id != channelId) return@addSnapshotListener
+                if (snap == null || !snap.exists()) {
+                    // Wait only disconnect if doc actually vanished after creation
+                    return@addSnapshotListener
+                }
+                val remoteLocked = snap.getBoolean("isLocked") ?: false
+                @Suppress("UNCHECKED_CAST")
+                val kicked = (snap.get("kickedVoiceUids") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                val maxCap = snap.getLong("maxParticipants")?.toInt() ?: connected.maxParticipants
+                val remoteAllowed = (snap.get("allowedRoles") as? List<*>)?.mapNotNull { r ->
+                    (r as? String)?.let { str -> UserRole.entries.find { it.name == str } }
+                } ?: connected.allowedRoles
+                val remoteAllowedIds = (snap.get("allowedRoleIds") as? List<*>)?.mapNotNull { it as? String } ?: connected.allowedRoleIds
+                val updated = connected.copy(
+                    isLocked = remoteLocked,
+                    kickedVoiceUids = kicked,
+                    maxParticipants = maxCap,
+                    allowedRoles = remoteAllowed,
+                    allowedRoleIds = remoteAllowedIds
+                )
+                _connectedVoiceChannel.value = updated
+                updateChannelParticipantsInServers(updated)
+
+                val srv = _servers.value.find { it.id == serverId }
+                val canBypass = srv != null && (CommunityPermissions.isOwner(srv, currentUid) ||
+                    CommunityPermissions.hasPermission(srv, currentUid, RolePermission.MANAGE_VOICE))
+                if (currentUid in kicked && !canBypass) {
+                    webRtcVoiceManager?.leaveRoom(VoiceDisconnectReason.KICKED)
+                    handleVoiceAutoDisconnected(VoiceDisconnectReason.KICKED)
+                } else if (srv != null && !CommunityPermissions.isChannelAccessible(srv, updated, currentUid)) {
+                    webRtcVoiceManager?.leaveRoom(VoiceDisconnectReason.PERMISSION_REVOKED)
+                    handleVoiceAutoDisconnected(VoiceDisconnectReason.PERMISSION_REVOKED)
+                }
+            }
     }
 
     fun leaveVoiceChannel() {
         val channel = _connectedVoiceChannel.value ?: return
-        val updatedParticipants = channel.activeVoiceUsers.filterNot { it.id == _currentUser.value.id }
+        val uid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        val updatedParticipants = channel.activeVoiceUsers.filterNot { it.id == uid || it.id == _currentUser.value.id }
         val updatedChannel = channel.copy(activeVoiceUsers = updatedParticipants)
+        activeVoiceChannelMetaListener?.remove()
+        activeVoiceChannelMetaListener = null
+        lastSyncedRemotePeerIds = emptySet()
         _connectedVoiceChannel.value = null
+        updateChannelParticipantsInServers(updatedChannel)
+        webRtcVoiceManager?.leaveRoom(VoiceDisconnectReason.USER_LEFT)
+        jukeboxAudioEngine?.pause()
+    }
 
+    fun setVoiceChannelLocked(serverId: String, channelId: String, locked: Boolean) {
+        val srv = _servers.value.find { it.id == serverId } ?: return
+        val uid = _currentUser.value.id
+        if (!CommunityPermissions.hasPermission(srv, uid, RolePermission.MANAGE_VOICE) &&
+            !CommunityPermissions.hasPermission(srv, uid, RolePermission.MANAGE_CHANNELS)
+        ) {
+            _voiceError.value = "Permission requise pour verrouiller ou déverrouiller ce salon."
+            return
+        }
+        val current = srv.channels.find { it.id == channelId } ?: return
+        updateVoiceChannelSettings(
+            serverId = serverId,
+            channelId = channelId,
+            isLocked = locked,
+            maxParticipants = current.maxParticipants,
+            allowedRoles = current.allowedRoles,
+            allowedRoleIds = current.allowedRoleIds,
+            isPrivate = current.isPrivate,
+            slowmodeSeconds = current.slowmodeSeconds,
+            isReadOnly = current.isReadOnly
+        )
+    }
+
+    fun updateVoiceChannelSettings(
+        serverId: String,
+        channelId: String,
+        isLocked: Boolean,
+        maxParticipants: Int,
+        allowedRoles: List<UserRole>,
+        allowedRoleIds: List<String> = emptyList(),
+        isPrivate: Boolean = allowedRoles.isNotEmpty() || allowedRoleIds.isNotEmpty(),
+        slowmodeSeconds: Int = 0,
+        isReadOnly: Boolean = false
+    ) {
+        val clampedMax = maxParticipants.coerceIn(0, 50)
         _servers.value = _servers.value.map { server ->
-            if (server.id == channel.serverId) {
-                server.copy(channels = server.channels.map {
-                    if (it.id == channel.id) updatedChannel else it
-                })
+            if (server.id == serverId) {
+                var chName = ""
+                val updatedChannels = server.channels.map { ch ->
+                    if (ch.id == channelId) {
+                        chName = ch.name
+                        ch.copy(
+                            isLocked = isLocked,
+                            maxParticipants = clampedMax,
+                            allowedRoles = allowedRoles,
+                            allowedRoleIds = allowedRoleIds,
+                            isPrivate = isPrivate,
+                            slowmodeSeconds = slowmodeSeconds,
+                            isReadOnly = isReadOnly
+                        )
+                    } else ch
+                }
+                val log = AuditLogEntry(
+                    id = "log_${UUID.randomUUID().toString().take(6)}",
+                    actorName = _currentUser.value.name,
+                    actionDescription = "a mis à jour le vocal #${chName.ifBlank { "salon" }} (${if (isLocked) "Verrouillé" else "Ouvert"}, max ${if (clampedMax == 0) "∞" else clampedMax}) sur",
+                    targetName = server.name,
+                    timestamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                )
+                server.copy(channels = updatedChannels, auditLogs = listOf(log) + server.auditLogs)
             } else server
         }
-        webRtcVoiceManager?.leaveRoom()
-        jukeboxAudioEngine?.pause()
+        val activeVoice = _connectedVoiceChannel.value
+        if (activeVoice != null && activeVoice.id == channelId) {
+            _connectedVoiceChannel.value = activeVoice.copy(
+                isLocked = isLocked,
+                maxParticipants = clampedMax,
+                allowedRoles = allowedRoles,
+                allowedRoleIds = allowedRoleIds,
+                isPrivate = isPrivate
+            )
+        }
+        val db = firestore
+        val authUid = currentAuth()?.currentUser?.uid
+        val updatedCh = findChannelById(channelId)
+        if (db != null && authUid != null && updatedCh != null && serverId != "dm_tab") {
+            val (isPublic, memberIds) = serverScopeInfo(serverId)
+            scope.launch(Dispatchers.IO) {
+                try {
+                    CommunityFirestoreSync.pushChannelSafe(db, serverId, updatedCh, isPublic, memberIds)
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    fun kickUserFromVoice(serverId: String, channelId: String, targetUserId: String): Boolean {
+        val srv = _servers.value.find { it.id == serverId } ?: return false
+        val actorId = _currentUser.value.id
+        if (!CommunityPermissions.hasPermission(srv, actorId, RolePermission.MANAGE_VOICE) &&
+            !CommunityPermissions.hasPermission(srv, actorId, RolePermission.MODERATE_MEMBERS)
+        ) {
+            _voiceError.value = "Permission insuffisante pour exclure un membre du salon vocal."
+            return false
+        }
+        if (targetUserId == srv.ownerId) {
+            _voiceError.value = "Impossible d'exclure le fondateur de la communauté."
+            return false
+        }
+
+        _servers.value = _servers.value.map { s ->
+            if (s.id == serverId) {
+                s.copy(channels = s.channels.map { ch ->
+                    if (ch.id == channelId) {
+                        ch.copy(
+                            activeVoiceUsers = ch.activeVoiceUsers.filterNot { it.id == targetUserId },
+                            kickedVoiceUids = (ch.kickedVoiceUids + targetUserId).distinct()
+                        )
+                    } else ch
+                })
+            } else s
+        }
+        _connectedVoiceChannel.value?.let { activeVoice ->
+            if (activeVoice.id == channelId) {
+                _connectedVoiceChannel.value = activeVoice.copy(
+                    activeVoiceUsers = activeVoice.activeVoiceUsers.filterNot { it.id == targetUserId },
+                    kickedVoiceUids = (activeVoice.kickedVoiceUids + targetUserId).distinct()
+                )
+            }
+        }
+
+        val db = firestore
+        val authUid = currentAuth()?.currentUser?.uid
+        val updatedCh = findChannelById(channelId)
+        if (db != null && authUid != null && updatedCh != null && serverId != "dm_tab") {
+            val (isPublic, memberIds) = serverScopeInfo(serverId)
+            scope.launch(Dispatchers.IO) {
+                try {
+                    db.collection("servers").document(serverId)
+                        .collection("channels").document(channelId)
+                        .collection("voice_peers").document(targetUserId)
+                        .delete()
+                    CommunityFirestoreSync.pushChannelSafe(db, serverId, updatedCh, isPublic, memberIds)
+                } catch (_: Exception) {
+                }
+            }
+        }
+        return true
     }
 
     fun toggleMute() {
@@ -1300,19 +1756,36 @@ class ChatRepository(
                 Tasks.await(db.collection("users").document(authUser.uid).set(data))
                 Tasks.await(db.collection("public_profiles").document(authUser.uid).set(publicProfile))
                 // Also sync user-owned custom servers (skip default shared mock server_main unless explicitly owned)
-                _servers.value.filter { !it.isDmTab && (it.ownerId == authUser.uid || (it.id != "server_main" && (it.ownerId == user.id || it.ownerId == "user_me" || it.boostCount > 0))) }.forEach { srv ->
+                _servers.value.filter {
+                    !it.isDmTab && (it.ownerId == authUser.uid || (it.id != "server_main" && (it.ownerId == user.id || it.ownerId == "user_me")))
+                }.forEach { srv ->
                     val srvPayload = hashMapOf<String, Any>(
                         "id" to srv.id,
                         "name" to srv.name,
                         "iconText" to srv.iconText,
                         "iconBgColor" to srv.iconBgColor,
                         "ownerId" to authUser.uid,
+                        "adminIds" to (srv.adminIds + authUser.uid).distinct(),
+                        "moderatorIds" to srv.moderatorIds.distinct(),
+                        "uniqueHandle" to srv.uniqueHandle,
                         "inviteCode" to srv.inviteCode,
                         "boostCount" to srv.boostCount,
                         "boostLevel" to srv.boostLevel,
                         "isPublic" to srv.isPublic,
+                        "isVerified" to srv.isVerified,
                         "categoryTag" to srv.categoryTag,
                         "description" to srv.description,
+                        "rulesGuidelines" to srv.rulesGuidelines,
+                        "homeWelcomeMessage" to srv.homeWelcomeMessage,
+                        "categories" to srv.categories.map { cat ->
+                            mapOf(
+                                "id" to cat.id,
+                                "name" to cat.name,
+                                "position" to cat.position,
+                                "isPrivate" to cat.isPrivate,
+                                "allowedRoleIds" to cat.allowedRoleIds
+                            )
+                        },
                         "customRoles" to srv.customRoles.map { r ->
                             buildMap<String, Any> {
                                 put("id", r.id)
@@ -1322,6 +1795,8 @@ class ChatRepository(
                                 put("isAdmin", r.isAdmin)
                                 put("canKickBan", r.canKickBan)
                                 put("canManageChannels", r.canManageChannels)
+                                put("permissions", r.permissions.map { it.name })
+                                put("position", r.position)
                             }
                         },
                         "events" to srv.events.map { e ->
@@ -1350,6 +1825,8 @@ class ChatRepository(
                         "memberIds" to (srv.members.map { if (it.id == "user_me") authUser.uid else it.id } + authUser.uid).distinct()
                     )
                     srv.customBannerColorHex?.let { srvPayload["customBannerColorHex"] = it }
+                    srv.imageUrl?.let { srvPayload["imageUrl"] = it }
+                    srv.bannerUrl?.let { srvPayload["bannerUrl"] = it }
                     Tasks.await(db.collection("servers").document(srv.id).set(srvPayload))
                 }
                 _lastCloudSyncTime.value = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
@@ -1459,14 +1936,45 @@ class ChatRepository(
                         val sIsPublic = srvDoc.getBoolean("isPublic") ?: false
                         val sCat = srvDoc.getString("categoryTag") ?: "Communauté"
                         val sDesc = srvDoc.getString("description") ?: "Communauté Raven"
+                        val sHandle = srvDoc.getString("uniqueHandle") ?: ""
+                        val sImageUrl = srvDoc.getString("imageUrl")
+                        val sBannerUrl = srvDoc.getString("bannerUrl")
+                        val sRules = srvDoc.getString("rulesGuidelines") ?: "Respect, entraide et bienveillance entre membres."
+                        val sWelcome = srvDoc.getString("homeWelcomeMessage") ?: "Bienvenue dans la communauté !"
+                        val sAdminIds = (srvDoc.get("adminIds") as? List<*>)?.mapNotNull { it as? String } ?: listOf(sOwner)
+                        val sModIds = (srvDoc.get("moderatorIds") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                        val sVerified = srvDoc.getBoolean("isVerified") ?: false
                         val bCount = srvDoc.getLong("boostCount")?.toInt() ?: 0
                         val bLevel = srvDoc.getLong("boostLevel")?.toInt() ?: 0
                         val bBanner = srvDoc.getLong("customBannerColorHex")
+                        val rawCategories = (srvDoc.get("categories") as? List<Map<String, Any?>>).orEmpty().mapNotNull { catMap ->
+                            val cId = catMap["id"] as? String ?: return@mapNotNull null
+                            val cName = catMap["name"] as? String ?: return@mapNotNull null
+                            ChannelCategory(
+                                id = cId,
+                                name = cName,
+                                position = (catMap["position"] as? Number)?.toInt() ?: 0,
+                                isPrivate = catMap["isPrivate"] as? Boolean ?: false,
+                                allowedRoleIds = (catMap["allowedRoleIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                            )
+                        }
                         val existingIdx = currentServers.indexOfFirst { it.id == sId }
                         if (existingIdx >= 0) {
                             currentServers[existingIdx] = currentServers[existingIdx].copy(
                                 name = sName,
+                                ownerId = sOwner,
                                 isPublic = sIsPublic,
+                                categoryTag = sCat,
+                                description = sDesc,
+                                uniqueHandle = sHandle.ifBlank { currentServers[existingIdx].uniqueHandle },
+                                imageUrl = sImageUrl ?: currentServers[existingIdx].imageUrl,
+                                bannerUrl = sBannerUrl ?: currentServers[existingIdx].bannerUrl,
+                                rulesGuidelines = sRules,
+                                homeWelcomeMessage = sWelcome,
+                                adminIds = sAdminIds,
+                                moderatorIds = sModIds,
+                                categories = if (rawCategories.isNotEmpty()) rawCategories else currentServers[existingIdx].categories,
+                                isVerified = sVerified,
                                 boostCount = maxOf(currentServers[existingIdx].boostCount, bCount),
                                 boostLevel = maxOf(currentServers[existingIdx].boostLevel, bLevel),
                                 customBannerColorHex = bBanner ?: currentServers[existingIdx].customBannerColorHex
@@ -1482,6 +1990,15 @@ class ChatRepository(
                                     isPublic = sIsPublic,
                                     categoryTag = sCat,
                                     description = sDesc,
+                                    uniqueHandle = sHandle,
+                                    imageUrl = sImageUrl,
+                                    bannerUrl = sBannerUrl,
+                                    rulesGuidelines = sRules,
+                                    homeWelcomeMessage = sWelcome,
+                                    adminIds = sAdminIds,
+                                    moderatorIds = sModIds,
+                                    categories = rawCategories,
+                                    isVerified = sVerified,
                                     boostCount = bCount,
                                     boostLevel = bLevel,
                                     customBannerColorHex = bBanner,
@@ -2339,7 +2856,8 @@ class ChatRepository(
             "/clear" -> {
                 _messages.value = _messages.value + (targetId to emptyList())
             }
-            else -> return false
+            else -> return (aiCommandHandler?.invoke(targetId, trimmed) == true) ||
+                    (botCommandHandler?.invoke(targetId, trimmed) == true)
         }
         return true
     }

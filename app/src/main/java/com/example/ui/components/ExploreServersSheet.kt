@@ -23,8 +23,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.CommunitySearchFilter
 import com.example.model.PublicServerListing
 import com.example.ui.theme.*
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,29 +36,51 @@ fun ExploreServersSheet(
     onRefreshCloud: () -> Unit,
     onJoinServer: (PublicServerListing) -> Unit,
     onOpenJoinByCode: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onSearchCloud: (suspend (String, CommunitySearchFilter) -> List<PublicServerListing>)? = null
 ) {
     val palette = ravenPalette()
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("Tout") }
+    var communityFilter by remember { mutableStateOf(CommunitySearchFilter.ALL) }
+    var cloudSearchResults by remember { mutableStateOf<List<PublicServerListing>?>(null) }
 
-    val categories = remember(listings) {
-        listOf("Tout") + listings.map { it.categoryTag }.distinct()
+    val activeSource = remember(listings, cloudSearchResults, searchQuery, communityFilter) {
+        if (onSearchCloud != null && cloudSearchResults != null && (searchQuery.isNotBlank() || communityFilter != CommunitySearchFilter.ALL)) {
+            cloudSearchResults!!
+        } else listings
     }
 
-    val filtered = remember(listings, searchQuery, selectedCategory) {
-        listings.filter { item ->
+    val categories = remember(activeSource) {
+        listOf("Tout") + activeSource.map { it.categoryTag }.distinct()
+    }
+
+    val filtered = remember(activeSource, searchQuery, selectedCategory, communityFilter, joinedServerIds) {
+        activeSource.filter { item ->
             val catMatch = selectedCategory == "Tout" || item.categoryTag.equals(selectedCategory, ignoreCase = true)
+            val filterMatch = when (communityFilter) {
+                CommunitySearchFilter.ALL, CommunitySearchFilter.PUBLIC_ONLY -> true
+                CommunitySearchFilter.VERIFIED -> item.isVerified
+                CommunitySearchFilter.MY_COMMUNITIES -> item.id in joinedServerIds
+            }
             val qMatch = searchQuery.isBlank() ||
                 item.name.contains(searchQuery, ignoreCase = true) ||
                 item.description.contains(searchQuery, ignoreCase = true) ||
-                item.categoryTag.contains(searchQuery, ignoreCase = true)
-            catMatch && qMatch
+                item.categoryTag.contains(searchQuery, ignoreCase = true) ||
+                item.inviteCode.contains(searchQuery, ignoreCase = true)
+            catMatch && filterMatch && qMatch
         }
     }
 
     LaunchedEffect(Unit) {
         onRefreshCloud()
+    }
+
+    LaunchedEffect(searchQuery, communityFilter) {
+        if (onSearchCloud != null) {
+            delay(180)
+            cloudSearchResults = onSearchCloud(searchQuery, communityFilter)
+        }
     }
 
     ModalBottomSheet(
@@ -147,6 +171,20 @@ fun ExploreServersSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
+                items(
+                    listOf(
+                        CommunitySearchFilter.ALL,
+                        CommunitySearchFilter.VERIFIED,
+                        CommunitySearchFilter.MY_COMMUNITIES
+                    )
+                ) { f ->
+                    FilterChip(
+                        selected = communityFilter == f,
+                        onClick = { communityFilter = f },
+                        label = { Text(f.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                        modifier = Modifier.testTag("explore_filter_${f.name}")
+                    )
+                }
                 items(categories) { category ->
                     val isSelected = selectedCategory == category
                     FilterChip(

@@ -93,9 +93,14 @@ data class Channel(
     val topic: String = "",
     val unreadCount: Int = 0,
     val isPrivate: Boolean = false,
+    val isLocked: Boolean = false,
+    val maxParticipants: Int = 0, // 0 = illimité
     val slowmodeSeconds: Int = 0,
     val isReadOnly: Boolean = false,
     val allowedRoles: List<UserRole> = emptyList(),
+    val allowedRoleIds: List<String> = emptyList(),
+    val bitrateKbps: Int = 64,
+    val kickedVoiceUids: List<String> = emptyList(),
     val activeVoiceUsers: List<User> = emptyList(),
     val stageSpeakerIds: List<String> = emptyList(),
     val stageRaisedHandIds: List<String> = emptyList()
@@ -121,7 +126,18 @@ data class Server(
     val shopItems: List<ServerShopItem> = emptyList(),
     val customRoles: List<CustomRole> = defaultServerRoles(),
     val auditLogs: List<AuditLogEntry> = emptyList(),
-    val events: List<ServerEvent> = emptyList()
+    val events: List<ServerEvent> = emptyList(),
+    val uniqueHandle: String = "",
+    val imageUrl: String? = null,
+    val bannerUrl: String? = null,
+    val rulesGuidelines: String = "Respect, entraide et bienveillance entre membres.",
+    val homeWelcomeMessage: String = "Bienvenue dans la communauté ! Explorez les salons, les annonces et les événements à venir.",
+    val adminIds: List<String> = emptyList(),
+    val moderatorIds: List<String> = emptyList(),
+    val categories: List<ChannelCategory> = emptyList(),
+    val invites: List<CommunityInvite> = emptyList(),
+    val announcements: List<CommunityAnnouncement> = emptyList(),
+    val isVerified: Boolean = false
 )
 
 data class DirectConversation(

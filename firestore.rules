@@ -27,16 +27,117 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/servers/$(serverId));
     }
 
+    function serverExists(serverId) {
+      return exists(/databases/$(database)/documents/servers/$(serverId));
+    }
+
     function isServerOwner(serverId) {
-      return exists(/databases/$(database)/documents/servers/$(serverId)) &&
-             serverDoc(serverId).data.ownerId == request.auth.uid;
+      return serverExists(serverId) && serverDoc(serverId).data.ownerId == request.auth.uid;
+    }
+
+    function isCommunityAdmin(serverId) {
+      return serverExists(serverId) && (
+        serverDoc(serverId).data.ownerId == request.auth.uid ||
+        ('adminIds' in serverDoc(serverId).data && request.auth.uid in serverDoc(serverId).data.adminIds)
+      );
+    }
+
+    function isCommunityMod(serverId) {
+      return serverExists(serverId) &&
+             ('moderatorIds' in serverDoc(serverId).data && request.auth.uid in serverDoc(serverId).data.moderatorIds);
+    }
+
+    function isCommunityStaff(serverId) {
+      return isCommunityAdmin(serverId) || isCommunityMod(serverId);
     }
 
     function isServerMemberOrPublic(serverId) {
-      return exists(/databases/$(database)/documents/servers/$(serverId)) &&
+      return serverExists(serverId) &&
              (serverDoc(serverId).data.isPublic == true ||
               serverDoc(serverId).data.ownerId == request.auth.uid ||
               request.auth.uid in serverDoc(serverId).data.memberIds);
+    }
+
+    function hasValidCommunityInvite(serverId, data) {
+      return ('lastInviteCodeUsed' in data) &&
+             isValidId(data.lastInviteCodeUsed) &&
+             exists(/databases/$(database)/documents/community_invites/$(data.lastInviteCodeUsed)) &&
+             get(/databases/$(database)/documents/community_invites/$(data.lastInviteCodeUsed)).data.serverId == serverId &&
+             get(/databases/$(database)/documents/community_invites/$(data.lastInviteCodeUsed)).data.isRevoked == false;
+    }
+
+    function botDoc(botId) {
+      return get(/databases/$(database)/documents/bots/$(botId));
+    }
+
+    function botExists(botId) {
+      return exists(/databases/$(database)/documents/bots/$(botId));
+    }
+
+    function isBotOwner(botId) {
+      return botExists(botId) && botDoc(botId).data.ownerUid == request.auth.uid;
+    }
+
+    function isValidBotHandle(data) {
+      return data.handle is string && isValidId(data.handle) &&
+             data.handle.size() >= 2 && data.handle.size() <= 40 &&
+             data.botId is string && isValidId(data.botId) &&
+             data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             (!('name' in data) || (data.name is string && data.name.size() <= 64));
+    }
+
+    function isValidBotDoc(data) {
+      return data.id is string && isValidId(data.id) &&
+             data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 64 &&
+             data.handle is string && data.handle.size() >= 2 && data.handle.size() <= 40 &&
+             data.isActive is bool &&
+             !('token' in data) &&
+             !('tokenHash' in data) &&
+             !('apiKey' in data) &&
+             !('secretHeader' in data) &&
+             !('webhookSecret' in data) &&
+             (!('isPublicCatalog' in data) || data.isPublicCatalog is bool) &&
+             (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 800)) &&
+             (!('avatarColor' in data) || data.avatarColor is int) &&
+             (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 500)) &&
+             (!('tokenPrefix' in data) || (data.tokenPrefix is string && data.tokenPrefix.size() <= 40)) &&
+             (!('tokenVersion' in data) || data.tokenVersion is int) &&
+             (!('defaultPermissions' in data) || (data.defaultPermissions is list && data.defaultPermissions.size() <= 30)) &&
+             (!('commands' in data) || (data.commands is list && data.commands.size() <= 50)) &&
+             (!('subscribedEvents' in data) || (data.subscribedEvents is list && data.subscribedEvents.size() <= 30)) &&
+             (!('autoResponses' in data) || (data.autoResponses is list && data.autoResponses.size() <= 50)) &&
+             (!('webhooksPublicMeta' in data) || (data.webhooksPublicMeta is list && data.webhooksPublicMeta.size() <= 20)) &&
+             (!('enabledPluginIds' in data) || (data.enabledPluginIds is list && data.enabledPluginIds.size() <= 30));
+    }
+
+    function isValidServerBotInstallation(data, serverId, botId) {
+      return data.botId == botId &&
+             data.serverId == serverId &&
+             data.botName is string && data.botName.size() >= 1 && data.botName.size() <= 64 &&
+             data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.installedByUid is string && data.installedByUid.size() >= 1 && data.installedByUid.size() <= 128 &&
+             !('token' in data) &&
+             !('tokenHash' in data) &&
+             !('apiKey' in data) &&
+             (!('botHandle' in data) || (data.botHandle is string && data.botHandle.size() <= 40)) &&
+             (!('botAvatarUrl' in data) || data.botAvatarUrl == null || (data.botAvatarUrl is string && data.botAvatarUrl.size() <= 800)) &&
+             (!('botAvatarColor' in data) || data.botAvatarColor is int) &&
+             (!('grantedPermissions' in data) || (data.grantedPermissions is list && data.grantedPermissions.size() <= 30)) &&
+             (!('assignedRoleTitle' in data) || data.assignedRoleTitle == null || (data.assignedRoleTitle is string && data.assignedRoleTitle.size() <= 64)) &&
+             (!('assignedCustomRoleId' in data) || data.assignedCustomRoleId == null || (data.assignedCustomRoleId is string && data.assignedCustomRoleId.size() <= 128)) &&
+             (!('isEnabledInServer' in data) || data.isEnabledInServer is bool);
+    }
+
+    function isValidBotLog(data) {
+      return data.id is string && isValidId(data.id) &&
+             data.botId is string && isValidId(data.botId) &&
+             data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+             data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 &&
+             data.eventType is string && data.eventType.size() >= 1 && data.eventType.size() <= 64 &&
+             data.status is string && data.status in ['SUCCESS', 'BLOCKED_SPAM', 'RATE_LIMITED', 'PERMISSION_DENIED', 'WEBHOOK_OK', 'WEBHOOK_FAILED', 'ERROR', 'SECURITY_ALERT'] &&
+             (!('summary' in data) || (data.summary is string && data.summary.size() <= 500)) &&
+             (!('serverId' in data) || data.serverId == null || isValidId(data.serverId));
     }
 
     function isValidUser(data) {
@@ -70,25 +171,129 @@ service cloud.firestore {
              (!('isRead' in data) || data.isRead is bool);
     }
 
+    function isValidAiConversation(data, userId, conversationId) {
+      return data.id == conversationId &&
+             isValidId(conversationId) &&
+             data.userId == userId &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.mode is string && data.mode in ['PERSONAL', 'SERVER'] &&
+             (!('serverId' in data) || data.serverId == null || isValidId(data.serverId)) &&
+             (!('serverName' in data) || data.serverName == null || (data.serverName is string && data.serverName.size() <= 80)) &&
+             (!('channelId' in data) || data.channelId == null || isValidId(data.channelId)) &&
+             (!('channelName' in data) || data.channelName == null || (data.channelName is string && data.channelName.size() <= 80)) &&
+             (!('modelName' in data) || (data.modelName is string && data.modelName.size() <= 64)) &&
+             (!('lastMessagePreview' in data) || (data.lastMessagePreview is string && data.lastMessagePreview.size() <= 300)) &&
+             (!('messageCount' in data) || (data.messageCount is int && data.messageCount >= 0 && data.messageCount <= 1000)) &&
+             (!('createdAtMs' in data) || data.createdAtMs is int) &&
+             (!('updatedAtMs' in data) || data.updatedAtMs is int);
+    }
+
+    function isValidAiChatMessage(data, userId, conversationId, messageId) {
+      return data.id == messageId &&
+             isValidId(messageId) &&
+             data.conversationId == conversationId &&
+             data.userId == userId &&
+             data.role is string && data.role in ['USER', 'ASSISTANT', 'SYSTEM_CONTEXT'] &&
+             data.content is string && data.content.size() >= 1 && data.content.size() <= 16000 &&
+             (!('taskCategory' in data) || (data.taskCategory is string && data.taskCategory.size() <= 48)) &&
+             (!('timestampLabel' in data) || (data.timestampLabel is string && data.timestampLabel.size() <= 24)) &&
+             (!('createdAtMs' in data) || data.createdAtMs is int);
+    }
+
+    function isValidAiUsageQuota(data, userId) {
+      return data.userId == userId &&
+             data.dayKey is string && data.dayKey.size() >= 8 && data.dayKey.size() <= 16 &&
+             data.requestsToday is int && data.requestsToday >= 0 && data.requestsToday <= 100 &&
+             data.dailyLimit is int && data.dailyLimit >= 1 && data.dailyLimit <= 40 &&
+             (!('abuseStrikes' in data) || (data.abuseStrikes is int && data.abuseStrikes >= 0 && data.abuseStrikes <= 50)) &&
+             (!('blockedUntilMs' in data) || data.blockedUntilMs is int) &&
+             (!('estimatedCharsToday' in data) || (data.estimatedCharsToday is int && data.estimatedCharsToday >= 0 && data.estimatedCharsToday <= 250000));
+    }
+
+    function isValidCommunityHandle(data) {
+      return data.handle is string && data.handle.size() >= 2 && data.handle.size() <= 40 &&
+             data.serverId is string && isValidId(data.serverId) &&
+             data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+             (!('name' in data) || (data.name is string && data.name.size() <= 80)) &&
+             (!('isPublic' in data) || data.isPublic is bool);
+    }
+
+    function isValidCommunityInvite(data) {
+      return data.code is string && isValidId(data.code) &&
+             data.serverId is string && isValidId(data.serverId) &&
+             data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128 &&
+             data.isRevoked is bool &&
+             (!('serverName' in data) || (data.serverName is string && data.serverName.size() <= 80)) &&
+             (!('maxUses' in data) || (data.maxUses is int && data.maxUses >= 0)) &&
+             (!('usesCount' in data) || (data.usesCount is int && data.usesCount >= 0)) &&
+             (!('isPublic' in data) || data.isPublic is bool);
+    }
+
     function isValidServer(data) {
       return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
-             data.memberIds is list && data.memberIds.size() >= 1 && data.memberIds.size() <= 100 &&
+             data.memberIds is list && data.memberIds.size() >= 1 && data.memberIds.size() <= 200 &&
+             (!('uniqueHandle' in data) || data.uniqueHandle == null || (data.uniqueHandle is string && data.uniqueHandle.size() <= 40)) &&
              (!('iconText' in data) || data.iconText == null || (data.iconText is string && data.iconText.size() <= 8)) &&
+             (!('imageUrl' in data) || data.imageUrl == null || (data.imageUrl is string && data.imageUrl.size() <= 800)) &&
+             (!('bannerUrl' in data) || data.bannerUrl == null || (data.bannerUrl is string && data.bannerUrl.size() <= 800)) &&
              (!('inviteCode' in data) || data.inviteCode == null || (data.inviteCode is string && data.inviteCode.size() <= 40)) &&
              (!('categoryTag' in data) || data.categoryTag == null || (data.categoryTag is string && data.categoryTag.size() <= 40)) &&
-             (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 300)) &&
+             (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 500)) &&
+             (!('rulesGuidelines' in data) || data.rulesGuidelines == null || (data.rulesGuidelines is string && data.rulesGuidelines.size() <= 1000)) &&
+             (!('homeWelcomeMessage' in data) || data.homeWelcomeMessage == null || (data.homeWelcomeMessage is string && data.homeWelcomeMessage.size() <= 500)) &&
+             (!('adminIds' in data) || (data.adminIds is list && data.adminIds.size() <= 50)) &&
+             (!('moderatorIds' in data) || (data.moderatorIds is list && data.moderatorIds.size() <= 100)) &&
              (!('isPublic' in data) || data.isPublic is bool) &&
              (!('boostCount' in data) || data.boostCount is int) &&
              (!('boostLevel' in data) || data.boostLevel is int);
+    }
+
+    function isValidCommunityMember(data) {
+      return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+             data.serverId is string && isValidId(data.serverId) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 64 &&
+             data.role is string && data.role in ['ADMIN', 'MODERATOR', 'MEMBER', 'BOT'] &&
+             (!('customRoleId' in data) || data.customRoleId == null || (data.customRoleId is string && data.customRoleId.size() <= 128)) &&
+             (!('permissions' in data) || (data.permissions is list && data.permissions.size() <= 30)) &&
+             (!('status' in data) || (data.status is string && data.status in ['ONLINE', 'IDLE', 'DND', 'OFFLINE'])) &&
+             (!('isTimedOut' in data) || data.isTimedOut is bool) &&
+             (!('isPublic' in data) || data.isPublic is bool);
+    }
+
+    function isValidAnnouncement(data) {
+      return data.serverId is string && isValidId(data.serverId) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.content is string && data.content.size() >= 1 && data.content.size() <= 2000 &&
+             data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
+             (!('isPinned' in data) || data.isPinned is bool) &&
+             (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('memberIds' in data) || (data.memberIds is list && data.memberIds.size() <= 200));
+    }
+
+    function isValidCommunityEvent(data) {
+      return data.serverId is string && isValidId(data.serverId) &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.creatorId is string && data.creatorId.size() >= 1 && data.creatorId.size() <= 128 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 600)) &&
+             (!('interestedUserIds' in data) || (data.interestedUserIds is list && data.interestedUserIds.size() <= 200)) &&
+             (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('memberIds' in data) || (data.memberIds is list && data.memberIds.size() <= 200));
     }
 
     function isValidChannel(data) {
       return data.serverId is string && data.serverId.size() <= 128 &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.type is string && data.type in ['TEXT', 'VOICE', 'ANNOUNCEMENT', 'STAGE'] &&
-             data.memberIds is list && data.memberIds.size() <= 100 &&
+             data.memberIds is list && data.memberIds.size() <= 200 &&
              (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('isPrivate' in data) || data.isPrivate is bool) &&
+             (!('isLocked' in data) || data.isLocked is bool) &&
+             (!('maxParticipants' in data) || (data.maxParticipants is int && data.maxParticipants >= 0 && data.maxParticipants <= 100)) &&
+             (!('bitrateKbps' in data) || (data.bitrateKbps is int && data.bitrateKbps >= 8 && data.bitrateKbps <= 384)) &&
+             (!('allowedRoles' in data) || (data.allowedRoles is list && data.allowedRoles.size() <= 20)) &&
+             (!('allowedRoleIds' in data) || (data.allowedRoleIds is list && data.allowedRoleIds.size() <= 50)) &&
+             (!('kickedVoiceUids' in data) || (data.kickedVoiceUids is list && data.kickedVoiceUids.size() <= 100)) &&
              (!('slowmodeSeconds' in data) || data.slowmodeSeconds is int) &&
              (!('isReadOnly' in data) || data.isReadOnly is bool) &&
              (!('lastTypingUid' in data) || data.lastTypingUid == null || (data.lastTypingUid is string && data.lastTypingUid.size() <= 128)) &&
@@ -107,14 +312,17 @@ service cloud.firestore {
              (!('isPinned' in data) || data.isPinned is bool) &&
              (!('isEdited' in data) || data.isEdited is bool) &&
              (!('isPublic' in data) || data.isPublic is bool) &&
-             (!('memberIds' in data) || (data.memberIds is list && data.memberIds.size() <= 100)) &&
+             (!('isBotMessage' in data) || data.isBotMessage is bool) &&
+             (!('botId' in data) || data.botId == null || isValidId(data.botId)) &&
+             (!('triggeredByUid' in data) || data.triggeredByUid == null || (data.triggeredByUid is string && data.triggeredByUid.size() <= 128)) &&
+             (!('memberIds' in data) || (data.memberIds is list && data.memberIds.size() <= 200)) &&
              (!('participantIds' in data) || (data.participantIds is list && data.participantIds.size() <= 50));
     }
 
     function isValidWhiteboard(data) {
       return data.serverId is string && data.serverId.size() <= 128 &&
              data.updatedBy is string && data.updatedBy.size() <= 128 &&
-             data.memberIds is list && data.memberIds.size() <= 100 &&
+             data.memberIds is list && data.memberIds.size() <= 200 &&
              (!('isPublic' in data) || data.isPublic is bool) &&
              (!('strokes' in data) || (data.strokes is list && data.strokes.size() <= 150));
     }
@@ -123,7 +331,7 @@ service cloud.firestore {
       return data.serverId is string && data.serverId.size() <= 128 &&
              data.updatedBy is string && data.updatedBy.size() <= 128 &&
              data.isPlaying is bool &&
-             data.memberIds is list && data.memberIds.size() <= 100 &&
+             data.memberIds is list && data.memberIds.size() <= 200 &&
              (!('isPublic' in data) || data.isPublic is bool) &&
              (!('elapsedSec' in data) || data.elapsedSec is int);
     }
@@ -131,12 +339,28 @@ service cloud.firestore {
     function isValidVoicePeer(data) {
       return data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
              data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 64 &&
-             data.memberIds is list && data.memberIds.size() <= 100 &&
+             data.memberIds is list && data.memberIds.size() <= 200 &&
              (!('isPublic' in data) || data.isPublic is bool) &&
              (!('isMuted' in data) || data.isMuted is bool) &&
              (!('isDeafened' in data) || data.isDeafened is bool) &&
              (!('isCameraOn' in data) || data.isCameraOn is bool) &&
-             (!('isScreenSharing' in data) || data.isScreenSharing is bool);
+             (!('isScreenSharing' in data) || data.isScreenSharing is bool) &&
+             (!('isSpeaking' in data) || data.isSpeaking is bool) &&
+             (!('connectionState' in data) || (data.connectionState is string && data.connectionState.size() <= 40)) &&
+             (!('reconnectAttempt' in data) || (data.reconnectAttempt is int && data.reconnectAttempt >= 0 && data.reconnectAttempt <= 20));
+    }
+
+    function canJoinVoiceChannel(serverId, channelId) {
+      return isServerMemberOrPublic(serverId) && (
+        isCommunityStaff(serverId) ||
+        !exists(/databases/$(database)/documents/servers/$(serverId)/channels/$(channelId)) ||
+        (
+          (!('isLocked' in get(/databases/$(database)/documents/servers/$(serverId)/channels/$(channelId)).data) ||
+           get(/databases/$(database)/documents/servers/$(serverId)/channels/$(channelId)).data.isLocked == false) &&
+          (!('kickedVoiceUids' in get(/databases/$(database)/documents/servers/$(serverId)/channels/$(channelId)).data) ||
+           !(request.auth.uid in get(/databases/$(database)/documents/servers/$(serverId)/channels/$(channelId)).data.kickedVoiceUids))
+        )
+      );
     }
 
     function isValidRtcSignal(data) {
@@ -164,9 +388,38 @@ service cloud.firestore {
         allow create, update: if isSignedIn() && isValidId(notificationId) && request.auth.uid == userId &&
                                  incoming().userId == request.auth.uid && isValidNotification(incoming());
       }
+
+      // 1.1 Private RAVEN AI Conversation History & Server-Enforced Usage Quota
+      match /ai_conversations/{conversationId} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && isValidId(conversationId) && request.auth.uid == userId &&
+                         isValidAiConversation(incoming(), userId, conversationId) &&
+                         (!('serverId' in incoming()) || incoming().serverId == null || isServerMemberOrPublic(incoming().serverId));
+        allow update: if isSignedIn() && isValidId(conversationId) && request.auth.uid == userId &&
+                         isValidAiConversation(incoming(), userId, conversationId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().id == existing().id;
+
+        match /messages/{messageId} {
+          allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+          allow create: if isSignedIn() && isValidId(messageId) && request.auth.uid == userId &&
+                           isValidAiChatMessage(incoming(), userId, conversationId, messageId);
+          allow update: if false;
+        }
+      }
+
+      match /ai_usage/{quotaId} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && isValidId(quotaId) && request.auth.uid == userId &&
+                         isValidAiUsageQuota(incoming(), userId);
+        allow update: if isSignedIn() && isValidId(quotaId) && request.auth.uid == userId &&
+                         isValidAiUsageQuota(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         (incoming().dayKey != existing().dayKey || incoming().requestsToday >= existing().requestsToday);
+      }
     }
 
-    // 2. Public Non-PII User Profiles (for leaderboard, clan tags & member lists)
+    // 2. Public Non-PII User Profiles
     match /public_profiles/{userId} {
       allow get: if isSignedIn() && isValidId(userId);
       allow list: if isSignedIn() && resource.data.isPublic == true;
@@ -176,7 +429,78 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
     }
 
-    // 3. Servers & Nested Collaborative Resources
+    // 3. Unique Community Handles Registry
+    match /community_handles/{handle} {
+      allow get: if isSignedIn() && isValidId(handle);
+      allow list: if isSignedIn() && resource.data.isPublic == true;
+      allow create: if isSignedIn() && isValidId(handle) && isValidCommunityHandle(incoming()) &&
+                       incoming().ownerId == request.auth.uid && incoming().handle == handle;
+      allow update, delete: if isSignedIn() && isValidId(handle) && existing().ownerId == request.auth.uid;
+    }
+
+    // 4. Community Invites Index
+    match /community_invites/{code} {
+      allow get: if isSignedIn() && isValidId(code);
+      allow list: if isSignedIn() &&
+                     (resource.data.createdByUid == request.auth.uid || isCommunityStaff(resource.data.serverId));
+      allow create: if isSignedIn() && isValidId(code) && isValidCommunityInvite(incoming()) &&
+                       incoming().createdByUid == request.auth.uid && isCommunityStaff(incoming().serverId);
+      allow update: if isSignedIn() && isValidId(code) && isValidCommunityInvite(incoming()) &&
+                       incoming().serverId == existing().serverId &&
+                       incoming().createdByUid == existing().createdByUid && (
+                         isCommunityStaff(existing().serverId) ||
+                         (existing().isRevoked == false &&
+                          (existing().maxUses == 0 || existing().usesCount < existing().maxUses) &&
+                          incoming().usesCount == existing().usesCount + 1 &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['usesCount', 'updatedAt']))
+                       );
+      allow delete: if isSignedIn() && isValidId(code) && isCommunityStaff(existing().serverId);
+    }
+
+    // 4.1 Unique Bot Handles Registry
+    match /bot_handles/{handle} {
+      allow get: if isSignedIn() && isValidId(handle);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(handle) && isValidBotHandle(incoming()) &&
+                       incoming().ownerUid == request.auth.uid && incoming().handle == handle;
+      allow update, delete: if isSignedIn() && isValidId(handle) && existing().ownerUid == request.auth.uid;
+    }
+
+    // 4.2 Raven Bots Registry & Owner-Only Secrets / Audit Logs
+    match /bots/{botId} {
+      allow get: if isSignedIn() && isValidId(botId) &&
+                    (resource == null || existing().ownerUid == request.auth.uid || existing().isPublicCatalog == true);
+      allow list: if isSignedIn() &&
+                     (resource.data.ownerUid == request.auth.uid || resource.data.isPublicCatalog == true);
+      allow create: if isSignedIn() && isValidId(botId) && isValidBotDoc(incoming()) &&
+                       incoming().ownerUid == request.auth.uid && incoming().id == botId;
+      allow update: if isSignedIn() && isValidId(botId) && isValidBotDoc(incoming()) &&
+                       existing().ownerUid == request.auth.uid &&
+                       incoming().ownerUid == existing().ownerUid;
+      allow delete: if isSignedIn() && isValidId(botId) && existing().ownerUid == request.auth.uid;
+
+      match /secrets/{secretId} {
+        allow get: if isSignedIn() && isBotOwner(botId);
+        allow list: if isSignedIn() && isBotOwner(botId) && resource.data.ownerUid == request.auth.uid;
+        allow create, update: if isSignedIn() && isValidId(secretId) && isBotOwner(botId) &&
+                                 incoming().ownerUid == request.auth.uid && incoming().botId == botId &&
+                                 incoming().tokenHash is string && incoming().tokenHash.size() == 64;
+        allow delete: if isSignedIn() && isBotOwner(botId);
+      }
+
+      match /logs/{logId} {
+        allow get, list: if isSignedIn() && (isBotOwner(botId) || resource.data.ownerUid == request.auth.uid);
+        allow create: if isSignedIn() && isValidId(logId) && isValidBotLog(incoming()) &&
+                         incoming().botId == botId && incoming().actorUid == request.auth.uid && (
+                           isBotOwner(botId) ||
+                           (('serverId' in incoming()) && isValidId(incoming().serverId) &&
+                            exists(/databases/$(database)/documents/servers/$(incoming().serverId)/bots/$(botId)))
+                         );
+        allow update, delete: if isSignedIn() && isBotOwner(botId);
+      }
+    }
+
+    // 5. Communities / Servers & Nested Collaborative Resources
     match /servers/{serverId} {
       allow get: if isSignedIn() && isValidId(serverId) &&
                     (resource == null || existing().isPublic == true || existing().ownerId == request.auth.uid || request.auth.uid in existing().memberIds);
@@ -186,27 +510,122 @@ service cloud.firestore {
                        incoming().ownerId == request.auth.uid && request.auth.uid in incoming().memberIds;
       allow update: if isSignedIn() && isValidId(serverId) && isValidServer(incoming()) &&
                        incoming().ownerId == existing().ownerId && (
+                         // 5a. Owner or designated Admin: full management (cannot mutate ownerId)
                          existing().ownerId == request.auth.uid ||
+                         ('adminIds' in existing() && request.auth.uid in existing().adminIds) ||
+
+                         // 5b. Moderator: can manage events & categories or kick regular non-staff members
+                         ('moderatorIds' in existing() && request.auth.uid in existing().moderatorIds &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['events', 'categories', 'memberIds', 'updatedAt'])) ||
+
+                         // 5c. Regular member leaving community (removing only self from memberIds)
                          (request.auth.uid in existing().memberIds &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['boostCount', 'boostLevel', 'customBannerColorHex', 'shopItems', 'customRoles', 'events', 'memberIds', 'updatedAt'])) ||
-                         (existing().isPublic == true &&
-                          !(request.auth.uid in existing().memberIds) &&
+                          request.auth.uid != existing().ownerId &&
+                          !(request.auth.uid in incoming().memberIds) &&
+                          incoming().memberIds.size() == existing().memberIds.size() - 1 &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'adminIds', 'moderatorIds', 'updatedAt'])) ||
+
+                         // 5d. Regular member boosting or purchasing from internal shop
+                         (request.auth.uid in existing().memberIds &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['boostCount', 'boostLevel', 'shopItems', 'updatedAt'])) ||
+
+                         // 5e. Joining public community or private community via valid non-revoked invite
+                         (!(request.auth.uid in existing().memberIds) &&
                           request.auth.uid in incoming().memberIds &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt']))
+                          incoming().memberIds.size() == existing().memberIds.size() + 1 &&
+                          (
+                            (existing().isPublic == true &&
+                             incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])) ||
+                            (incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'lastInviteCodeUsed', 'updatedAt']) &&
+                             hasValidCommunityInvite(serverId, incoming()))
+                          ))
                        );
       allow delete: if isSignedIn() && isValidId(serverId) && existing().ownerId == request.auth.uid;
 
+      // 5.0 Installed Bots & Server-Scoped Permissions / Roles
+      match /bots/{botId} {
+        allow get, list: if isSignedIn() && isServerMemberOrPublic(serverId);
+        allow create, update: if isSignedIn() && isValidId(botId) && isCommunityAdmin(serverId) &&
+                                 isValidServerBotInstallation(incoming(), serverId, botId) &&
+                                 botExists(botId) &&
+                                 (botDoc(botId).data.ownerUid == request.auth.uid || botDoc(botId).data.isPublicCatalog == true);
+        allow delete: if isSignedIn() && isValidId(botId) && (isCommunityAdmin(serverId) || isBotOwner(botId));
+      }
+
+      // 5.1 Community Members & Granular Role Assignments
+      match /members/{memberId} {
+        allow get: if isSignedIn() && isValidId(memberId) &&
+                      (resource == null || resource.data.isPublic == true || isServerMemberOrPublic(serverId) || request.auth.uid == memberId);
+        allow list: if isSignedIn() &&
+                       (resource.data.isPublic == true || isServerMemberOrPublic(serverId) || resource.data.uid == request.auth.uid);
+        allow create: if isSignedIn() && isValidId(memberId) && isValidCommunityMember(incoming()) &&
+                         incoming().serverId == serverId && (
+                           isCommunityAdmin(serverId) ||
+                           (memberId == request.auth.uid && incoming().uid == request.auth.uid &&
+                            incoming().role == 'MEMBER' && isServerMemberOrPublic(serverId))
+                         );
+        allow update: if isSignedIn() && isValidId(memberId) && isValidCommunityMember(incoming()) &&
+                         incoming().serverId == serverId && incoming().uid == existing().uid && (
+                           isCommunityAdmin(serverId) ||
+                           (isCommunityMod(serverId) && existing().role == 'MEMBER' && incoming().role == 'MEMBER' &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['isTimedOut', 'updatedAt'])) ||
+                           (memberId == request.auth.uid &&
+                            incoming().role == existing().role &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatarUrl', 'avatarColor', 'status', 'xp', 'level', 'clanTag', 'updatedAt']))
+                         );
+        allow delete: if isSignedIn() && isValidId(memberId) && (
+                           (memberId == request.auth.uid && !isServerOwner(serverId)) ||
+                           (isCommunityAdmin(serverId) && memberId != serverDoc(serverId).data.ownerId) ||
+                           (isCommunityMod(serverId) && existing().role == 'MEMBER')
+                         );
+      }
+
+      // 5.2 Community Announcements (Staff-only publish/edit/delete)
+      match /announcements/{announcementId} {
+        allow get: if isSignedIn() && isValidId(announcementId) && isServerMemberOrPublic(serverId);
+        allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
+        allow create, update, delete: if isSignedIn() && isValidId(announcementId) &&
+                                         (request.method == 'delete' || isValidAnnouncement(incoming())) &&
+                                         isCommunityStaff(serverId);
+      }
+
+      // 5.3 Community Events (Staff manage, Members RSVP)
+      match /events/{eventId} {
+        allow get: if isSignedIn() && isValidId(eventId) && isServerMemberOrPublic(serverId);
+        allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
+        allow create, delete: if isSignedIn() && isValidId(eventId) &&
+                                 (request.method == 'delete' || isValidCommunityEvent(incoming())) &&
+                                 isCommunityStaff(serverId);
+        allow update: if isSignedIn() && isValidId(eventId) && isValidCommunityEvent(incoming()) && (
+                           isCommunityStaff(serverId) ||
+                           (isServerMemberOrPublic(serverId) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['interestedUserIds', 'updatedAt']))
+                         );
+      }
+
+      // 5.4 Channels (Staff manage structure; members may post typing indicator)
       match /channels/{channelId} {
         allow get: if isSignedIn() && isValidId(channelId) && isServerMemberOrPublic(serverId);
         allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
-        allow create, update: if isSignedIn() && isValidId(channelId) && isValidChannel(incoming()) && isServerMemberOrPublic(serverId);
-        allow delete: if isSignedIn() && isValidId(channelId) && isServerOwner(serverId);
+        allow create: if isSignedIn() && isValidId(channelId) && isValidChannel(incoming()) && isCommunityStaff(serverId);
+        allow update: if isSignedIn() && isValidId(channelId) && isValidChannel(incoming()) && (
+                           isCommunityStaff(serverId) ||
+                           (isServerMemberOrPublic(serverId) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['lastTypingUid', 'lastTypingName', 'lastTypingMs']))
+                         );
+        allow delete: if isSignedIn() && isValidId(channelId) && isCommunityAdmin(serverId);
 
         match /messages/{messageId} {
           allow get: if isSignedIn() && isValidId(messageId) && isServerMemberOrPublic(serverId);
           allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
-          allow create: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
-                           incoming().senderId == request.auth.uid && isServerMemberOrPublic(serverId);
+          allow create: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) && isServerMemberOrPublic(serverId) && (
+                           incoming().senderId == request.auth.uid ||
+                           (('isBotMessage' in incoming()) && incoming().isBotMessage == true &&
+                            ('triggeredByUid' in incoming()) && incoming().triggeredByUid == request.auth.uid &&
+                            ('botId' in incoming()) && isValidId(incoming().botId) &&
+                            exists(/databases/$(database)/documents/servers/$(serverId)/bots/$(incoming().botId)) &&
+                            get(/databases/$(database)/documents/servers/$(serverId)/bots/$(incoming().botId)).data.isEnabledInServer == true)
+                         );
           allow update: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
                            incoming().senderId == existing().senderId && isServerMemberOrPublic(serverId) && (
                              (existing().senderId == request.auth.uid &&
@@ -214,7 +633,7 @@ service cloud.firestore {
                              incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'isPinned', 'poll', 'threadCount', 'updatedAt'])
                            );
           allow delete: if isSignedIn() && isValidId(messageId) && isServerMemberOrPublic(serverId) &&
-                           (existing().senderId == request.auth.uid || isServerOwner(serverId));
+                           (existing().senderId == request.auth.uid || isCommunityStaff(serverId));
         }
 
         match /whiteboard/{canvasId} {
@@ -235,8 +654,10 @@ service cloud.firestore {
           allow get: if isSignedIn() && isValidId(peerId) && isServerMemberOrPublic(serverId);
           allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
           allow create, update: if isSignedIn() && isValidId(peerId) && peerId == request.auth.uid &&
-                                   incoming().uid == request.auth.uid && isValidVoicePeer(incoming()) && isServerMemberOrPublic(serverId);
-          allow delete: if isSignedIn() && isValidId(peerId) && peerId == request.auth.uid && isServerMemberOrPublic(serverId);
+                                   incoming().uid == request.auth.uid && isValidVoicePeer(incoming()) &&
+                                   canJoinVoiceChannel(serverId, channelId);
+          allow delete: if isSignedIn() && isValidId(peerId) && isServerMemberOrPublic(serverId) &&
+                           (peerId == request.auth.uid || isCommunityStaff(serverId));
         }
 
         match /rtc_signals/{signalId} {
@@ -252,7 +673,7 @@ service cloud.firestore {
       }
     }
 
-    // 4. Direct Conversations
+    // 6. Direct Conversations
     match /direct_conversations/{conversationId} {
       allow get: if isSignedIn() && isValidId(conversationId) && (resource == null || request.auth.uid in existing().participantIds);
       allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;

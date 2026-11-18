@@ -15,22 +15,42 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.data.AiAssistantRepository
+import com.example.data.BotRepository
 import com.example.data.ChatRepository
+import com.example.data.CommunityPermissions
+import com.example.data.CommunityRepository
+import com.example.data.searchCommunities
 import com.example.model.Channel
 import com.example.model.ChannelType
 import com.example.model.Message
+import com.example.model.RavenBot
+import com.example.model.RolePermission
+import com.example.model.Server
 import com.example.ui.components.*
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.AiAssistantViewModel
+import com.example.ui.viewmodel.BotDashboardViewModel
+import com.example.ui.viewmodel.CommunityViewModel
 import com.example.util.AudioPlayerHelper
 import com.example.util.NotificationHelper
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-fun RavenApp(repository: ChatRepository) {
+fun RavenApp(
+    repository: ChatRepository,
+    isViewingFullVoiceRoom: Boolean? = null,
+    onViewingFullVoiceRoomChange: ((Boolean) -> Unit)? = null
+) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val palette = ravenPalette()
@@ -75,15 +95,46 @@ fun RavenApp(repository: ChatRepository) {
     val draftsByTarget by repository.draftsByTarget.collectAsState()
     val scheduledMessages by repository.scheduledMessages.collectAsState()
     val rtcSessionState by repository.rtcSessionState.collectAsState()
+    val localVideoTrack by repository.localVideoTrack.collectAsState()
     val remoteVideoTracks by repository.remoteVideoTracks.collectAsState()
+    val voiceError by repository.voiceError.collectAsState()
     val jukeboxVolume by repository.jukeboxVolume.collectAsState()
+
+    val communityRepo = remember(repository) { CommunityRepository(repository) }
+    val communityViewModel = remember(communityRepo) { CommunityViewModel(communityRepo) }
+    val communityUiState by communityViewModel.uiState.collectAsState()
+
+    val botRepo = remember(repository) { BotRepository(repository) }
+    val botViewModel = remember(botRepo) { BotDashboardViewModel(botRepo) }
+    val bots by botRepo.bots.collectAsState()
+    val botInstallationsByServer by botRepo.installationsByServer.collectAsState()
+    val botLogsByBot by botRepo.logsByBot.collectAsState()
+    val botUiState by botViewModel.uiState.collectAsState()
+
+    val aiRepo = remember(repository) { AiAssistantRepository(repository) }
+    val aiViewModel = remember(aiRepo) { AiAssistantViewModel(aiRepo) }
+    val aiUiState by aiViewModel.uiState.collectAsState()
 
     val unreadNotificationsCount = remember(notifications) { notifications.count { !it.isRead } }
 
     // Navigation and drawer states
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     var isMemberListOpen by remember { mutableStateOf(false) }
-    var isViewingFullVoiceRoom by remember { mutableStateOf(false) }
+    var internalViewingVoiceRoom by remember { mutableStateOf(false) }
+    val effectiveViewingVoiceRoom = isViewingFullVoiceRoom ?: internalViewingVoiceRoom
+    val setViewingVoiceRoom: (Boolean) -> Unit = { visible ->
+        internalViewingVoiceRoom = visible
+        onViewingFullVoiceRoomChange?.invoke(visible)
+    }
+    var isViewingCommunityHome by remember { mutableStateOf(false) }
+    var showBotDashboardSheet by remember { mutableStateOf(false) }
+    var showAiAssistantSheet by remember { mutableStateOf(false) }
+    var showCreateBotDialog by remember { mutableStateOf(false) }
+    var editingBot by remember { mutableStateOf<RavenBot?>(null) }
+    var editingCommunityServer by remember { mutableStateOf<Server?>(null) }
+    var showInvitesManagerSheet by remember { mutableStateOf(false) }
+    var showRolesMatrixSheet by remember { mutableStateOf(false) }
+    var showCategoriesManagerSheet by remember { mutableStateOf(false) }
     var selectedUserProfile by remember { mutableStateOf<com.example.model.User?>(null) }
     var showCreateServerDialog by remember { mutableStateOf(false) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
@@ -141,6 +192,43 @@ fun RavenApp(repository: ChatRepository) {
         repository.consumePendingLocalNotification()
     }
 
+    LaunchedEffect(botRepo) {
+        botRepo.attachToChatRepository()
+    }
+
+    LaunchedEffect(aiRepo) {
+        aiRepo.attachSlashCommandHook()
+    }
+
+    LaunchedEffect(selectedServerId, isFirebaseSignedIn) {
+        if (selectedServerId != "dm_tab") {
+            communityViewModel.observeCommunity(selectedServerId)
+        }
+        botViewModel.startObserving(selectedServerId)
+        aiViewModel.startObserving()
+    }
+
+    LaunchedEffect(communityUiState.feedbackMessage, communityUiState.errorMessage) {
+        if (communityUiState.feedbackMessage != null || communityUiState.errorMessage != null) {
+            delay(3500)
+            communityViewModel.clearFeedback()
+        }
+    }
+
+    LaunchedEffect(botUiState.feedbackMessage, botUiState.errorMessage) {
+        if (botUiState.feedbackMessage != null || botUiState.errorMessage != null) {
+            delay(3500)
+            botViewModel.clearFeedback()
+        }
+    }
+
+    LaunchedEffect(voiceError) {
+        if (voiceError != null) {
+            delay(4000)
+            repository.clearVoiceError()
+        }
+    }
+
     // Active Server & Channel
     val activeServer = servers.find { it.id == selectedServerId } ?: servers.first()
     val activeChannel = activeServer.channels.find { it.id == selectedChannelId }
@@ -148,10 +236,11 @@ fun RavenApp(repository: ChatRepository) {
         ?: activeServer.channels.firstOrNull()
         ?: Channel("c_def", activeServer.id, "général", ChannelType.TEXT)
 
-    BackHandler(enabled = isMemberListOpen || isViewingFullVoiceRoom || drawerState.isOpen || (activeServer.isDmTab && selectedDmId != null)) {
+    BackHandler(enabled = isMemberListOpen || effectiveViewingVoiceRoom || isViewingCommunityHome || drawerState.isOpen || (activeServer.isDmTab && selectedDmId != null)) {
         when {
             isMemberListOpen -> isMemberListOpen = false
-            isViewingFullVoiceRoom -> isViewingFullVoiceRoom = false
+            effectiveViewingVoiceRoom -> setViewingVoiceRoom(false)
+            isViewingCommunityHome -> isViewingCommunityHome = false
             drawerState.isOpen -> coroutineScope.launch { drawerState.close() }
             activeServer.isDmTab && selectedDmId != null -> repository.selectDm("")
         }
@@ -168,6 +257,7 @@ fun RavenApp(repository: ChatRepository) {
                 selectedServerId = selectedServerId,
                 serverFolders = serverFolders,
                 onSelectServer = { serverId ->
+                    isViewingCommunityHome = false
                     repository.selectServer(serverId)
                     if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                 },
@@ -179,6 +269,14 @@ fun RavenApp(repository: ChatRepository) {
                 onOpenOrbsShop = {
                     if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                     showOrbsShopDialog = true
+                },
+                onOpenBotsDashboard = {
+                    if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                    showBotDashboardSheet = true
+                },
+                onOpenAiAssistant = {
+                    if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                    showAiAssistantSheet = true
                 }
             )
 
@@ -190,10 +288,15 @@ fun RavenApp(repository: ChatRepository) {
                     isUserMuted = isUserMuted,
                     isUserDeafened = isUserDeafened,
                     onSelectChannel = { ch ->
-                        repository.selectChannel(ch)
+                        isViewingCommunityHome = false
                         if (ch.type == ChannelType.VOICE || ch.type == ChannelType.STAGE) {
-                            requestAudioPermission()
-                            isViewingFullVoiceRoom = true
+                            val joined = repository.joinVoiceChannel(ch)
+                            if (joined) {
+                                requestAudioPermission()
+                                setViewingVoiceRoom(true)
+                            }
+                        } else {
+                            repository.selectChannel(ch)
                         }
                         if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                     },
@@ -217,6 +320,28 @@ fun RavenApp(repository: ChatRepository) {
                     },
                     onOpenServerSettings = { showServerSettingsSheet = true },
                     onOpenNotifications = { showInboxSheet = true },
+                    onOpenCommunityHome = {
+                        isViewingCommunityHome = true
+                        setViewingVoiceRoom(false)
+                        if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                    },
+                    onOpenCommunityInvites = { showInvitesManagerSheet = true },
+                    onOpenRolesMatrix = { showRolesMatrixSheet = true },
+                    onOpenCategoriesManager = { showCategoriesManagerSheet = true },
+                    onOpenBotsDashboard = {
+                        if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                        showBotDashboardSheet = true
+                    },
+                    onOpenAiAssistant = {
+                        if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                        showAiAssistantSheet = true
+                    },
+                    onEditCommunity = { editingCommunityServer = activeServer },
+                    onLeaveCommunity = {
+                        communityViewModel.leaveCommunity(activeServer.id) {
+                            isViewingCommunityHome = false
+                        }
+                    },
                     onUserClick = { selectedUserProfile = currentUser },
                     onOpenAppSettings = { showAppSettingsDialog = true },
                     onToggleMute = {
@@ -284,8 +409,19 @@ fun RavenApp(repository: ChatRepository) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Box(modifier = Modifier.weight(1f)) {
                     when {
-                        isViewingFullVoiceRoom && connectedVoiceChannel != null -> {
+                        effectiveViewingVoiceRoom && connectedVoiceChannel != null -> {
                             val activeVoice = connectedVoiceChannel!!
+                            val voiceServer = servers.find { it.id == activeVoice.serverId }
+                            val canManageVoice = voiceServer != null && !voiceServer.isDmTab &&
+                                (CommunityPermissions.hasPermission(voiceServer, currentUser.id, RolePermission.MANAGE_VOICE) ||
+                                    CommunityPermissions.hasPermission(voiceServer, currentUser.id, RolePermission.MANAGE_CHANNELS))
+                            val canSpeakVoice = voiceServer == null || voiceServer.isDmTab ||
+                                CommunityPermissions.hasPermission(voiceServer, currentUser.id, RolePermission.SPEAK_VOICE)
+                            val canStreamVideo = voiceServer == null || voiceServer.isDmTab ||
+                                CommunityPermissions.hasPermission(voiceServer, currentUser.id, RolePermission.STREAM_VIDEO)
+                            val canShareScreen = voiceServer == null || voiceServer.isDmTab ||
+                                CommunityPermissions.hasPermission(voiceServer, currentUser.id, RolePermission.SHARE_SCREEN)
+
                             if (activeVoice.type == ChannelType.STAGE) {
                                 StageRoomView(
                                     channel = activeVoice,
@@ -304,41 +440,69 @@ fun RavenApp(repository: ChatRepository) {
                                     onToggleDeafen = { repository.toggleDeafen() },
                                     onLeaveVoice = {
                                         repository.leaveVoiceChannel()
-                                        isViewingFullVoiceRoom = false
+                                        setViewingVoiceRoom(false)
                                     },
-                                    onMinimize = { isViewingFullVoiceRoom = false }
+                                    onMinimize = { setViewingVoiceRoom(false) }
                                 )
                             } else {
                                 VoiceRoomView(
                                     channel = activeVoice,
-                                    serverName = activeServer.name,
+                                    serverName = voiceServer?.name ?: activeServer.name,
                                     currentUser = currentUser,
                                     isUserMuted = isUserMuted,
                                     isUserDeafened = isUserDeafened,
                                     jukeboxState = jukeboxState,
                                     rtcSessionState = rtcSessionState,
+                                    localVideoTrack = localVideoTrack,
                                     remoteVideoTracks = remoteVideoTracks,
                                     eglContext = repository.getWebRtcEglContext(),
+                                    serverCustomRoles = voiceServer?.customRoles.orEmpty(),
+                                    canManageVoice = canManageVoice,
+                                    canSpeak = canSpeakVoice,
+                                    canStreamVideo = canStreamVideo,
+                                    canShareScreen = canShareScreen,
+                                    participantVolumes = participantVolumes,
                                     onCameraToggle = { enabled, front ->
                                         repository.setVoiceCameraEnabled(enabled, front)
                                     },
                                     onScreenShareToggle = { enabled ->
                                         repository.setVoiceScreenSharing(enabled)
                                     },
+                                    onStartScreenShareWithIntent = { code, data ->
+                                        requestNotificationPermission()
+                                        repository.startVoiceScreenShare(code, data)
+                                    },
+                                    onStopScreenShare = { repository.stopVoiceScreenShare() },
                                     onToggleMute = {
                                         requestAudioPermission()
                                         repository.toggleMute()
                                     },
                                     onToggleDeafen = { repository.toggleDeafen() },
+                                    onToggleSpeakerphone = { repository.toggleSpeakerphone() },
+                                    onReconnect = { repository.triggerVoiceReconnect() },
                                     onLeaveVoice = {
                                         repository.leaveVoiceChannel()
-                                        isViewingFullVoiceRoom = false
+                                        setViewingVoiceRoom(false)
                                     },
-                                    onMinimize = { isViewingFullVoiceRoom = false },
+                                    onMinimize = { setViewingVoiceRoom(false) },
                                     onInviteClick = { showServerInviteDialog = true },
                                     onOpenJukebox = { showJukeboxSheet = true },
                                     onOpenMixer = { showMixerSheet = true },
                                     onOpenWhiteboard = { whiteboardTarget = activeChannel.id to "#${activeChannel.name}" },
+                                    onParticipantVolumeChange = { uid, vol -> repository.setParticipantVolume(uid, vol) },
+                                    onKickParticipant = { uid ->
+                                        repository.kickUserFromVoice(activeVoice.serverId, activeVoice.id, uid)
+                                    },
+                                    onUpdateVoiceSettings = { locked, maxCap, roles, roleIds ->
+                                        repository.updateVoiceChannelSettings(
+                                            serverId = activeVoice.serverId,
+                                            channelId = activeVoice.id,
+                                            isLocked = locked,
+                                            maxParticipants = maxCap,
+                                            allowedRoles = roles,
+                                            allowedRoleIds = roleIds
+                                        )
+                                    },
                                     onRewardXpAndOrbs = { xp, orbs, reason ->
                                         repository.grantXp(xp, reason)
                                         repository.updateOrbsBalance(currentUser.orbsBalance + orbs)
@@ -372,8 +536,9 @@ fun RavenApp(repository: ChatRepository) {
                                         type = ChannelType.VOICE,
                                         activeVoiceUsers = listOf(friend)
                                     )
-                                    repository.joinVoiceChannel(dmVoice)
-                                    isViewingFullVoiceRoom = true
+                                    if (repository.joinVoiceChannel(dmVoice)) {
+                                        setViewingVoiceRoom(true)
+                                    }
                                 },
                                 onStartGroupCall = { groupConv ->
                                     requestAudioPermission()
@@ -384,8 +549,9 @@ fun RavenApp(repository: ChatRepository) {
                                         type = ChannelType.VOICE,
                                         activeVoiceUsers = groupConv.groupMembers
                                     )
-                                    repository.joinVoiceChannel(grpVoice)
-                                    isViewingFullVoiceRoom = true
+                                    if (repository.joinVoiceChannel(grpVoice)) {
+                                        setViewingVoiceRoom(true)
+                                    }
                                 },
                                 onToggleDrawer = {
                                     coroutineScope.launch { drawerState.open() }
@@ -420,6 +586,55 @@ fun RavenApp(repository: ChatRepository) {
                                 onOpenGlobalSearch = { showGlobalSearchSheet = true },
                                 onOpenSharedMedia = { dmId, title -> sharedMediaTarget = dmId to title },
                                 showNavigationDrawerButton = showDrawerButton
+                            )
+                        }
+
+                        !activeServer.isDmTab && isViewingCommunityHome -> {
+                            CommunityHomeView(
+                                server = activeServer,
+                                currentUser = currentUser,
+                                unreadNotificationsCount = unreadNotificationsCount,
+                                showDrawerButton = showDrawerButton,
+                                onToggleDrawer = {
+                                    coroutineScope.launch { drawerState.open() }
+                                },
+                                onOpenChannel = { ch ->
+                                    isViewingCommunityHome = false
+                                    if (ch.type == ChannelType.VOICE || ch.type == ChannelType.STAGE) {
+                                        if (repository.joinVoiceChannel(ch)) {
+                                            requestAudioPermission()
+                                            setViewingVoiceRoom(true)
+                                        }
+                                    } else {
+                                        repository.selectChannel(ch)
+                                    }
+                                },
+                                onEditCommunity = { editingCommunityServer = activeServer },
+                                onOpenInvites = { showInvitesManagerSheet = true },
+                                onOpenRolesMatrix = { showRolesMatrixSheet = true },
+                                onOpenCategories = { showCategoriesManagerSheet = true },
+                                onOpenNotifications = { showInboxSheet = true },
+                                onLeaveCommunity = {
+                                    communityViewModel.leaveCommunity(activeServer.id) {
+                                        isViewingCommunityHome = false
+                                    }
+                                },
+                                onPublishAnnouncement = { title, content, isPinned ->
+                                    communityViewModel.publishAnnouncement(activeServer.id, title, content, isPinned)
+                                },
+                                onDeleteAnnouncement = { annId ->
+                                    communityViewModel.deleteAnnouncement(activeServer.id, annId)
+                                },
+                                onCreateEvent = { title, desc, dateTime, location ->
+                                    communityViewModel.createEvent(activeServer.id, title, desc, dateTime, location)
+                                },
+                                onToggleEventInterest = { evtId ->
+                                    requestNotificationPermission()
+                                    communityViewModel.toggleEventInterest(activeServer.id, evtId)
+                                },
+                                onTimeoutMember = { uid -> communityViewModel.timeoutMember(activeServer.id, uid) },
+                                onKickMember = { uid -> communityViewModel.kickMember(activeServer.id, uid) },
+                                onMemberClick = { member -> selectedUserProfile = member }
                             )
                         }
 
@@ -506,6 +721,10 @@ fun RavenApp(repository: ChatRepository) {
                                     repository.scheduleMessageReminder(msg, delayMs, delayLabel)
                                 },
                                 onOpenWhiteboard = { whiteboardTarget = activeChannel.id to "#${activeChannel.name}" },
+                                onOpenAiAssistant = { showAiAssistantSheet = true },
+                                botSlashCommands = remember(activeServer.id, botInstallationsByServer, bots) {
+                                    botRepo.getSlashCommandsForServer(activeServer.id)
+                                },
                                 currentUserId = currentUser.id,
                                 currentUserName = currentUser.name
                             )
@@ -513,11 +732,12 @@ fun RavenApp(repository: ChatRepository) {
                     }
                 }
 
-                if (connectedVoiceChannel != null && !isViewingFullVoiceRoom) {
+                if (connectedVoiceChannel != null && !effectiveViewingVoiceRoom) {
                     FloatingVoiceBar(
                         channel = connectedVoiceChannel!!,
                         isMuted = isUserMuted,
-                        onBarClick = { isViewingFullVoiceRoom = true },
+                        rtcSessionState = rtcSessionState,
+                        onBarClick = { setViewingVoiceRoom(true) },
                         onToggleMute = {
                             requestAudioPermission()
                             repository.toggleMute()
@@ -528,7 +748,7 @@ fun RavenApp(repository: ChatRepository) {
             }
 
             AnimatedVisibility(
-                visible = isMemberListOpen && !activeServer.isDmTab && !isViewingFullVoiceRoom,
+                visible = isMemberListOpen && !activeServer.isDmTab && !effectiveViewingVoiceRoom,
                 enter = slideInHorizontally(initialOffsetX = { it }),
                 exit = slideOutHorizontally(targetOffsetX = { it }),
                 modifier = Modifier.align(Alignment.CenterEnd)
@@ -543,6 +763,44 @@ fun RavenApp(repository: ChatRepository) {
                             selectedUserProfile = member
                         }
                     )
+                }
+            }
+            // Community, Bot, Voice & AI Action Toast Feedback Banner
+            val bannerError = voiceError ?: communityUiState.errorMessage ?: botUiState.errorMessage
+                ?: if (!showAiAssistantSheet) aiUiState.errorMessage else null
+            val bannerText = bannerError ?: communityUiState.feedbackMessage ?: botUiState.feedbackMessage
+                ?: if (!showAiAssistantSheet) aiUiState.feedbackMessage else null
+            if (bannerText != null) {
+                Surface(
+                    color = if (bannerError != null) DiscordRed else DiscordGreen,
+                    shape = RoundedCornerShape(12.dp),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(horizontal = 16.dp, vertical = 18.dp)
+                        .testTag("community_feedback_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = bannerText,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(onClick = {
+                            repository.clearVoiceError()
+                            communityViewModel.clearFeedback()
+                            botViewModel.clearFeedback()
+                            aiViewModel.clearFeedback()
+                        }) {
+                            Text("OK", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         }
@@ -571,7 +829,7 @@ fun RavenApp(repository: ChatRepository) {
         } else {
             ModalNavigationDrawer(
                 drawerState = drawerState,
-                gesturesEnabled = !isViewingFullVoiceRoom,
+                gesturesEnabled = !effectiveViewingVoiceRoom,
                 drawerContent = {
                     ModalDrawerSheet(
                         drawerContainerColor = palette.primaryBg,
@@ -632,28 +890,122 @@ fun RavenApp(repository: ChatRepository) {
         )
     }
 
-    // Create Server Modal
+    // Create Advanced Community Modal
     if (showCreateServerDialog) {
-        CreateServerDialog(
+        CreateEditCommunityDialog(
+            existingServer = null,
+            isOwner = true,
             onDismiss = { showCreateServerDialog = false },
-            onCreateServer = { name, emoji, isPublic, categoryTag ->
-                repository.createServer(name, emoji, isPublic, categoryTag)
+            onSave = { name, desc, handle, iconText, imgUrl, banUrl, banColor, isPublic, catTag, rules, welcome ->
+                communityViewModel.createCommunity(
+                    name = name,
+                    description = desc,
+                    uniqueHandle = handle,
+                    iconText = iconText,
+                    imageUrl = imgUrl,
+                    bannerUrl = banUrl,
+                    bannerColorHex = banColor,
+                    isPublic = isPublic,
+                    categoryTag = catTag,
+                    rulesGuidelines = rules,
+                    homeWelcomeMessage = welcome,
+                    onCreated = { isViewingCommunityHome = true }
+                )
             }
         )
     }
 
-    // Explore Public Servers Sheet
+    // Edit Existing Community Modal
+    editingCommunityServer?.let { srvToEdit ->
+        CreateEditCommunityDialog(
+            existingServer = srvToEdit,
+            isOwner = CommunityPermissions.isOwner(srvToEdit, currentUser.id),
+            onDismiss = { editingCommunityServer = null },
+            onSave = { name, desc, handle, _, imgUrl, banUrl, banColor, isPublic, catTag, rules, welcome ->
+                communityViewModel.updateCommunity(
+                    serverId = srvToEdit.id,
+                    name = name,
+                    description = desc,
+                    uniqueHandle = handle,
+                    imageUrl = imgUrl,
+                    bannerUrl = banUrl,
+                    bannerColorHex = banColor,
+                    isPublic = isPublic,
+                    categoryTag = catTag,
+                    rulesGuidelines = rules,
+                    homeWelcomeMessage = welcome
+                )
+            },
+            onDeleteCommunity = {
+                communityViewModel.deleteCommunity(srvToEdit.id) {
+                    isViewingCommunityHome = false
+                }
+            },
+            onLeaveCommunity = {
+                communityViewModel.leaveCommunity(srvToEdit.id) {
+                    isViewingCommunityHome = false
+                }
+            }
+        )
+    }
+
+    // Community Invites Management Sheet
+    if (showInvitesManagerSheet && !activeServer.isDmTab) {
+        CommunityInvitesSheet(
+            server = activeServer,
+            canManageInvites = CommunityPermissions.hasPermission(activeServer, currentUser.id, RolePermission.MANAGE_INVITES),
+            onCreateInvite = { maxUses, hrs -> communityViewModel.createInvite(activeServer.id, maxUses, hrs) },
+            onRevokeInvite = { code -> communityViewModel.revokeInvite(activeServer.id, code) },
+            onDeleteInvite = { code -> communityViewModel.deleteInvite(activeServer.id, code) },
+            onDismiss = { showInvitesManagerSheet = false }
+        )
+    }
+
+    // Community Roles & Permissions Matrix Sheet
+    if (showRolesMatrixSheet && !activeServer.isDmTab) {
+        CommunityRolesMatrixSheet(
+            server = activeServer,
+            canManageRoles = CommunityPermissions.hasPermission(activeServer, currentUser.id, RolePermission.MANAGE_ROLES),
+            onSaveRole = { name, colorHex, secHex, perms ->
+                communityViewModel.saveCustomRole(activeServer.id, name, colorHex, secHex, perms)
+            },
+            onAssignMemberRole = { uid, role, customId ->
+                communityViewModel.assignMemberRole(activeServer.id, uid, role, customId)
+            },
+            onDismiss = { showRolesMatrixSheet = false }
+        )
+    }
+
+    // Community Categories & Channels Manager Sheet
+    if (showCategoriesManagerSheet && !activeServer.isDmTab) {
+        CommunityCategoriesSheet(
+            server = activeServer,
+            canManageChannels = CommunityPermissions.hasPermission(activeServer, currentUser.id, RolePermission.MANAGE_CHANNELS),
+            onCreateCategory = { name, isPriv -> communityViewModel.createCategory(activeServer.id, name, isPriv) },
+            onDeleteCategory = { name -> communityViewModel.deleteCategory(activeServer.id, name) },
+            onCreateChannel = { name, type, catName, isPriv ->
+                communityViewModel.createChannel(activeServer.id, name, type, catName, isPriv)
+            },
+            onDeleteChannel = { chId -> communityViewModel.deleteChannel(activeServer.id, chId) },
+            onDismiss = { showCategoriesManagerSheet = false }
+        )
+    }
+
+    // Explore Public Communities Sheet
     if (showExploreServersSheet) {
         ExploreServersSheet(
             listings = discoverServers,
             joinedServerIds = servers.filterNot { it.isDmTab }.map { it.id }.toSet(),
             onRefreshCloud = { repository.refreshPublicServersFromCloud() },
             onJoinServer = { listing ->
-                repository.joinPublicServer(listing)
+                communityViewModel.joinPublicCommunity(listing) {
+                    isViewingCommunityHome = true
+                }
                 coroutineScope.launch { drawerState.close() }
             },
             onOpenJoinByCode = { showJoinServerDialog = true },
-            onDismiss = { showExploreServersSheet = false }
+            onDismiss = { showExploreServersSheet = false },
+            onSearchCloud = { query, filter -> communityRepo.searchCommunities(query, filter) }
         )
     }
 
@@ -725,17 +1077,21 @@ fun RavenApp(repository: ChatRepository) {
         )
     }
 
-    // Join Server By Code Modal
+    // Join Community By Invite Code Modal
     if (showJoinServerDialog) {
         JoinServerByCodeDialog(
-            onJoinCode = { code ->
-                val joined = repository.joinServerByInviteCode(code)
-                if (joined) {
-                    coroutineScope.launch { drawerState.close() }
+            onDismiss = { showJoinServerDialog = false },
+            onJoinCodeAsync = { code, onResult ->
+                communityViewModel.joinByInviteCode(code) { ok ->
+                    if (ok) {
+                        isViewingCommunityHome = true
+                        coroutineScope.launch { drawerState.close() }
+                        onResult(true, null)
+                    } else {
+                        onResult(false, communityViewModel.uiState.value.errorMessage ?: "Code invalide ou expiré.")
+                    }
                 }
-                joined
-            },
-            onDismiss = { showJoinServerDialog = false }
+            }
         )
     }
 
@@ -909,6 +1265,97 @@ fun RavenApp(repository: ChatRepository) {
             onEquipDecoration = { decoKey -> repository.equipAvatarDecoration(decoKey) },
             onUnlockBadge = { badgeId -> repository.toggleUserBadge(badgeId) },
             onEquipProfileEffect = { effectKey -> repository.equipProfileEffect(effectKey) }
+        )
+    }
+
+    // Raven Bots Dashboard
+    if (showBotDashboardSheet) {
+        BotDashboardSheet(
+            currentUserId = currentUser.id,
+            activeServer = activeServer,
+            allServers = servers,
+            bots = bots,
+            installationsByServer = botInstallationsByServer,
+            logsByBot = botLogsByBot,
+            uiState = botUiState,
+            onSelectBot = { botViewModel.selectBot(it) },
+            onOpenCreateBot = { showCreateBotDialog = true },
+            onOpenEditBot = { editingBot = it },
+            onToggleBotActive = { id, active -> botViewModel.toggleBotActive(id, active) },
+            onRegenerateToken = { botViewModel.regenerateToken(it) },
+            onVerifyToken = { id, cand -> botViewModel.verifyToken(id, cand) },
+            onClearOneTimeToken = { botViewModel.clearOneTimeToken() },
+            onAddBotToServer = { botId, srvId, perms, roleTitle, customId ->
+                botViewModel.addBotToServer(botId, srvId, perms, roleTitle, customId)
+            },
+            onRemoveBotFromServer = { botId, srvId -> botViewModel.removeBotFromServer(botId, srvId) },
+            onUpdateServerBotConfig = { botId, srvId, perms, roleTitle, customId, enabled ->
+                botViewModel.updateServerBotConfig(botId, srvId, perms, roleTitle, customId, enabled)
+            },
+            onSaveCommand = { botId, spec -> botViewModel.saveCommand(botId, spec) },
+            onDeleteCommand = { botId, cmdId -> botViewModel.deleteCommand(botId, cmdId) },
+            onSaveAutoResponse = { botId, rule -> botViewModel.saveAutoResponse(botId, rule) },
+            onDeleteAutoResponse = { botId, ruleId -> botViewModel.deleteAutoResponse(botId, ruleId) },
+            onSaveWebhook = { botId, label, url, secret, evs -> botViewModel.saveWebhook(botId, label, url, secret, evs) },
+            onDeleteWebhook = { botId, whId -> botViewModel.deleteWebhook(botId, whId) },
+            onTriggerTestWebhook = { botId, whId -> botViewModel.triggerTestWebhook(botId, whId) },
+            onTogglePlugin = { botId, pid, en -> botViewModel.togglePlugin(botId, pid, en) },
+            onUpdateRateLimit = { botId, cfg -> botViewModel.updateRateLimit(botId, cfg) },
+            onDismiss = { showBotDashboardSheet = false }
+        )
+    }
+
+    // Create Bot Dialog
+    if (showCreateBotDialog) {
+        CreateEditBotDialog(
+            existingBot = null,
+            onDismiss = { showCreateBotDialog = false },
+            onSave = { name, handle, desc, avatar, color, pub, perms, events ->
+                botViewModel.createBot(name, handle, desc, avatar, color, pub, perms, events)
+            }
+        )
+    }
+
+    // Edit Existing Bot Dialog
+    editingBot?.let { botToEdit ->
+        CreateEditBotDialog(
+            existingBot = botToEdit,
+            onDismiss = { editingBot = null },
+            onSave = { name, handle, desc, avatar, color, pub, perms, events ->
+                botViewModel.updateBot(botToEdit.id, name, handle, desc, avatar, color, pub, perms, events)
+            },
+            onDeleteBot = {
+                botViewModel.deleteBot(botToEdit.id)
+            }
+        )
+    }
+
+    // RAVEN AI Assistant Modal Sheet
+    if (showAiAssistantSheet) {
+        AiAssistantSheet(
+            uiState = aiUiState,
+            viewModel = aiViewModel,
+            activeServer = activeServer,
+            activeChannel = activeChannel,
+            channelMessages = messages[activeChannel.id].orEmpty(),
+            currentUserId = currentUser.id,
+            onPostToChannel = { text ->
+                if (!activeServer.isDmTab) {
+                    repository.sendMessage(activeChannel.id, text, null, null, 0)
+                    showAiAssistantSheet = false
+                }
+            },
+            onPublishAnnouncement = { title, content, isPinned ->
+                if (!activeServer.isDmTab) {
+                    communityViewModel.publishAnnouncement(activeServer.id, title, content, isPinned)
+                }
+            },
+            onCreateEvent = { title, desc, dateTime, location ->
+                if (!activeServer.isDmTab) {
+                    communityViewModel.createEvent(activeServer.id, title, desc, dateTime, location)
+                }
+            },
+            onDismiss = { showAiAssistantSheet = false }
         )
     }
 }

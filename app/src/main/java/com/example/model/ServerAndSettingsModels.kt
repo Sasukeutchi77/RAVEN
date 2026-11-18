@@ -25,7 +25,9 @@ data class CustomRole(
     val secondaryColorHex: Long? = null,
     val isAdmin: Boolean = false,
     val canKickBan: Boolean = false,
-    val canManageChannels: Boolean = false
+    val canManageChannels: Boolean = false,
+    val permissions: Set<RolePermission> = defaultPermissionsForFlags(isAdmin, canKickBan, canManageChannels),
+    val position: Int = 0
 )
 
 data class AuditLogEntry(
@@ -221,8 +223,48 @@ object StickerCatalog {
 }
 
 fun defaultServerRoles(): List<CustomRole> = listOf(
-    CustomRole("role_admin", "Administrateur", 0xFF5865F2, 0xFFEB459E, isAdmin = true, canKickBan = true, canManageChannels = true),
-    CustomRole("role_mod", "Modérateur", 0xFF23A55A, 0xFF00D4AA, isAdmin = false, canKickBan = true, canManageChannels = true),
-    CustomRole("role_vip", "VIP Orbs", 0xFFF0B232, 0xFFFF5E62, isAdmin = false, canKickBan = false, canManageChannels = false),
-    CustomRole("role_member", "Membre", 0xFF949BA4, null, isAdmin = false, canKickBan = false, canManageChannels = false)
+    CustomRole(
+        id = "role_admin",
+        name = "Administrateur",
+        colorHex = 0xFF5865F2,
+        secondaryColorHex = 0xFFEB459E,
+        isAdmin = true,
+        canKickBan = true,
+        canManageChannels = true,
+        permissions = defaultPermissionsForFlags(isAdmin = true, canKickBan = true, canManageChannels = true),
+        position = 3
+    ),
+    CustomRole(
+        id = "role_mod",
+        name = "Modérateur",
+        colorHex = 0xFF23A55A,
+        secondaryColorHex = 0xFF00D4AA,
+        isAdmin = false,
+        canKickBan = true,
+        canManageChannels = true,
+        permissions = defaultPermissionsForFlags(isAdmin = false, canKickBan = true, canManageChannels = true),
+        position = 2
+    ),
+    CustomRole(
+        id = "role_vip",
+        name = "VIP Orbs",
+        colorHex = 0xFFF0B232,
+        secondaryColorHex = 0xFFFF5E62,
+        isAdmin = false,
+        canKickBan = false,
+        canManageChannels = false,
+        permissions = setOf(RolePermission.SEND_MESSAGES, RolePermission.CONNECT_VOICE, RolePermission.MANAGE_INVITES),
+        position = 1
+    ),
+    CustomRole(
+        id = "role_member",
+        name = "Membre",
+        colorHex = 0xFF949BA4,
+        secondaryColorHex = null,
+        isAdmin = false,
+        canKickBan = false,
+        canManageChannels = false,
+        permissions = setOf(RolePermission.SEND_MESSAGES, RolePermission.CONNECT_VOICE),
+        position = 0
+    )
 )
