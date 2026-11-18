@@ -39,6 +39,7 @@ import androidx.compose.ui.layout.ContentScale
 import coil.compose.AsyncImage
 import com.example.model.*
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.StoryUiState
 import com.example.util.AudioPlayerHelper
 import com.example.util.AudioRecorderHelper
 import com.example.util.CloudinaryHelper
@@ -81,6 +82,10 @@ fun DirectMessagesView(
     onOpenGlobalSearch: () -> Unit = {},
     onOpenSharedMedia: (dmId: String, title: String) -> Unit = { _, _ -> },
     showNavigationDrawerButton: Boolean = true,
+    storyUiState: StoryUiState = StoryUiState(),
+    onCreateStoryClick: () -> Unit = {},
+    onOpenStoryGroup: (StoryAuthorGroup) -> Unit = {},
+    onOpenStoryModeration: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -1181,6 +1186,16 @@ fun DirectMessagesView(
                     }
 
                     else -> {
+                        item {
+                            StoriesStrip(
+                                currentUser = currentUser,
+                                uiState = storyUiState,
+                                onCreateStoryClick = onCreateStoryClick,
+                                onOpenAuthorGroup = onOpenStoryGroup,
+                                onOpenModerationSheet = onOpenStoryModeration
+                            )
+                        }
+
                         item {
                             Text(
                                 text = "MESSAGES DIRECTS & GROUPES (${filteredConversations.size})",

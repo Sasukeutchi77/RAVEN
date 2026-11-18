@@ -710,3 +710,304 @@ test("RAVEN AI conversations, immutable messages, server context access, and quo
   );
 });
 
+test("Advanced Voice Channels: channel lock, capacity/role fields, kickedVoiceUids block, and staff voice peer kick", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("servers").doc("v_srv").set({
+      name: "Voice Hub",
+      ownerId: ALICE_UID,
+      adminIds: [ALICE_UID],
+      moderatorIds: [CHARLIE_UID],
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      isPublic: false,
+    });
+    await db.collection("servers").doc("v_srv").collection("channels").doc("v_ch").set({
+      serverId: "v_srv",
+      name: "Vocal Géné",
+      type: "VOICE",
+      isPublic: false,
+      isLocked: false,
+      maxParticipants: 5,
+      allowedRoleIds: ["vip_role"],
+      kickedVoiceUids: [],
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+
+  const chRefAlice = aliceDb.collection("servers").doc("v_srv").collection("channels").doc("v_ch");
+  const chRefBob = bobDb.collection("servers").doc("v_srv").collection("channels").doc("v_ch");
+  const chRefCharlie = charlieDb.collection("servers").doc("v_srv").collection("channels").doc("v_ch");
+
+  // 1. Regular member (Bob) CANNOT lock channel or alter maxParticipants
+  await assertFails(chRefBob.update({ isLocked: true }));
+  await assertFails(chRefBob.update({ maxParticipants: 50 }));
+
+  // 2. When unlocked, Bob CAN join voice_peers with speaking & connectionState metadata
+  await assertSucceeds(
+    chRefBob.collection("voice_peers").doc(BOB_UID).set({
+      uid: BOB_UID,
+      displayName: "Bob",
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      isPublic: false,
+      isMuted: false,
+      isDeafened: false,
+      isCameraOn: false,
+      isScreenSharing: false,
+      isSpeaking: true,
+      connectionState: "CONNECTED",
+      reconnectAttempt: 0,
+    })
+  );
+
+  // 3. Moderator (Charlie) CAN lock the channel and kick Bob from voice_peers
+  await assertSucceeds(chRefCharlie.update({ isLocked: true }));
+  await assertSucceeds(chRefCharlie.collection("voice_peers").doc(BOB_UID).delete());
+
+  // 4. While channel is locked, regular member Bob CANNOT rejoin voice_peers, whereas Admin Alice CAN
+  await assertFails(
+    chRefBob.collection("voice_peers").doc(BOB_UID).set({
+      uid: BOB_UID,
+      displayName: "Bob",
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      isPublic: false,
+      isSpeaking: false,
+    })
+  );
+  await assertSucceeds(
+    chRefAlice.collection("voice_peers").doc(ALICE_UID).set({
+      uid: ALICE_UID,
+      displayName: "Alice",
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      isPublic: false,
+      isSpeaking: true,
+    })
+  );
+
+  // 5. Even when unlocked, if Bob is in kickedVoiceUids, Bob CANNOT join voice_peers
+  await assertSucceeds(chRefCharlie.update({ isLocked: false, kickedVoiceUids: [BOB_UID] }));
+  await assertFails(
+    chRefBob.collection("voice_peers").doc(BOB_UID).set({
+      uid: BOB_UID,
+      displayName: "Bob",
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      isPublic: false,
+    })
+  );
+});
+
+test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, owner deletion, reporting, and staff moderation", async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("servers").doc("story_srv").set({
+      name: "Story Mod HQ",
+      ownerId: ALICE_UID,
+      adminIds: [ALICE_UID],
+      moderatorIds: [CHARLIE_UID],
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      isPublic: false,
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+  const EVE_UID = "eve_outsider";
+  const eveDb = testEnv.authenticatedContext(EVE_UID).firestore();
+  const now = Date.now();
+
+  // 1. Reject insecure / spoofed story creation (javascript: URL, non-zero initial views, authorId spoof)
+  await assertFails(
+    aliceDb.collection("stories").doc("st_bad_url").set({
+      authorId: ALICE_UID,
+      authorName: "Alice",
+      mediaType: "IMAGE",
+      mediaUrl: "javascript:alert(1)",
+      visibility: "PUBLIC",
+      durationHours: 24,
+      createdAtMs: now,
+      expiresAtMs: now + 3600000,
+      viewCount: 0,
+      viewerIds: [],
+      reportCount: 0,
+      moderatedHidden: false,
+    })
+  );
+  await assertFails(
+    bobDb.collection("stories").doc("st_spoof").set({
+      authorId: ALICE_UID,
+      authorName: "Alice",
+      mediaType: "TEXT",
+      textContent: "Spoof",
+      visibility: "PUBLIC",
+      durationHours: 24,
+      createdAtMs: now,
+      expiresAtMs: now + 3600000,
+      viewCount: 0,
+      viewerIds: [],
+      reportCount: 0,
+      moderatedHidden: false,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("stories").doc("st_fake_views").set({
+      authorId: ALICE_UID,
+      authorName: "Alice",
+      mediaType: "TEXT",
+      textContent: "Boosted views",
+      visibility: "PUBLIC",
+      durationHours: 24,
+      createdAtMs: now,
+      expiresAtMs: now + 3600000,
+      viewCount: 99,
+      viewerIds: [],
+      reportCount: 0,
+      moderatedHidden: false,
+    })
+  );
+
+  // 2. Alice publishes valid PUBLIC text story and CUSTOM_USERS story restricted to Bob only
+  await assertSucceeds(
+    aliceDb.collection("stories").doc("st_pub").set({
+      authorId: ALICE_UID,
+      authorName: "Alice",
+      mediaType: "TEXT",
+      textContent: "Bonjour RAVEN !",
+      caption: "Public 24h",
+      visibility: "PUBLIC",
+      allowedViewerIds: [],
+      moderatorIds: [CHARLIE_UID],
+      moderationServerId: "story_srv",
+      durationHours: 24,
+      createdAtMs: now,
+      expiresAtMs: now + 24 * 3600000,
+      viewCount: 0,
+      viewerIds: [],
+      reportCount: 0,
+      moderatedHidden: false,
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("stories").doc("st_priv").set({
+      authorId: ALICE_UID,
+      authorName: "Alice",
+      mediaType: "IMAGE",
+      mediaUrl: "https://cdn.example.com/story_alice.jpg",
+      visibility: "CUSTOM_USERS",
+      allowedViewerIds: [ALICE_UID, BOB_UID],
+      moderatorIds: [],
+      durationHours: 12,
+      createdAtMs: now,
+      expiresAtMs: now + 12 * 3600000,
+      viewCount: 0,
+      viewerIds: [],
+      reportCount: 0,
+      moderatedHidden: false,
+    })
+  );
+
+  // 3. Privacy check: Bob can read st_priv; Eve (outsider) CANNOT read st_priv or run unfiltered queries
+  await assertSucceeds(bobDb.collection("stories").doc("st_priv").get());
+  await assertSucceeds(bobDb.collection("stories").where("visibility", "==", "PUBLIC").get());
+  await assertSucceeds(bobDb.collection("stories").where("allowedViewerIds", "array-contains", BOB_UID).get());
+  await assertFails(eveDb.collection("stories").doc("st_priv").get());
+  await assertFails(eveDb.collection("stories").get());
+
+  // 4. View tracking: Bob records his view on st_pub (+1 count & subcollection doc), CANNOT tamper content or spoof others
+  await assertSucceeds(
+    bobDb.collection("stories").doc("st_pub").collection("views").doc(BOB_UID).set({
+      viewerId: BOB_UID,
+      storyId: "st_pub",
+      authorId: ALICE_UID,
+      viewerName: "Bob",
+      viewedAtMs: now + 1000,
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("stories").doc("st_pub").update({
+      viewerIds: [BOB_UID],
+      viewCount: 1,
+    })
+  );
+  // Spoofing another viewer or modifying textContent must fail
+  await assertFails(
+    bobDb.collection("stories").doc("st_pub").collection("views").doc(EVE_UID).set({
+      viewerId: EVE_UID,
+      storyId: "st_pub",
+      viewerName: "Eve",
+      viewedAtMs: now + 1000,
+    })
+  );
+  await assertFails(
+    bobDb.collection("stories").doc("st_pub").update({
+      textContent: "Contenu piraté",
+    })
+  );
+  // Bob CANNOT list viewers list of Alice's story; Alice CAN list viewers
+  await assertFails(bobDb.collection("stories").doc("st_pub").collection("views").get());
+  await assertSucceeds(aliceDb.collection("stories").doc("st_pub").collection("views").get());
+
+  // 5. Reporting & Staff Moderation: Bob reports st_pub, non-mod Bob/Eve cannot moderate or resolve report, Moderator Charlie CAN
+  await assertSucceeds(
+    bobDb.collection("story_reports").doc("rep_1").set({
+      storyId: "st_pub",
+      storyAuthorId: ALICE_UID,
+      storyAuthorName: "Alice",
+      storyPreview: "Bonjour RAVEN !",
+      storyMediaType: "TEXT",
+      reporterUid: BOB_UID,
+      reporterName: "Bob",
+      reason: "SPAM",
+      details: "Test report",
+      status: "PENDING",
+      moderatorIds: [CHARLIE_UID],
+      moderationServerId: "story_srv",
+      createdAtMs: now + 2000,
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("stories").doc("st_pub").update({
+      reportCount: 1,
+    })
+  );
+  await assertFails(
+    bobDb.collection("stories").doc("st_pub").update({
+      moderatedHidden: true,
+      moderationReason: "Bob fake mod",
+      moderatedByUid: BOB_UID,
+    })
+  );
+  await assertFails(
+    bobDb.collection("story_reports").doc("rep_1").update({
+      status: "DISMISSED",
+      reviewedByUid: BOB_UID,
+    })
+  );
+
+  // Moderator Charlie CAN hide story & resolve report
+  await assertSucceeds(
+    charlieDb.collection("stories").doc("st_pub").update({
+      moderatedHidden: true,
+      moderationReason: "Spam vérifié",
+      moderatedByUid: CHARLIE_UID,
+    })
+  );
+  await assertSucceeds(
+    charlieDb.collection("story_reports").doc("rep_1").update({
+      status: "REMOVED",
+      reviewedByUid: CHARLIE_UID,
+    })
+  );
+  // Once hidden by moderator, Eve can no longer read st_pub
+  await assertFails(eveDb.collection("stories").doc("st_pub").get());
+
+  // 6. Non-owner Bob CANNOT delete st_priv; Owner Alice CAN delete her story and views cascade
+  await assertFails(bobDb.collection("stories").doc("st_priv").delete());
+  await assertSucceeds(aliceDb.collection("stories").doc("st_priv").delete());
+});
+
+
+

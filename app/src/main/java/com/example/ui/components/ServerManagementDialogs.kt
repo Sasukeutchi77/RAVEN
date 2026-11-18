@@ -258,6 +258,7 @@ fun ServerSettingsSheet(
     onBoostServer: () -> Boolean = { false },
     onUpdateServerBannerColor: (Long) -> Unit = {},
     onUpdateChannelSettings: (channelId: String, slowmodeSeconds: Int, isReadOnly: Boolean) -> Unit = { _, _, _ -> },
+    onOpenFullAdminDashboard: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val palette = ravenPalette()
@@ -291,7 +292,7 @@ fun ServerSettingsSheet(
             ) {
                 Icon(Icons.Default.AdminPanelSettings, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(24.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Gestion de ${server.name}",
                         color = palette.textPrimary,
@@ -303,6 +304,17 @@ fun ServerSettingsSheet(
                         color = palette.textMuted,
                         fontSize = 12.sp
                     )
+                }
+                if (onOpenFullAdminDashboard != null) {
+                    FilledTonalButton(
+                        onClick = {
+                            onDismiss()
+                            onOpenFullAdminDashboard()
+                        },
+                        modifier = Modifier.testTag("settings_open_full_admin_btn")
+                    ) {
+                        Text("Admin Pro", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 

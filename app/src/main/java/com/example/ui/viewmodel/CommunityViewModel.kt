@@ -22,11 +22,16 @@ class CommunityViewModel(
     val communityRepo: CommunityRepository
 ) : ViewModel() {
 
+    val customizationRepo = ServerCustomizationRepository(communityRepo)
+
     private val _uiState = MutableStateFlow(CommunityUiState())
     val uiState: StateFlow<CommunityUiState> = _uiState.asStateFlow()
 
     fun observeCommunity(serverId: String) {
         communityRepo.startListeningCommunity(serverId)
+        viewModelScope.launch {
+            customizationRepo.fetchStaffSecuritySettings(serverId)
+        }
     }
 
     fun clearFeedback() {
@@ -210,6 +215,125 @@ class CommunityViewModel(
             _uiState.value = _uiState.value.copy(searchResults = list)
         }
     }
+
+    fun updateIdentityAndTheme(
+        serverId: String,
+        name: String,
+        uniqueHandle: String,
+        description: String,
+        iconText: String,
+        iconPresetKey: String?,
+        imageUrl: String?,
+        bannerUrl: String?,
+        accentColorHex: Long,
+        secondaryColorHex: Long,
+        surfaceStyle: ServerThemeSurfaceStyle,
+        categoryTag: String
+    ) = runCommunityAction("Identité & thème du serveur enregistrés !") {
+        customizationRepo.updateIdentityAndTheme(
+            serverId, name, uniqueHandle, description, iconText, iconPresetKey,
+            imageUrl, bannerUrl, accentColorHex, secondaryColorHex, surfaceStyle, categoryTag
+        )
+    }
+
+    fun upsertCategory(
+        serverId: String,
+        categoryId: String?,
+        name: String,
+        isPrivate: Boolean,
+        allowedRoleIds: List<String> = emptyList()
+    ) = runCommunityAction("Catégorie mise à jour !") {
+        customizationRepo.upsertCategory(serverId, categoryId, name, isPrivate, allowedRoleIds)
+    }
+
+    fun moveCategoryOrder(serverId: String, categoryId: String, delta: Int) =
+        runCommunityAction("Ordre des catégories mis à jour.") {
+            customizationRepo.moveCategoryOrder(serverId, categoryId, delta)
+        }
+
+    fun upsertChannelCustomization(
+        serverId: String,
+        channelId: String?,
+        name: String,
+        topic: String,
+        type: ChannelType,
+        categoryName: String,
+        iconKey: String?,
+        slowmodeSeconds: Int,
+        isReadOnly: Boolean,
+        isPrivate: Boolean,
+        allowedRoles: List<UserRole> = emptyList(),
+        allowedRoleIds: List<String> = emptyList(),
+        maxParticipants: Int = 0,
+        bitrateKbps: Int = 64
+    ) = runCommunityAction("Salon enregistré !") {
+        customizationRepo.upsertChannelCustomization(
+            serverId, channelId, name, topic, type, categoryName, iconKey,
+            slowmodeSeconds, isReadOnly, isPrivate, allowedRoles, allowedRoleIds,
+            maxParticipants, bitrateKbps
+        )
+    }
+
+    fun moveChannelOrder(serverId: String, channelId: String, delta: Int) =
+        runCommunityAction("Ordre des salons mis à jour.") {
+            customizationRepo.moveChannelOrder(serverId, channelId, delta)
+        }
+
+    fun saveOrUpdateCustomRole(
+        serverId: String,
+        name: String,
+        colorHex: Long,
+        secondaryHex: Long?,
+        perms: Set<RolePermission>,
+        existingRoleId: String? = null
+    ) = runCommunityAction("Rôle enregistré !") {
+        communityRepo.saveCustomRole(serverId, name, colorHex, secondaryHex, perms, existingRoleId)
+    }
+
+    fun moveRoleOrder(serverId: String, roleId: String, delta: Int) =
+        runCommunityAction("Hiérarchie des rôles mise à jour.") {
+            customizationRepo.moveRoleOrder(serverId, roleId, delta)
+        }
+
+    fun deleteCustomRole(serverId: String, roleId: String) =
+        runCommunityAction("Rôle supprimé.") {
+            customizationRepo.deleteCustomRole(serverId, roleId)
+        }
+
+    fun updateWelcomeAndGoodbye(
+        serverId: String,
+        welcomeConfig: ServerWelcomeConfig,
+        homeWelcomeMessage: String
+    ) = runCommunityAction("Messages d'accueil & départ enregistrés !") {
+        customizationRepo.updateWelcomeAndGoodbyeConfig(serverId, welcomeConfig, homeWelcomeMessage)
+    }
+
+    fun updateNotificationConfig(serverId: String, config: ServerNotificationConfig) =
+        runCommunityAction("Paramètres de notifications enregistrés !") {
+            customizationRepo.updateNotificationConfig(serverId, config)
+        }
+
+    fun updateRulesAndVerification(
+        serverId: String,
+        rulesList: List<String>,
+        rulesGuidelines: String,
+        requireRulesAcceptance: Boolean,
+        verificationLevel: ServerVerificationLevel
+    ) = runCommunityAction("Règles & niveau de vérification enregistrés !") {
+        customizationRepo.updateRulesAndVerification(
+            serverId, rulesList, rulesGuidelines, requireRulesAcceptance, verificationLevel
+        )
+    }
+
+    fun updateModerationConfig(serverId: String, config: ServerModerationConfig) =
+        runCommunityAction("Paramètres de modération enregistrés !") {
+            customizationRepo.updateModerationConfig(serverId, config)
+        }
+
+    fun updatePrivacyConfig(serverId: String, isPublic: Boolean, config: ServerPrivacyConfig) =
+        runCommunityAction("Paramètres de confidentialité enregistrés !") {
+            customizationRepo.updatePrivacyConfig(serverId, isPublic, config)
+        }
 
     override fun onCleared() {
         communityRepo.releaseListeners()

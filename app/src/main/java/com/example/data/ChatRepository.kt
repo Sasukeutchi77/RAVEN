@@ -233,6 +233,7 @@ class ChatRepository(
 
     internal fun firestoreDb(): FirebaseFirestore? = firestore
     internal fun authInstance(): FirebaseAuth? = currentAuth()
+    internal fun appContextOrNull(): Context? = appContext
     internal val repoScope: CoroutineScope get() = scope
     internal fun serversMutableFlow(): MutableStateFlow<List<Server>> = _servers
     internal fun discoverMutableFlow(): MutableStateFlow<List<PublicServerListing>> = _discoverServers
@@ -244,6 +245,28 @@ class ChatRepository(
         sourceLabel: String,
         type: NotificationType = NotificationType.SYSTEM
     ) = addNotification(title, body, sourceLabel, type)
+
+    internal fun appendSystemChannelMessage(channelId: String, msg: Message) {
+        val currentList = _messages.value[channelId] ?: emptyList()
+        _messages.value = _messages.value + (channelId to (currentList + msg))
+        syncNewMessageToFirestore(msg, channelId)
+    }
+
+    internal fun sendStoryReplyDm(recipient: User, storyPreview: String, replyText: String) {
+        val existingConv = _directConversations.value.find { !it.isGroup && it.friend.id == recipient.id }
+        val targetConv = existingConv ?: DirectConversation(
+            id = "dm_${recipient.id}",
+            friend = recipient,
+            lastMessage = "",
+            lastMessageTime = "À l'instant"
+        ).also { created ->
+            _directConversations.value = listOf(created) + _directConversations.value
+        }
+        sendMessage(
+            targetId = targetConv.id,
+            text = "Réponse à votre Story (« $storyPreview ») : $replyText"
+        )
+    }
 
     internal var botCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
     internal var aiCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
@@ -618,6 +641,11 @@ class ChatRepository(
         activePublicProfilesListener?.remove()
         jukeboxAudioEngine?.stopAndRelease()
         webRtcVoiceManager?.shutdown()
+        _connectedVoiceChannel.value = null
+        _localVideoTrack.value = null
+        _remoteVideoTracks.value = emptyMap()
+        _rtcSessionState.value = webRtcVoiceManager?.sessionState?.value
+            ?: WebRtcSessionState(isConnected = false)
     }
 
     fun syncFirebaseUser() {
@@ -964,13 +992,74 @@ class ChatRepository(
         return _servers.value.asSequence().flatMap { it.channels.asSequence() }.find { it.id == channelId }
     }
 
-    private fun canPostInTarget(targetId: String): Boolean {
+    private fun canPostInTarget(targetId: String, text: String = ""): Boolean {
         val ch = findChannelById(targetId) ?: return true
         if (ch.isReadOnly) {
             _lastSendBlockedReason.value = "Ce salon est verrouillé en lecture seule."
             return false
         }
-        if (ch.slowmodeSeconds > 0) {
+        val srv = _servers.value.find { it.id == ch.serverId }
+        val uid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        val isStaff = srv != null && (
+            CommunityPermissions.isOwner(srv, uid) ||
+                CommunityPermissions.effectiveRole(srv, uid) in setOf(UserRole.ADMIN, UserRole.MODERATOR)
+            )
+
+        if (srv != null && !isStaff) {
+            val memberObj = srv.members.find { it.id == uid }
+            if (memberObj?.isTimedOut == true) {
+                _lastSendBlockedReason.value = "Vous êtes actuellement en timeout sur ce serveur."
+                return false
+            }
+            val mod = srv.customization.moderation
+            if (mod.antiRaidModeEnabled) {
+                _lastSendBlockedReason.value = "Protection Anti-Raid active : messages restreints au staff."
+                return false
+            }
+            if (srv.customization.verificationLevel == ServerVerificationLevel.HIGH) {
+                val isVerifiedProfile = _currentUser.value.level >= 5 ||
+                    _currentUser.value.badges.isNotEmpty() ||
+                    (memberObj?.level ?: 0) >= 5
+                if (!isVerifiedProfile) {
+                    _lastSendBlockedReason.value = "Vérification Élevée : niveau 5+ ou badge requis pour écrire."
+                    return false
+                }
+            }
+            if (mod.autoModEnabled && text.isNotBlank()) {
+                if (mod.blockBadWords && mod.blockedWords.isNotEmpty()) {
+                    val lower = text.lowercase()
+                    val matchedWord = mod.blockedWords.firstOrNull { w ->
+                        w.isNotBlank() && lower.contains(w.trim().lowercase())
+                    }
+                    if (matchedWord != null) {
+                        _lastSendBlockedReason.value = "Auto-Mod : terme interdit détecté."
+                        return false
+                    }
+                }
+                if (mod.blockSpamAndLinks) {
+                    val linkRegex = Regex("(https?://|www\\.|discord\\.gg/)", RegexOption.IGNORE_CASE)
+                    if (linkRegex.containsMatchIn(text)) {
+                        _lastSendBlockedReason.value = "Auto-Mod : liens externes bloqués sur ce serveur."
+                        return false
+                    }
+                }
+                if (mod.maxMentionsPerMessage > 0) {
+                    val mentionCount = Regex("@[A-Za-z0-9_\\-]+").findAll(text).count()
+                    if (mentionCount > mod.maxMentionsPerMessage) {
+                        _lastSendBlockedReason.value =
+                            "Auto-Mod : trop de mentions ($mentionCount/${mod.maxMentionsPerMessage} max)."
+                        return false
+                    }
+                }
+            }
+        }
+
+        val effectiveSlowmode = when {
+            ch.slowmodeSeconds > 0 -> ch.slowmodeSeconds
+            !isStaff -> srv?.customization?.moderation?.defaultSlowmodeSeconds ?: 0
+            else -> 0
+        }
+        if (effectiveSlowmode > 0) {
             val now = System.currentTimeMillis()
             val until = _slowmodeCooldownUntilByChannel.value[targetId] ?: 0L
             if (now < until) {
@@ -979,7 +1068,7 @@ class ChatRepository(
                 return false
             }
             _slowmodeCooldownUntilByChannel.value =
-                _slowmodeCooldownUntilByChannel.value + (targetId to (now + ch.slowmodeSeconds * 1000L))
+                _slowmodeCooldownUntilByChannel.value + (targetId to (now + effectiveSlowmode * 1000L))
         }
         _lastSendBlockedReason.value = null
         return true
@@ -995,7 +1084,7 @@ class ChatRepository(
         attachmentType: String? = null
     ) {
         if (text.isBlank() && imageUrl == null && audioUrl == null && attachmentName == null) return
-        if (!canPostInTarget(targetId)) return
+        if (!canPostInTarget(targetId, text)) return
 
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
         val currentTime = timeFormat.format(Date())

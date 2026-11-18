@@ -103,7 +103,9 @@ data class Channel(
     val kickedVoiceUids: List<String> = emptyList(),
     val activeVoiceUsers: List<User> = emptyList(),
     val stageSpeakerIds: List<String> = emptyList(),
-    val stageRaisedHandIds: List<String> = emptyList()
+    val stageRaisedHandIds: List<String> = emptyList(),
+    val position: Int = 0,
+    val iconKey: String? = null
 )
 
 data class Server(
@@ -137,7 +139,13 @@ data class Server(
     val categories: List<ChannelCategory> = emptyList(),
     val invites: List<CommunityInvite> = emptyList(),
     val announcements: List<CommunityAnnouncement> = emptyList(),
-    val isVerified: Boolean = false
+    val isVerified: Boolean = false,
+    val serverRulesList: List<String> = listOf(
+        "Respectez tous les membres et le staff.",
+        "Aucun spam, lien suspect ou auto-promotion abusive.",
+        "Utilisez les salons adaptés à chaque sujet."
+    ),
+    val customization: ServerCustomizationSettings = ServerCustomizationSettings()
 )
 
 data class DirectConversation(

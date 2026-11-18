@@ -53,6 +53,7 @@ fun ChannelListDrawer(
     onOpenCategoriesManager: () -> Unit = {},
     onOpenBotsDashboard: () -> Unit = {},
     onOpenAiAssistant: () -> Unit = {},
+    onOpenAdminDashboard: () -> Unit = {},
     onEditCommunity: () -> Unit = {},
     onLeaveCommunity: () -> Unit = {},
     onUserClick: () -> Unit,
@@ -80,18 +81,19 @@ fun ChannelListDrawer(
         color = palette.sidebarBg
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Server Header (with optional Boosted gradient banner)
-            val boostHex = server.customBannerColorHex
+            // Server Header (with optional Boosted or Customized theme gradient banner)
+            val themeAccentHex = server.customization.theme.accentColorHex
+            val boostHex = server.customBannerColorHex ?: themeAccentHex
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(if (server.boostLevel > 0) 68.dp else 56.dp)
                     .then(
-                        if (boostHex != null && server.boostLevel > 0) {
+                        if (server.boostLevel > 0 || themeAccentHex != 0xFF5865F2L) {
                             Modifier.background(
                                 Brush.horizontalGradient(
                                     listOf(
-                                        Color(boostHex).copy(alpha = 0.5f),
+                                        Color(boostHex).copy(alpha = if (server.boostLevel > 0) 0.5f else 0.28f),
                                         palette.sidebarBg
                                     )
                                 )
@@ -202,6 +204,16 @@ fun ChannelListDrawer(
                             onClick = {
                                 isMenuOpen = false
                                 onOpenCategoriesManager()
+                            }
+                        )
+                    }
+                    if (canManageCommunity || canManageRoles || canManageChannels || isOwner) {
+                        DropdownMenuItem(
+                            text = { Text("Administration complète", color = palette.accent, fontWeight = FontWeight.Bold) },
+                            leadingIcon = { Icon(Icons.Default.AdminPanelSettings, contentDescription = null, tint = palette.accent) },
+                            onClick = {
+                                isMenuOpen = false
+                                onOpenAdminDashboard()
                             }
                         )
                     }
@@ -446,9 +458,11 @@ fun ChannelListDrawer(
                 }
             }
 
-            // Channels List (supports empty categories + permission visibility)
+            // Channels List (sorted by position, supports category privacy & custom icons)
             val groupedChannels = server.channels.groupBy { it.category }
-            val orderedCategories = (server.categories.map { it.name } + groupedChannels.keys).distinct()
+            val orderedCategories = (server.categories.sortedBy { it.position }.map { it.name } + groupedChannels.keys)
+                .distinct()
+                .filter { catName -> CommunityPermissions.isCategoryAccessible(server, catName, currentUser.id) }
 
             LazyColumn(
                 modifier = Modifier
@@ -457,9 +471,9 @@ fun ChannelListDrawer(
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
             ) {
                 orderedCategories.forEach { categoryName ->
-                    val channels = groupedChannels[categoryName].orEmpty().filter {
-                        CommunityPermissions.isChannelAccessible(server, it, currentUser.id)
-                    }
+                    val channels = groupedChannels[categoryName].orEmpty()
+                        .filter { CommunityPermissions.isChannelAccessible(server, it, currentUser.id) }
+                        .sortedBy { it.position }
                     item(key = "cat_$categoryName") {
                         ChannelCategoryHeader(
                             name = categoryName,
@@ -558,13 +572,7 @@ fun ChannelRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                imageVector = when {
-                    channel.isLocked || channel.isPrivate -> Icons.Default.Lock
-                    isStage -> Icons.Default.Podcasts
-                    isVoice -> Icons.Default.VolumeUp
-                    isAnnouncement -> Icons.Default.Campaign
-                    else -> Icons.Default.Tag
-                },
+                imageVector = resolveChannelIconVector(channel),
                 contentDescription = null,
                 tint = when {
                     channel.isLocked -> DiscordRed

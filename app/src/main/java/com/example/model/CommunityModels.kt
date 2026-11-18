@@ -14,7 +14,8 @@ enum class RolePermission(val label: String, val description: String) {
     SPEAK_VOICE("Parler en vocal", "Activer le microphone dans les salons vocaux"),
     STREAM_VIDEO("Partager sa caméra", "Diffuser son flux vidéo dans les salons vocaux"),
     SHARE_SCREEN("Partager son écran", "Diffuser son écran en direct dans un salon vocal"),
-    MANAGE_VOICE("Modérer le vocal", "Verrouiller un salon vocal, exclure ou limiter l'accès")
+    MANAGE_VOICE("Modérer le vocal", "Verrouiller un salon vocal, exclure ou limiter l'accès"),
+    MANAGE_MODERATION("Modération & Sécurité", "Configurer Auto-Mod, vérification, confidentialité et règles")
 }
 
 fun defaultPermissionsForFlags(

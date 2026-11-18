@@ -88,7 +88,21 @@ object CommunityPermissions {
                 .thenBy { it.name.lowercase(Locale.ROOT) }
         )
 
+    fun isCategoryAccessible(server: Server, categoryName: String, userId: String): Boolean {
+        val cat = server.categories.find { it.name.equals(categoryName, ignoreCase = true) } ?: return true
+        if (!cat.isPrivate && cat.allowedRoleIds.isEmpty()) return true
+        if (isOwner(server, userId)) return true
+        val userRole = effectiveRole(server, userId)
+        if (userRole == UserRole.ADMIN) return true
+        if (cat.allowedRoleIds.isEmpty()) {
+            return userRole == UserRole.MODERATOR
+        }
+        val memberCustomRoleId = server.members.find { it.id == userId }?.customRoleId
+        return memberCustomRoleId != null && memberCustomRoleId in cat.allowedRoleIds
+    }
+
     fun isChannelAccessible(server: Server, channel: Channel, userId: String): Boolean {
+        if (!isCategoryAccessible(server, channel.category, userId)) return false
         if (!channel.isPrivate && channel.allowedRoles.isEmpty() && channel.allowedRoleIds.isEmpty()) return true
         if (isOwner(server, userId)) return true
         val userRole = effectiveRole(server, userId)

@@ -516,7 +516,7 @@ fun CommunityCategoriesSheet(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
-                                        imageVector = if (ch.type == ChannelType.VOICE) Icons.Default.VolumeUp else Icons.Default.Tag,
+                                        imageVector = resolveChannelIconVector(ch),
                                         contentDescription = null,
                                         tint = palette.textMuted,
                                         modifier = Modifier.size(16.dp)

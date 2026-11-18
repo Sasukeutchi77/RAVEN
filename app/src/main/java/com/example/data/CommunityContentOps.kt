@@ -178,6 +178,8 @@ suspend fun CommunityRepository.kickMember(serverId: String, targetUid: String):
         if (res.isFailure) return Result.failure(res.exceptionOrNull()!!)
     }
 
+    val kickedName = srv.members.find { it.id == targetUid }?.name ?: "Membre"
+    customizationHelper.dispatchMembershipSystemMessage(srv, kickedName, isJoin = false)
     replaceServerInFlow(srv.copy(members = srv.members.filterNot { it.id == targetUid }))
     return Result.success(Unit)
 }
@@ -258,6 +260,13 @@ suspend fun CommunityRepository.createChannel(
     val clean = name.trim().lowercase().replace(" ", "-")
     if (clean.isBlank()) return Result.failure(IllegalArgumentException("Nom de salon requis."))
     val catLabel = categoryName.ifBlank { if (type == ChannelType.VOICE) "SALONS VOCAUX" else "SALONS TEXTUELS" }
+    val nextPos = (srv.channels.maxOfOrNull { it.position } ?: -1) + 1
+    val defaultIcon = when (type) {
+        ChannelType.ANNOUNCEMENT -> "announcement"
+        ChannelType.VOICE -> "mic"
+        ChannelType.STAGE -> "stage"
+        ChannelType.TEXT -> "tag"
+    }
     val ch = Channel(
         id = "c_${UUID.randomUUID().toString().take(6)}",
         serverId = serverId,
@@ -265,7 +274,9 @@ suspend fun CommunityRepository.createChannel(
         type = type,
         category = catLabel,
         isPrivate = isPrivate,
-        allowedRoles = if (isPrivate) allowedRoles.ifEmpty { listOf(UserRole.ADMIN, UserRole.MODERATOR) } else emptyList()
+        allowedRoles = if (isPrivate) allowedRoles.ifEmpty { listOf(UserRole.ADMIN, UserRole.MODERATOR) } else emptyList(),
+        position = nextPos,
+        iconKey = defaultIcon
     )
     val db = chatRepo.firestoreDb()
     val authUser = chatRepo.authInstance()?.currentUser
@@ -377,7 +388,10 @@ suspend fun CommunityRepository.publishAnnouncement(
     }
 
     replaceServerInFlow(srv.copy(announcements = listOf(ann) + srv.announcements))
-    chatRepo.notifyCommunityEvent("Annonce : $cleanTitle", cleanContent.take(120), srv.name)
+    val notifCfg = srv.customization.notifications
+    if (notifCfg.defaultLevel != ServerNotificationLevel.NONE || notifCfg.highlightAnnouncements) {
+        chatRepo.notifyCommunityEvent("Annonce : $cleanTitle", cleanContent.take(120), srv.name)
+    }
     return Result.success(ann)
 }
 
@@ -516,19 +530,22 @@ suspend fun CommunityRepository.searchCommunities(query: String, filter: Communi
 
     val myIds = localServers.map { it.id }.toSet()
     return allMerged.filter { item ->
+        val srvObj = localServers.find { it.id == item.id }
+        val discoverableOk = filter == CommunitySearchFilter.MY_COMMUNITIES ||
+            srvObj == null ||
+            (srvObj.isPublic && srvObj.customization.privacy.discoverableInCatalog)
         val filterOk = when (filter) {
             CommunitySearchFilter.ALL -> true
             CommunitySearchFilter.PUBLIC_ONLY -> true
             CommunitySearchFilter.VERIFIED -> item.isVerified
             CommunitySearchFilter.MY_COMMUNITIES -> item.id in myIds
         }
-        val srvObj = localServers.find { it.id == item.id }
         val queryOk = q.isBlank() ||
             item.name.contains(q, ignoreCase = true) ||
             item.description.contains(q, ignoreCase = true) ||
             item.categoryTag.contains(q, ignoreCase = true) ||
             (srvObj?.uniqueHandle?.contains(q, ignoreCase = true) == true)
-        filterOk && queryOk && (filter != CommunitySearchFilter.MY_COMMUNITIES || srvObj == null || uid in srvObj.members.map { it.id } || srvObj.ownerId == uid || srvObj.id == "server_main")
+        discoverableOk && filterOk && queryOk && (filter != CommunitySearchFilter.MY_COMMUNITIES || srvObj == null || uid in srvObj.members.map { it.id } || srvObj.ownerId == uid || srvObj.id == "server_main")
     }
 }
 
@@ -546,6 +563,19 @@ fun CommunityRepository.startListeningCommunity(serverId: String) {
         if (members.isNotEmpty()) {
             chatRepo.servers.value.find { it.id == serverId }?.let { curr ->
                 replaceServerInFlow(curr.copy(members = members))
+            }
+        }
+    }
+
+    val chQuery = if (srv.isPublic) srvRef.collection("channels").whereEqualTo("isPublic", true)
+    else srvRef.collection("channels").whereArrayContains("memberIds", authUser.uid)
+    channelsListener = chQuery.addSnapshotListener { snap, err ->
+        if (err != null || snap == null || snap.isEmpty) return@addSnapshotListener
+        val remoteChannels = snap.documents.mapNotNull { CommunityFirestoreSync.mapDocToChannel(it) }
+            .sortedBy { it.position }
+        if (remoteChannels.isNotEmpty()) {
+            chatRepo.servers.value.find { it.id == serverId }?.let { curr ->
+                replaceServerInFlow(curr.copy(channels = remoteChannels))
             }
         }
     }
@@ -586,10 +616,12 @@ fun CommunityRepository.startListeningCommunity(serverId: String) {
 
 fun CommunityRepository.releaseListeners() {
     membersListener?.remove()
+    channelsListener?.remove()
     announcementsListener?.remove()
     eventsListener?.remove()
     invitesListener?.remove()
     membersListener = null
+    channelsListener = null
     announcementsListener = null
     eventsListener = null
     invitesListener = null

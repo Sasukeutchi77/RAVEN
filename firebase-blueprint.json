@@ -107,7 +107,15 @@
         "categoryTag": { "type": "string" },
         "description": { "type": "string" },
         "rulesGuidelines": { "type": "string" },
+        "serverRulesList": { "type": "array" },
         "homeWelcomeMessage": { "type": "string" },
+        "verificationLevel": { "type": "string" },
+        "requireRulesAcceptance": { "type": "boolean" },
+        "themeConfig": { "type": "object" },
+        "welcomeConfig": { "type": "object" },
+        "notificationConfig": { "type": "object" },
+        "moderationConfig": { "type": "object" },
+        "privacyConfig": { "type": "object" },
         "boostCount": { "type": "integer" },
         "boostLevel": { "type": "integer" },
         "categories": { "type": "array" },
@@ -117,6 +125,46 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["name", "ownerId", "memberIds"]
+    },
+    "AdminSecuritySettings": {
+      "title": "AdminSecuritySettings",
+      "description": "Staff-readable and Admin-writable sensitive moderation, blocked words, and anti-raid configuration.",
+      "type": "object",
+      "properties": {
+        "serverId": { "type": "string" },
+        "settingType": { "type": "string" },
+        "updatedByUid": { "type": "string" },
+        "verificationLevel": { "type": "string" },
+        "autoModEnabled": { "type": "boolean" },
+        "blockSpamAndLinks": { "type": "boolean" },
+        "blockBadWords": { "type": "boolean" },
+        "blockedWords": { "type": "array" },
+        "defaultSlowmodeSeconds": { "type": "integer" },
+        "maxMentionsPerMessage": { "type": "integer" },
+        "antiRaidModeEnabled": { "type": "boolean" },
+        "requireInviteApproval": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["serverId", "settingType", "updatedByUid"]
+    },
+    "AdminPublicPolicy": {
+      "title": "AdminPublicPolicy",
+      "description": "Admin-managed public verification, rules, and privacy policy document.",
+      "type": "object",
+      "properties": {
+        "serverId": { "type": "string" },
+        "settingType": { "type": "string" },
+        "updatedByUid": { "type": "string" },
+        "verificationLevel": { "type": "string" },
+        "requireRulesAcceptance": { "type": "boolean" },
+        "serverRulesList": { "type": "array" },
+        "discoverableInCatalog": { "type": "boolean" },
+        "allowInviteLinks": { "type": "boolean" },
+        "allowMemberDms": { "type": "boolean" },
+        "hideMemberListForNonStaff": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["serverId", "settingType", "updatedByUid"]
     },
     "CommunityMember": {
       "title": "CommunityMember",
@@ -189,6 +237,8 @@
         "type": { "type": "string" },
         "category": { "type": "string" },
         "topic": { "type": "string" },
+        "position": { "type": "integer" },
+        "iconKey": { "type": "string" },
         "isPrivate": { "type": "boolean" },
         "isLocked": { "type": "boolean" },
         "maxParticipants": { "type": "integer" },
@@ -453,6 +503,84 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "dayKey", "requestsToday", "dailyLimit"]
+    },
+    "Story": {
+      "title": "Story",
+      "description": "Ephemeral text, image, or video story with privacy audience, expiration TTL, view tracking, and moderation status.",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorAvatarUrl": { "type": "string" },
+        "authorAvatarColor": { "type": "integer" },
+        "mediaType": { "type": "string" },
+        "mediaUrl": { "type": "string" },
+        "thumbnailUrl": { "type": "string" },
+        "mediaMimeType": { "type": "string" },
+        "mediaSizeBytes": { "type": "integer" },
+        "textContent": { "type": "string" },
+        "caption": { "type": "string" },
+        "backgroundColorHex": { "type": "integer" },
+        "secondaryColorHex": { "type": "integer" },
+        "textColorHex": { "type": "integer" },
+        "visibility": { "type": "string" },
+        "allowedViewerIds": { "type": "array" },
+        "moderatorIds": { "type": "array" },
+        "moderationServerId": { "type": "string" },
+        "durationHours": { "type": "integer" },
+        "createdAtMs": { "type": "integer" },
+        "expiresAtMs": { "type": "integer" },
+        "viewCount": { "type": "integer" },
+        "viewerIds": { "type": "array" },
+        "reportCount": { "type": "integer" },
+        "moderatedHidden": { "type": "boolean" },
+        "moderationReason": { "type": "string" },
+        "moderatedByUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorId", "authorName", "mediaType", "visibility", "durationHours", "createdAtMs", "expiresAtMs"]
+    },
+    "StoryView": {
+      "title": "StoryView",
+      "description": "Per-viewer attendance entry under a story document.",
+      "type": "object",
+      "properties": {
+        "viewerId": { "type": "string" },
+        "storyId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "viewerName": { "type": "string" },
+        "viewerAvatarUrl": { "type": "string" },
+        "viewerAvatarColor": { "type": "integer" },
+        "viewedAtMs": { "type": "integer" },
+        "viewedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["viewerId", "storyId", "viewerName", "viewedAtMs"]
+    },
+    "StoryReport": {
+      "title": "StoryReport",
+      "description": "User-submitted story moderation report reviewed by community moderators.",
+      "type": "object",
+      "properties": {
+        "storyId": { "type": "string" },
+        "storyAuthorId": { "type": "string" },
+        "storyAuthorName": { "type": "string" },
+        "storyPreview": { "type": "string" },
+        "storyMediaType": { "type": "string" },
+        "storyMediaUrl": { "type": "string" },
+        "reporterUid": { "type": "string" },
+        "reporterName": { "type": "string" },
+        "reason": { "type": "string" },
+        "details": { "type": "string" },
+        "status": { "type": "string" },
+        "moderatorIds": { "type": "array" },
+        "moderationServerId": { "type": "string" },
+        "reviewedByUid": { "type": "string" },
+        "createdAtMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storyId", "storyAuthorId", "reporterUid", "reason", "status"]
     }
   },
   "firestore": {
@@ -512,6 +640,10 @@
       "schema": { "$ref": "#/entities/ServerBotInstallation" },
       "description": "Server-scoped bot installation, assigned role, and granted permissions."
     },
+    "/servers/{serverId}/admin_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/AdminSecuritySettings" },
+      "description": "Protected server security, moderation, rules, and privacy configuration documents."
+    },
     "/servers/{serverId}/members/{memberId}": {
       "schema": { "$ref": "#/entities/CommunityMember" },
       "description": "Per-member roles, granular permissions, and online status in a community."
@@ -555,6 +687,18 @@
     "/direct_conversations/{conversationId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/Message" },
       "description": "Messages inside a direct conversation."
+    },
+    "/stories/{storyId}": {
+      "schema": { "$ref": "#/entities/Story" },
+      "description": "Ephemeral RAVEN Stories with audience visibility and TTL."
+    },
+    "/stories/{storyId}/views/{viewerId}": {
+      "schema": { "$ref": "#/entities/StoryView" },
+      "description": "Unique per-user view tracking records for a story."
+    },
+    "/story_reports/{reportId}": {
+      "schema": { "$ref": "#/entities/StoryReport" },
+      "description": "Moderation reports flagged against stories."
     }
   }
 }

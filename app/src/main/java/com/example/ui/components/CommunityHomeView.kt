@@ -41,6 +41,7 @@ fun CommunityHomeView(
     onOpenRolesMatrix: () -> Unit,
     onOpenCategories: () -> Unit,
     onOpenNotifications: () -> Unit,
+    onOpenAdminDashboard: () -> Unit = {},
     onLeaveCommunity: () -> Unit,
     onPublishAnnouncement: (title: String, content: String, isPinned: Boolean) -> Unit,
     onDeleteAnnouncement: (announcementId: String) -> Unit,
@@ -115,15 +116,26 @@ fun CommunityHomeView(
                 IconButton(onClick = onOpenInvites, modifier = Modifier.size(48.dp).testTag("community_home_invites_btn")) {
                     Icon(Icons.Default.PersonAdd, contentDescription = "Invitations", tint = palette.accent)
                 }
-                if (canManageCommunity || canManageRoles || !isOwner) {
+                if (canManageCommunity || canManageRoles || canManageChannels || isOwner) {
                     IconButton(
-                        onClick = { if (canManageCommunity) onEditCommunity() else onLeaveCommunity() },
+                        onClick = onOpenAdminDashboard,
+                        modifier = Modifier.size(48.dp).testTag("community_home_admin_dashboard_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AdminPanelSettings,
+                            contentDescription = "Administration avancée",
+                            tint = accentColor
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = onLeaveCommunity,
                         modifier = Modifier.size(48.dp).testTag("community_home_settings_btn")
                     ) {
                         Icon(
-                            imageVector = if (canManageCommunity) Icons.Default.Edit else Icons.Default.ExitToApp,
-                            contentDescription = if (canManageCommunity) "Modifier la communauté" else "Quitter la communauté",
-                            tint = if (canManageCommunity) palette.textPrimary else DiscordRed
+                            imageVector = Icons.Default.ExitToApp,
+                            contentDescription = "Quitter la communauté",
+                            tint = DiscordRed
                         )
                     }
                 }
@@ -313,12 +325,27 @@ fun CommunityHomeView(
                 item {
                     Surface(color = palette.cardBg, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, palette.border)) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 Icon(Icons.Default.Gavel, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Règlement & Informations générales", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("Règlement & Sécurité", color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                                Surface(color = accentColor.copy(alpha = 0.16f), shape = RoundedCornerShape(6.dp)) {
+                                    Text(
+                                        text = "Vérif. ${server.customization.verificationLevel.label}",
+                                        color = accentColor,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
-                            Text(server.rulesGuidelines, color = palette.textSecondary, fontSize = 13.sp)
+                            if (server.serverRulesList.isNotEmpty()) {
+                                server.serverRulesList.forEachIndexed { idx, rule ->
+                                    Text("${idx + 1}. $rule", color = palette.textSecondary, fontSize = 13.sp)
+                                }
+                            } else {
+                                Text(server.rulesGuidelines, color = palette.textSecondary, fontSize = 13.sp)
+                            }
                             HorizontalDivider(color = palette.border)
                             Text(
                                 text = "Code d'invitation principal : ${server.inviteCode} • Niveau Boost : ${server.boostLevel}",
@@ -447,18 +474,34 @@ fun CommunityHomeView(
 
             // Tab 3: Online & Members Directory
             if (selectedTab == 3) {
-                item {
-                    Text(
-                        text = "MEMBRES EN LIGNE ($onlineCount / ${server.members.size})",
-                        color = palette.textMuted,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                val sorted = CommunityPermissions.sortedMembers(server)
-                items(sorted, key = { "mem_${it.id}" }) { member ->
-                    val role = CommunityPermissions.effectiveRole(server, member.id)
-                    val isTargetOwner = CommunityPermissions.isOwner(server, member.id)
+                val isStaffViewer = isOwner || CommunityPermissions.effectiveRole(server, currentUser.id) in setOf(UserRole.ADMIN, UserRole.MODERATOR)
+                if (server.customization.privacy.hideMemberListForNonStaff && !isStaffViewer) {
+                    item {
+                        Surface(color = palette.cardBg, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, palette.border)) {
+                            Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.VisibilityOff, contentDescription = null, tint = DiscordAmber)
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "La liste détaillée des membres est masquée par les paramètres de confidentialité du serveur.",
+                                    color = palette.textSecondary,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    item {
+                        Text(
+                            text = "MEMBRES EN LIGNE ($onlineCount / ${server.members.size})",
+                            color = palette.textMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    val sorted = CommunityPermissions.sortedMembers(server)
+                    items(sorted, key = { "mem_${it.id}" }) { member ->
+                        val role = CommunityPermissions.effectiveRole(server, member.id)
+                        val isTargetOwner = CommunityPermissions.isOwner(server, member.id)
                     val statusColor = when (member.status) {
                         UserStatus.ONLINE -> DiscordGreen
                         UserStatus.IDLE -> DiscordAmber
@@ -522,6 +565,7 @@ fun CommunityHomeView(
                             }
                         }
                     }
+                    }
                 }
             }
 
@@ -541,7 +585,13 @@ fun CommunityHomeView(
                     }
                 }
                 val grouped = server.channels.groupBy { it.category }
-                grouped.forEach { (cat, chList) ->
+                val orderedCats = (server.categories.sortedBy { it.position }.map { it.name } + grouped.keys)
+                    .distinct()
+                    .filter { CommunityPermissions.isCategoryAccessible(server, it, currentUser.id) }
+                orderedCats.forEach { cat ->
+                    val chList = grouped[cat].orEmpty()
+                        .filter { CommunityPermissions.isChannelAccessible(server, it, currentUser.id) }
+                        .sortedBy { it.position }
                     item(key = "home_cat_$cat") {
                         Text(cat.uppercase(), color = palette.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
@@ -557,12 +607,7 @@ fun CommunityHomeView(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    imageVector = when (ch.type) {
-                                        ChannelType.VOICE -> Icons.Default.VolumeUp
-                                        ChannelType.STAGE -> Icons.Default.Podcasts
-                                        ChannelType.ANNOUNCEMENT -> Icons.Default.Campaign
-                                        else -> Icons.Default.Tag
-                                    },
+                                    imageVector = resolveChannelIconVector(ch),
                                     contentDescription = null,
                                     tint = accentColor,
                                     modifier = Modifier.size(18.dp)

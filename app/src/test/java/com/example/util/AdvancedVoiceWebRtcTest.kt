@@ -209,15 +209,16 @@ class AdvancedVoiceWebRtcTest {
         assertFalse(joinFullResult)
         assertTrue(repo.voiceError.value?.contains("complet", ignoreCase = true) == true)
 
-        // Now promote acting user to Moderator -> can join locked channel and kick a user from fullChannel
+        // Now promote acting user to Moderator -> can join locked channel, kick u_1 from fullChannel, then join freed slot
         @Suppress("UNCHECKED_CAST")
         (field.get(repo) as kotlinx.coroutines.flow.MutableStateFlow<User>).value = modUser
-        assertTrue(repo.joinVoiceChannel(fullChannel))
+        assertTrue(repo.joinVoiceChannel(lockedChannel))
         assertTrue(repo.kickUserFromVoice("srv_perm", "ch_full", "u_1"))
         val updatedFull = repo.servers.value.first { it.id == "srv_perm" }.channels.first { it.id == "ch_full" }
         assertFalse(updatedFull.activeVoiceUsers.any { it.id == "u_1" })
         assertTrue("u_1" in updatedFull.kickedVoiceUids)
         assertFalse(CommunityPermissions.canJoinVoiceChannel(server.copy(channels = listOf(updatedFull)), updatedFull, "u_1").allowed)
+        assertTrue(repo.joinVoiceChannel(updatedFull))
 
         repo.releaseResources()
     }
@@ -368,7 +369,7 @@ class AdvancedVoiceWebRtcTest {
 
     @Test
     fun `screen rotation preserves active voice call camera screen share and full room UI via ViewModel`() {
-        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        val controller = Robolectric.buildActivity(androidx.activity.ComponentActivity::class.java).setup()
         val activity = controller.get()
         val vm = ViewModelProvider(activity)[RavenAppViewModel::class.java]
         val repo = vm.repository
@@ -385,6 +386,7 @@ class AdvancedVoiceWebRtcTest {
         assertTrue(repo.rtcSessionState.value.isScreenSharing)
 
         // Simulate Android orientation rotation (recreate Activity)
+        // Transient configuration change stop must NOT pause camera
         controller.recreate()
         val recreatedActivity = controller.get()
         val recreatedVm = ViewModelProvider(recreatedActivity)[RavenAppViewModel::class.java]
@@ -398,10 +400,21 @@ class AdvancedVoiceWebRtcTest {
         assertTrue(recreatedVm.repository.rtcSessionState.value.isCameraStreaming)
         assertTrue(recreatedVm.repository.rtcSessionState.value.isScreenSharing)
 
-        // Clean shutdown releases resources when activity genuinely finishes
-        recreatedVm.repository.leaveVoiceChannel()
-        assertNull(recreatedVm.repository.connectedVoiceChannel.value)
-        assertFalse(recreatedVm.repository.rtcSessionState.value.isConnected)
+        // Non-config background/foreground transition pauses camera then resumes it
+        recreatedVm.repository.onAppBackgroundStateChanged(isBackground = true)
+        assertFalse(recreatedVm.repository.rtcSessionState.value.isCameraStreaming)
+        assertTrue(recreatedVm.repository.rtcSessionState.value.cameraPausedInBackground)
+        assertTrue(recreatedVm.repository.rtcSessionState.value.isConnected)
+
+        recreatedVm.repository.onAppBackgroundStateChanged(isBackground = false)
+        assertTrue(recreatedVm.repository.rtcSessionState.value.isCameraStreaming)
+        assertFalse(recreatedVm.repository.rtcSessionState.value.cameraPausedInBackground)
+
+        // Genuine activity finish clears ViewModel -> releases WebRTC & foreground resources
+        recreatedActivity.finish()
         controller.pause().stop().destroy()
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertFalse(repo.rtcSessionState.value.isConnected)
+        assertNull(repo.connectedVoiceChannel.value)
     }
 }

@@ -241,12 +241,48 @@ service cloud.firestore {
              (!('categoryTag' in data) || data.categoryTag == null || (data.categoryTag is string && data.categoryTag.size() <= 40)) &&
              (!('description' in data) || data.description == null || (data.description is string && data.description.size() <= 500)) &&
              (!('rulesGuidelines' in data) || data.rulesGuidelines == null || (data.rulesGuidelines is string && data.rulesGuidelines.size() <= 1000)) &&
+             (!('serverRulesList' in data) || (data.serverRulesList is list && data.serverRulesList.size() <= 40)) &&
              (!('homeWelcomeMessage' in data) || data.homeWelcomeMessage == null || (data.homeWelcomeMessage is string && data.homeWelcomeMessage.size() <= 500)) &&
+             (!('verificationLevel' in data) || (data.verificationLevel is string && data.verificationLevel in ['NONE', 'LOW', 'MEDIUM', 'HIGH'])) &&
+             (!('requireRulesAcceptance' in data) || data.requireRulesAcceptance is bool) &&
+             (!('themeConfig' in data) || data.themeConfig is map) &&
+             (!('welcomeConfig' in data) || data.welcomeConfig is map) &&
+             (!('notificationConfig' in data) || data.notificationConfig is map) &&
+             (!('moderationConfig' in data) || (data.moderationConfig is map && !('blockedWords' in data.moderationConfig))) &&
+             (!('privacyConfig' in data) || data.privacyConfig is map) &&
              (!('adminIds' in data) || (data.adminIds is list && data.adminIds.size() <= 50)) &&
              (!('moderatorIds' in data) || (data.moderatorIds is list && data.moderatorIds.size() <= 100)) &&
              (!('isPublic' in data) || data.isPublic is bool) &&
              (!('boostCount' in data) || data.boostCount is int) &&
              (!('boostLevel' in data) || data.boostLevel is int);
+    }
+
+    function isValidAdminSecuritySettings(data, serverId) {
+      return data.serverId == serverId &&
+             data.settingType == 'security' &&
+             data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+             (!('verificationLevel' in data) || (data.verificationLevel is string && data.verificationLevel in ['NONE', 'LOW', 'MEDIUM', 'HIGH'])) &&
+             (!('autoModEnabled' in data) || data.autoModEnabled is bool) &&
+             (!('blockSpamAndLinks' in data) || data.blockSpamAndLinks is bool) &&
+             (!('blockBadWords' in data) || data.blockBadWords is bool) &&
+             (!('blockedWords' in data) || (data.blockedWords is list && data.blockedWords.size() <= 200)) &&
+             (!('defaultSlowmodeSeconds' in data) || (data.defaultSlowmodeSeconds is int && data.defaultSlowmodeSeconds >= 0 && data.defaultSlowmodeSeconds <= 600)) &&
+             (!('maxMentionsPerMessage' in data) || (data.maxMentionsPerMessage is int && data.maxMentionsPerMessage >= 1 && data.maxMentionsPerMessage <= 50)) &&
+             (!('antiRaidModeEnabled' in data) || data.antiRaidModeEnabled is bool) &&
+             (!('requireInviteApproval' in data) || data.requireInviteApproval is bool);
+    }
+
+    function isValidAdminPublicPolicy(data, serverId) {
+      return data.serverId == serverId &&
+             data.settingType == 'public_policy' &&
+             data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+             (!('verificationLevel' in data) || (data.verificationLevel is string && data.verificationLevel in ['NONE', 'LOW', 'MEDIUM', 'HIGH'])) &&
+             (!('requireRulesAcceptance' in data) || data.requireRulesAcceptance is bool) &&
+             (!('serverRulesList' in data) || (data.serverRulesList is list && data.serverRulesList.size() <= 40)) &&
+             (!('discoverableInCatalog' in data) || data.discoverableInCatalog is bool) &&
+             (!('allowInviteLinks' in data) || data.allowInviteLinks is bool) &&
+             (!('allowMemberDms' in data) || data.allowMemberDms is bool) &&
+             (!('hideMemberListForNonStaff' in data) || data.hideMemberListForNonStaff is bool);
     }
 
     function isValidCommunityMember(data) {
@@ -286,6 +322,8 @@ service cloud.firestore {
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.type is string && data.type in ['TEXT', 'VOICE', 'ANNOUNCEMENT', 'STAGE'] &&
              data.memberIds is list && data.memberIds.size() <= 200 &&
+             (!('position' in data) || (data.position is int && data.position >= 0 && data.position <= 500)) &&
+             (!('iconKey' in data) || data.iconKey == null || (data.iconKey is string && data.iconKey.size() <= 32)) &&
              (!('isPublic' in data) || data.isPublic is bool) &&
              (!('isPrivate' in data) || data.isPrivate is bool) &&
              (!('isLocked' in data) || data.isLocked is bool) &&
@@ -376,6 +414,92 @@ service cloud.firestore {
              (!('lastMessageTime' in data) || data.lastMessageTime == null || (data.lastMessageTime is string && data.lastMessageTime.size() <= 40));
     }
 
+    function storyDoc(storyId) {
+      return get(/databases/$(database)/documents/stories/$(storyId));
+    }
+
+    function storyExists(storyId) {
+      return exists(/databases/$(database)/documents/stories/$(storyId));
+    }
+
+    function isStoryModerator(data) {
+      return (('moderationServerId' in data) && data.moderationServerId != null && isCommunityStaff(data.moderationServerId)) ||
+             ('moderatorIds' in data && request.auth.uid in data.moderatorIds);
+    }
+
+    function canViewStoryDoc(data) {
+      return data.authorId == request.auth.uid ||
+             isStoryModerator(data) ||
+             (
+               (!('moderatedHidden' in data) || data.moderatedHidden == false) &&
+               (data.visibility == 'PUBLIC' ||
+                (('allowedViewerIds' in data) && request.auth.uid in data.allowedViewerIds))
+             );
+    }
+
+    function isValidStoryUrl(url) {
+      return url is string &&
+             url.size() >= 1 &&
+             url.size() <= 900 &&
+             !url.matches('.*javascript:.*') &&
+             !url.matches('.*\\.\\..*');
+    }
+
+    function isValidStoryDoc(data) {
+      return data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
+             data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 64 &&
+             data.mediaType is string && data.mediaType in ['TEXT', 'IMAGE', 'VIDEO'] &&
+             data.visibility is string && data.visibility in ['PUBLIC', 'FRIENDS', 'CUSTOM_USERS'] &&
+             data.durationHours is int && data.durationHours >= 1 && data.durationHours <= 168 &&
+             data.createdAtMs is int && data.expiresAtMs is int && data.expiresAtMs > data.createdAtMs &&
+             data.viewCount is int && data.viewCount >= 0 &&
+             data.reportCount is int && data.reportCount >= 0 &&
+             data.moderatedHidden is bool &&
+             (
+               (data.mediaType == 'TEXT' && 'textContent' in data && data.textContent is string && data.textContent.size() >= 1 && data.textContent.size() <= 500) ||
+               (data.mediaType in ['IMAGE', 'VIDEO'] && 'mediaUrl' in data && isValidStoryUrl(data.mediaUrl))
+             ) &&
+             (!('authorAvatarUrl' in data) || data.authorAvatarUrl == null || (data.authorAvatarUrl is string && data.authorAvatarUrl.size() <= 800)) &&
+             (!('authorAvatarColor' in data) || data.authorAvatarColor is int) &&
+             (!('mediaUrl' in data) || data.mediaUrl == null || isValidStoryUrl(data.mediaUrl)) &&
+             (!('thumbnailUrl' in data) || data.thumbnailUrl == null || isValidStoryUrl(data.thumbnailUrl)) &&
+             (!('mediaMimeType' in data) || data.mediaMimeType == null || (data.mediaMimeType is string && data.mediaMimeType.size() <= 64)) &&
+             (!('mediaSizeBytes' in data) || (data.mediaSizeBytes is int && data.mediaSizeBytes >= 0 && data.mediaSizeBytes <= 52428800)) &&
+             (!('textContent' in data) || (data.textContent is string && data.textContent.size() <= 500)) &&
+             (!('caption' in data) || (data.caption is string && data.caption.size() <= 300)) &&
+             (!('allowedViewerIds' in data) || (data.allowedViewerIds is list && data.allowedViewerIds.size() <= 200)) &&
+             (!('moderatorIds' in data) || (data.moderatorIds is list && data.moderatorIds.size() <= 100)) &&
+             (!('viewerIds' in data) || (data.viewerIds is list && data.viewerIds.size() <= 500)) &&
+             (!('moderationServerId' in data) || data.moderationServerId == null || isValidId(data.moderationServerId)) &&
+             (!('moderationReason' in data) || data.moderationReason == null || (data.moderationReason is string && data.moderationReason.size() <= 240)) &&
+             (!('moderatedByUid' in data) || data.moderatedByUid == null || (data.moderatedByUid is string && data.moderatedByUid.size() <= 128));
+    }
+
+    function isValidStoryView(data, storyId) {
+      return data.viewerId is string && data.viewerId.size() >= 1 && data.viewerId.size() <= 128 &&
+             data.storyId == storyId &&
+             data.viewerName is string && data.viewerName.size() >= 1 && data.viewerName.size() <= 64 &&
+             (!('authorId' in data) || (data.authorId is string && data.authorId.size() <= 128)) &&
+             (!('viewerAvatarUrl' in data) || data.viewerAvatarUrl == null || (data.viewerAvatarUrl is string && data.viewerAvatarUrl.size() <= 800)) &&
+             (!('viewerAvatarColor' in data) || data.viewerAvatarColor is int) &&
+             (!('viewedAtMs' in data) || data.viewedAtMs is int);
+    }
+
+    function isValidStoryReport(data) {
+      return data.storyId is string && isValidId(data.storyId) &&
+             data.storyAuthorId is string && data.storyAuthorId.size() >= 1 && data.storyAuthorId.size() <= 128 &&
+             data.reporterUid is string && data.reporterUid.size() >= 1 && data.reporterUid.size() <= 128 &&
+             data.reason is string && data.reason in ['SPAM', 'HARASSMENT', 'NSFW', 'MISINFORMATION', 'OTHER'] &&
+             data.status is string && data.status in ['PENDING', 'REMOVED', 'DISMISSED'] &&
+             (!('details' in data) || (data.details is string && data.details.size() <= 500)) &&
+             (!('storyPreview' in data) || (data.storyPreview is string && data.storyPreview.size() <= 300)) &&
+             (!('storyMediaType' in data) || (data.storyMediaType is string && data.storyMediaType in ['TEXT', 'IMAGE', 'VIDEO'])) &&
+             (!('storyMediaUrl' in data) || data.storyMediaUrl == null || isValidStoryUrl(data.storyMediaUrl)) &&
+             (!('moderatorIds' in data) || (data.moderatorIds is list && data.moderatorIds.size() <= 100)) &&
+             (!('moderationServerId' in data) || data.moderationServerId == null || isValidId(data.moderationServerId)) &&
+             (!('reviewedByUid' in data) || data.reviewedByUid == null || (data.reviewedByUid is string && data.reviewedByUid.size() <= 128));
+    }
+
     // 1. Private User Profile (PII isolated to owner)
     match /users/{userId} {
       allow get, list: if isSignedIn() && request.auth.uid == userId;
@@ -444,7 +568,10 @@ service cloud.firestore {
       allow list: if isSignedIn() &&
                      (resource.data.createdByUid == request.auth.uid || isCommunityStaff(resource.data.serverId));
       allow create: if isSignedIn() && isValidId(code) && isValidCommunityInvite(incoming()) &&
-                       incoming().createdByUid == request.auth.uid && isCommunityStaff(incoming().serverId);
+                       incoming().createdByUid == request.auth.uid && isCommunityStaff(incoming().serverId) &&
+                       (!('privacyConfig' in serverDoc(incoming().serverId).data) ||
+                        !('allowInviteLinks' in serverDoc(incoming().serverId).data.privacyConfig) ||
+                        serverDoc(incoming().serverId).data.privacyConfig.allowInviteLinks == true);
       allow update: if isSignedIn() && isValidId(code) && isValidCommunityInvite(incoming()) &&
                        incoming().serverId == existing().serverId &&
                        incoming().createdByUid == existing().createdByUid && (
@@ -537,6 +664,9 @@ service cloud.firestore {
                             (existing().isPublic == true &&
                              incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])) ||
                             (incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'lastInviteCodeUsed', 'updatedAt']) &&
+                             (!('privacyConfig' in existing()) ||
+                              !('allowInviteLinks' in existing().privacyConfig) ||
+                              existing().privacyConfig.allowInviteLinks == true) &&
                              hasValidCommunityInvite(serverId, incoming()))
                           ))
                        );
@@ -550,6 +680,19 @@ service cloud.firestore {
                                  botExists(botId) &&
                                  (botDoc(botId).data.ownerUid == request.auth.uid || botDoc(botId).data.isPublicCatalog == true);
         allow delete: if isSignedIn() && isValidId(botId) && (isCommunityAdmin(serverId) || isBotOwner(botId));
+      }
+
+      // 5.0b Protected Server Admin & Security Settings
+      match /admin_settings/{settingId} {
+        allow get, list: if isSignedIn() && isValidId(settingId) && (
+          (settingId == 'security' && isCommunityStaff(serverId)) ||
+          (settingId == 'public_policy' && isServerMemberOrPublic(serverId))
+        );
+        allow create, update: if isSignedIn() && isValidId(settingId) && isCommunityAdmin(serverId) && (
+          (settingId == 'security' && isValidAdminSecuritySettings(incoming(), serverId)) ||
+          (settingId == 'public_policy' && isValidAdminPublicPolicy(incoming(), serverId))
+        );
+        allow delete: if isSignedIn() && isValidId(settingId) && isServerOwner(serverId);
       }
 
       // 5.1 Community Members & Granular Role Assignments
@@ -609,7 +752,9 @@ service cloud.firestore {
         allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
         allow create: if isSignedIn() && isValidId(channelId) && isValidChannel(incoming()) && isCommunityStaff(serverId);
         allow update: if isSignedIn() && isValidId(channelId) && isValidChannel(incoming()) && (
-                           isCommunityStaff(serverId) ||
+                           isCommunityAdmin(serverId) ||
+                           (isCommunityMod(serverId) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['isLocked', 'slowmodeSeconds', 'isReadOnly', 'kickedVoiceUids', 'topic', 'updatedAt'])) ||
                            (isServerMemberOrPublic(serverId) &&
                             incoming().diff(existing()).affectedKeys().hasOnly(['lastTypingUid', 'lastTypingName', 'lastTypingMs']))
                          );
@@ -694,6 +839,101 @@ service cloud.firestore {
                          request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds;
         allow delete: if isSignedIn() && isValidId(messageId) && existing().senderId == request.auth.uid;
       }
+    }
+
+    // 7. RAVEN Stories, Audience Privacy, View Tracking & Moderation
+    match /stories/{storyId} {
+      allow get: if isSignedIn() && isValidId(storyId) &&
+                    (resource == null || canViewStoryDoc(existing()));
+      allow list: if isSignedIn() && (
+                     resource.data.visibility == 'PUBLIC' ||
+                     resource.data.authorId == request.auth.uid ||
+                     request.auth.uid in resource.data.allowedViewerIds ||
+                     isStoryModerator(resource.data)
+                   );
+      allow create: if isSignedIn() && isValidId(storyId) &&
+                       isValidStoryDoc(incoming()) &&
+                       incoming().authorId == request.auth.uid &&
+                       incoming().viewCount == 0 &&
+                       (!('viewerIds' in incoming()) || incoming().viewerIds.size() == 0) &&
+                       incoming().reportCount == 0 &&
+                       incoming().moderatedHidden == false;
+      allow update: if isSignedIn() && isValidId(storyId) &&
+                       isValidStoryDoc(incoming()) &&
+                       incoming().authorId == existing().authorId &&
+                       incoming().createdAtMs == existing().createdAtMs &&
+                       incoming().expiresAtMs == existing().expiresAtMs && (
+                         // 7a. Author adjusting privacy settings
+                         (existing().authorId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['visibility', 'allowedViewerIds', 'caption', 'updatedAt'])) ||
+                         // 7b. Authorized viewer recording a view (incrementing once)
+                         (canViewStoryDoc(existing()) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['viewerIds', 'viewCount', 'updatedAt']) &&
+                          request.auth.uid in incoming().viewerIds &&
+                          incoming().viewCount >= existing().viewCount &&
+                          incoming().viewCount <= existing().viewCount + 1) ||
+                         // 7c. Authorized viewer reporting the story (+1 reportCount)
+                         (canViewStoryDoc(existing()) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['reportCount', 'updatedAt']) &&
+                          incoming().reportCount == existing().reportCount + 1) ||
+                         // 7d. Verified moderator moderating the story
+                         (isStoryModerator(existing()) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['moderatedHidden', 'moderationReason', 'moderatedByUid', 'updatedAt']))
+                       );
+      allow delete: if isSignedIn() && isValidId(storyId) &&
+                       (existing().authorId == request.auth.uid || isStoryModerator(existing()));
+
+      match /views/{viewerId} {
+        allow get: if isSignedIn() && isValidId(viewerId) && storyExists(storyId) &&
+                      (storyDoc(storyId).data.authorId == request.auth.uid ||
+                       viewerId == request.auth.uid ||
+                       isStoryModerator(storyDoc(storyId).data));
+        allow list: if isSignedIn() && storyExists(storyId) &&
+                       (storyDoc(storyId).data.authorId == request.auth.uid ||
+                        isStoryModerator(storyDoc(storyId).data));
+        allow create, update: if isSignedIn() && isValidId(viewerId) &&
+                                 viewerId == request.auth.uid &&
+                                 storyExists(storyId) &&
+                                 canViewStoryDoc(storyDoc(storyId).data) &&
+                                 isValidStoryView(incoming(), storyId);
+        allow delete: if isSignedIn() && isValidId(viewerId) && (
+                           viewerId == request.auth.uid ||
+                           !storyExists(storyId) ||
+                           storyDoc(storyId).data.authorId == request.auth.uid ||
+                           isStoryModerator(storyDoc(storyId).data)
+                         );
+      }
+    }
+
+    match /story_reports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId) && (
+                    resource == null ||
+                    existing().reporterUid == request.auth.uid ||
+                    isStoryModerator(existing()) ||
+                    (storyExists(existing().storyId) && isStoryModerator(storyDoc(existing().storyId).data))
+                  );
+      allow list: if isSignedIn() && (
+                     resource.data.reporterUid == request.auth.uid ||
+                     isStoryModerator(resource.data)
+                   );
+      allow create: if isSignedIn() && isValidId(reportId) &&
+                       isValidStoryReport(incoming()) &&
+                       incoming().reporterUid == request.auth.uid &&
+                       incoming().status == 'PENDING' &&
+                       storyExists(incoming().storyId) &&
+                       canViewStoryDoc(storyDoc(incoming().storyId).data);
+      allow update: if isSignedIn() && isValidId(reportId) &&
+                       isValidStoryReport(incoming()) &&
+                       incoming().reporterUid == existing().reporterUid &&
+                       incoming().storyId == existing().storyId &&
+                       (isStoryModerator(existing()) ||
+                        (storyExists(existing().storyId) && isStoryModerator(storyDoc(existing().storyId).data)));
+      allow delete: if isSignedIn() && isValidId(reportId) && (
+                       existing().reporterUid == request.auth.uid ||
+                       existing().storyAuthorId == request.auth.uid ||
+                       isStoryModerator(existing()) ||
+                       (storyExists(existing().storyId) && isStoryModerator(storyDoc(existing().storyId).data))
+                     );
     }
   }
 }

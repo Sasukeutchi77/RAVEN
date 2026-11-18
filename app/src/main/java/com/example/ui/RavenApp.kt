@@ -28,6 +28,7 @@ import com.example.data.BotRepository
 import com.example.data.ChatRepository
 import com.example.data.CommunityPermissions
 import com.example.data.CommunityRepository
+import com.example.data.StoryRepository
 import com.example.data.searchCommunities
 import com.example.model.Channel
 import com.example.model.ChannelType
@@ -40,6 +41,7 @@ import com.example.ui.theme.*
 import com.example.ui.viewmodel.AiAssistantViewModel
 import com.example.ui.viewmodel.BotDashboardViewModel
 import com.example.ui.viewmodel.CommunityViewModel
+import com.example.ui.viewmodel.StoryViewModel
 import com.example.util.AudioPlayerHelper
 import com.example.util.NotificationHelper
 import kotlinx.coroutines.delay
@@ -115,6 +117,10 @@ fun RavenApp(
     val aiViewModel = remember(aiRepo) { AiAssistantViewModel(aiRepo) }
     val aiUiState by aiViewModel.uiState.collectAsState()
 
+    val storyRepo = remember(repository) { StoryRepository(repository) }
+    val storyViewModel = remember(storyRepo) { StoryViewModel(storyRepo) }
+    val storyUiState by storyViewModel.uiState.collectAsState()
+
     val unreadNotificationsCount = remember(notifications) { notifications.count { !it.isRead } }
 
     // Navigation and drawer states
@@ -129,6 +135,9 @@ fun RavenApp(
     var isViewingCommunityHome by remember { mutableStateOf(false) }
     var showBotDashboardSheet by remember { mutableStateOf(false) }
     var showAiAssistantSheet by remember { mutableStateOf(false) }
+    var showCreateStoryDialog by remember { mutableStateOf(false) }
+    var viewingStoryAuthorId by remember { mutableStateOf<String?>(null) }
+    var showStoryModerationSheet by remember { mutableStateOf(false) }
     var showCreateBotDialog by remember { mutableStateOf(false) }
     var editingBot by remember { mutableStateOf<RavenBot?>(null) }
     var editingCommunityServer by remember { mutableStateOf<Server?>(null) }
@@ -150,6 +159,7 @@ fun RavenApp(
     var showServerInviteDialog by remember { mutableStateOf(false) }
     var showServerEventsSheet by remember { mutableStateOf(false) }
     var showServerSettingsSheet by remember { mutableStateOf(false) }
+    var showServerAdminDashboard by remember { mutableStateOf(false) }
     var showInboxSheet by remember { mutableStateOf(false) }
     var showAppSettingsDialog by remember { mutableStateOf(false) }
     var showGlobalSearchSheet by remember { mutableStateOf(false) }
@@ -206,6 +216,14 @@ fun RavenApp(
         }
         botViewModel.startObserving(selectedServerId)
         aiViewModel.startObserving()
+        storyViewModel.startObserving()
+    }
+
+    LaunchedEffect(storyUiState.feedbackMessage, storyUiState.errorMessage) {
+        if (storyUiState.feedbackMessage != null || storyUiState.errorMessage != null) {
+            delay(3500)
+            storyViewModel.clearFeedback()
+        }
     }
 
     LaunchedEffect(communityUiState.feedbackMessage, communityUiState.errorMessage) {
@@ -231,6 +249,11 @@ fun RavenApp(
 
     // Active Server & Channel
     val activeServer = servers.find { it.id == selectedServerId } ?: servers.first()
+    val canViewMemberList = !activeServer.isDmTab && (
+        !activeServer.customization.privacy.hideMemberListForNonStaff ||
+            CommunityPermissions.isOwner(activeServer, currentUser.id) ||
+            CommunityPermissions.effectiveRole(activeServer, currentUser.id) in setOf(UserRole.ADMIN, UserRole.MODERATOR)
+        )
     val activeChannel = activeServer.channels.find { it.id == selectedChannelId }
         ?: activeServer.channels.firstOrNull { it.type == ChannelType.TEXT }
         ?: activeServer.channels.firstOrNull()
@@ -277,6 +300,16 @@ fun RavenApp(
                 onOpenAiAssistant = {
                     if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                     showAiAssistantSheet = true
+                },
+                unseenStoriesCount = storyUiState.unseenGroups.count { !it.isCurrentUser },
+                onOpenStories = {
+                    if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                    val targetGroup = storyUiState.unseenGroups.firstOrNull() ?: storyUiState.allGroups.firstOrNull()
+                    if (targetGroup != null) {
+                        viewingStoryAuthorId = targetGroup.authorId
+                    } else {
+                        showCreateStoryDialog = true
+                    }
                 }
             )
 
@@ -335,6 +368,10 @@ fun RavenApp(
                     onOpenAiAssistant = {
                         if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                         showAiAssistantSheet = true
+                    },
+                    onOpenAdminDashboard = {
+                        if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                        showServerAdminDashboard = true
                     },
                     onEditCommunity = { editingCommunityServer = activeServer },
                     onLeaveCommunity = {
@@ -585,7 +622,11 @@ fun RavenApp(
                                 },
                                 onOpenGlobalSearch = { showGlobalSearchSheet = true },
                                 onOpenSharedMedia = { dmId, title -> sharedMediaTarget = dmId to title },
-                                showNavigationDrawerButton = showDrawerButton
+                                showNavigationDrawerButton = showDrawerButton,
+                                storyUiState = storyUiState,
+                                onCreateStoryClick = { showCreateStoryDialog = true },
+                                onOpenStoryGroup = { grp -> viewingStoryAuthorId = grp.authorId },
+                                onOpenStoryModeration = { showStoryModerationSheet = true }
                             )
                         }
 
@@ -614,6 +655,7 @@ fun RavenApp(
                                 onOpenRolesMatrix = { showRolesMatrixSheet = true },
                                 onOpenCategories = { showCategoriesManagerSheet = true },
                                 onOpenNotifications = { showInboxSheet = true },
+                                onOpenAdminDashboard = { showServerAdminDashboard = true },
                                 onLeaveCommunity = {
                                     communityViewModel.leaveCommunity(activeServer.id) {
                                         isViewingCommunityHome = false
@@ -666,7 +708,9 @@ fun RavenApp(
                                 onToggleDrawer = {
                                     coroutineScope.launch { drawerState.open() }
                                 },
-                                onToggleMemberList = { isMemberListOpen = !isMemberListOpen },
+                                onToggleMemberList = {
+                                    if (canViewMemberList) isMemberListOpen = !isMemberListOpen
+                                },
                                 unreadNotificationsCount = unreadNotificationsCount,
                                 onOpenInbox = { showInboxSheet = true },
                                 chatTheme = chatBackgrounds[activeChannel.id],
@@ -748,7 +792,7 @@ fun RavenApp(
             }
 
             AnimatedVisibility(
-                visible = isMemberListOpen && !activeServer.isDmTab && !effectiveViewingVoiceRoom,
+                visible = isMemberListOpen && canViewMemberList && !effectiveViewingVoiceRoom,
                 enter = slideInHorizontally(initialOffsetX = { it }),
                 exit = slideOutHorizontally(targetOffsetX = { it }),
                 modifier = Modifier.align(Alignment.CenterEnd)
@@ -765,10 +809,10 @@ fun RavenApp(
                     )
                 }
             }
-            // Community, Bot, Voice & AI Action Toast Feedback Banner
-            val bannerError = voiceError ?: communityUiState.errorMessage ?: botUiState.errorMessage
+            // Community, Bot, Voice, Story & AI Action Toast Feedback Banner
+            val bannerError = voiceError ?: storyUiState.errorMessage ?: communityUiState.errorMessage ?: botUiState.errorMessage
                 ?: if (!showAiAssistantSheet) aiUiState.errorMessage else null
-            val bannerText = bannerError ?: communityUiState.feedbackMessage ?: botUiState.feedbackMessage
+            val bannerText = bannerError ?: storyUiState.feedbackMessage ?: communityUiState.feedbackMessage ?: botUiState.feedbackMessage
                 ?: if (!showAiAssistantSheet) aiUiState.feedbackMessage else null
             if (bannerText != null) {
                 Surface(
@@ -794,6 +838,7 @@ fun RavenApp(
                         Spacer(modifier = Modifier.width(8.dp))
                         TextButton(onClick = {
                             repository.clearVoiceError()
+                            storyViewModel.clearFeedback()
                             communityViewModel.clearFeedback()
                             botViewModel.clearFeedback()
                             aiViewModel.clearFeedback()
@@ -1123,6 +1168,7 @@ fun RavenApp(
             onUpdateChannelSettings = { chId, slowSec, readOnly ->
                 repository.updateChannelSettings(activeServer.id, chId, slowSec, readOnly)
             },
+            onOpenFullAdminDashboard = { showServerAdminDashboard = true },
             onDismiss = { showServerSettingsSheet = false }
         )
     }
@@ -1356,6 +1402,128 @@ fun RavenApp(
                 }
             },
             onDismiss = { showAiAssistantSheet = false }
+        )
+    }
+
+    // Create Story Dialog (Text, Image, Video, TTL, Privacy)
+    if (showCreateStoryDialog) {
+        val storyFriends = remember(directConversations) {
+            (directConversations.filter { !it.isGroup }.map { it.friend } + com.example.data.MockData.allFriends)
+                .distinctBy { it.id }
+                .filter { it.id != currentUser.id }
+        }
+        CreateStoryDialog(
+            friends = storyFriends,
+            isBusy = storyUiState.isBusy,
+            onDismiss = { showCreateStoryDialog = false },
+            onPublishText = { txt, cap, pCol, sCol, vis, allowed, hrs ->
+                storyViewModel.publishTextStory(txt, cap, pCol, sCol, vis, allowed, hrs) {
+                    showCreateStoryDialog = false
+                }
+            },
+            onPublishMedia = { uri, type, cap, vis, allowed, hrs ->
+                storyViewModel.publishMediaStory(context, uri, type, cap, vis, allowed, hrs) {
+                    showCreateStoryDialog = false
+                }
+            }
+        )
+    }
+
+    // Fullscreen Story Viewer
+    viewingStoryAuthorId?.let { startAuthor ->
+        val viewerGroups = storyUiState.allGroups
+        if (viewerGroups.isNotEmpty()) {
+            StoryViewerDialog(
+                groups = viewerGroups,
+                initialAuthorId = startAuthor,
+                currentUserId = currentUser.id,
+                isModerator = storyUiState.isModerator,
+                loadedViewers = storyUiState.activeStoryViewers,
+                onMarkStoryViewed = { storyId -> storyViewModel.markStoryViewed(storyId) },
+                onLoadViewers = { storyId -> storyViewModel.loadStoryViewers(storyId) },
+                onDeleteStory = { storyId -> storyViewModel.deleteStory(storyId) },
+                onReportStory = { storyId, reason, details -> storyViewModel.reportStory(storyId, reason, details) },
+                onModerateHideStory = { storyId, reason -> storyViewModel.moderateStory(storyId, true, reason) },
+                onReplyToStory = { storyId, reply -> storyViewModel.replyToStory(storyId, reply) },
+                onDismiss = { viewingStoryAuthorId = null }
+            )
+        } else {
+            viewingStoryAuthorId = null
+        }
+    }
+
+    // Story Moderation & Cleanup Sheet
+    if (showStoryModerationSheet) {
+        StoryModerationSheet(
+            pendingReports = storyUiState.pendingReports,
+            allReports = storyUiState.allReports,
+            onModerateStory = { storyId, hideOnly, reason, reportId ->
+                storyViewModel.moderateStory(storyId, hideOnly, reason, reportId)
+            },
+            onDismissReport = { reportId -> storyViewModel.dismissReport(reportId) },
+            onRunCleanup = { storyViewModel.runManualCleanup() },
+            onDismiss = { showStoryModerationSheet = false }
+        )
+    }
+
+    // Complete Server Customization & Administration Dashboard
+    if (showServerAdminDashboard && !activeServer.isDmTab) {
+        ServerAdminDashboardSheet(
+            server = activeServer,
+            currentUser = currentUser,
+            communityUiState = communityUiState,
+            onUpdateIdentityAndTheme = { name, handle, desc, iconText, iconPreset, imgUrl, banUrl, accentHex, secHex, style, catTag ->
+                communityViewModel.updateIdentityAndTheme(
+                    activeServer.id, name, handle, desc, iconText, iconPreset,
+                    imgUrl, banUrl, accentHex, secHex, style, catTag
+                )
+            },
+            onUpsertCategory = { catId, name, isPriv, roleIds ->
+                communityViewModel.upsertCategory(activeServer.id, catId, name, isPriv, roleIds)
+            },
+            onMoveCategoryOrder = { catId, delta ->
+                communityViewModel.moveCategoryOrder(activeServer.id, catId, delta)
+            },
+            onDeleteCategory = { catName ->
+                communityViewModel.deleteCategory(activeServer.id, catName)
+            },
+            onUpsertChannel = { chId, name, topic, type, catName, iconKey, slow, readOnly, isPriv, roles, roleIds, maxP, bit ->
+                communityViewModel.upsertChannelCustomization(
+                    activeServer.id, chId, name, topic, type, catName, iconKey,
+                    slow, readOnly, isPriv, roles, roleIds, maxP, bit
+                )
+            },
+            onMoveChannelOrder = { chId, delta ->
+                communityViewModel.moveChannelOrder(activeServer.id, chId, delta)
+            },
+            onDeleteChannel = { chId ->
+                communityViewModel.deleteChannel(activeServer.id, chId)
+            },
+            onSaveOrUpdateRole = { name, colHex, secHex, perms, existingId ->
+                communityViewModel.saveOrUpdateCustomRole(activeServer.id, name, colHex, secHex, perms, existingId)
+            },
+            onMoveRoleOrder = { roleId, delta ->
+                communityViewModel.moveRoleOrder(activeServer.id, roleId, delta)
+            },
+            onDeleteCustomRole = { roleId ->
+                communityViewModel.deleteCustomRole(activeServer.id, roleId)
+            },
+            onUpdateWelcomeAndGoodbye = { cfg, homeWelcome ->
+                communityViewModel.updateWelcomeAndGoodbye(activeServer.id, cfg, homeWelcome)
+            },
+            onUpdateNotificationConfig = { cfg ->
+                communityViewModel.updateNotificationConfig(activeServer.id, cfg)
+            },
+            onUpdateRulesAndVerification = { rules, guidelines, reqAcc, verif ->
+                communityViewModel.updateRulesAndVerification(activeServer.id, rules, guidelines, reqAcc, verif)
+            },
+            onUpdateModerationConfig = { cfg ->
+                communityViewModel.updateModerationConfig(activeServer.id, cfg)
+            },
+            onUpdatePrivacyConfig = { pub, cfg ->
+                communityViewModel.updatePrivacyConfig(activeServer.id, pub, cfg)
+            },
+            onDismiss = { showServerAdminDashboard = false }
         )
     }
 }

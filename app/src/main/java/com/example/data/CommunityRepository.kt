@@ -17,6 +17,8 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
     internal var announcementsListener: ListenerRegistration? = null
     internal var eventsListener: ListenerRegistration? = null
     internal var invitesListener: ListenerRegistration? = null
+    internal var channelsListener: ListenerRegistration? = null
+    internal val customizationHelper: ServerCustomizationRepository by lazy { ServerCustomizationRepository(this) }
 
     internal fun currentUid(): String =
         chatRepo.authInstance()?.currentUser?.uid ?: chatRepo.currentUser.value.id
@@ -83,9 +85,9 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
             ChannelCategory("cat_voice_$serverId", "SALONS VOCAUX", 2)
         )
         val defaultChannels = listOf(
-            Channel("${serverId}_annonces", serverId, "annonces", ChannelType.ANNOUNCEMENT, "INFORMATIONS", isReadOnly = true),
-            Channel("${serverId}_general", serverId, "général", ChannelType.TEXT, "SALONS TEXTUELS"),
-            Channel("${serverId}_voice", serverId, "Vocal Principal", ChannelType.VOICE, "SALONS VOCAUX")
+            Channel("${serverId}_annonces", serverId, "annonces", ChannelType.ANNOUNCEMENT, "INFORMATIONS", isReadOnly = true, position = 0, iconKey = "announcement"),
+            Channel("${serverId}_general", serverId, "général", ChannelType.TEXT, "SALONS TEXTUELS", position = 1, iconKey = "chat"),
+            Channel("${serverId}_voice", serverId, "Vocal Principal", ChannelType.VOICE, "SALONS VOCAUX", position = 2, iconKey = "mic")
         )
         val creatorUser = chatRepo.currentUser.value.copy(id = uid, role = UserRole.ADMIN)
         val initialInvite = CommunityInvite(
@@ -93,6 +95,7 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
             createdByUid = uid, createdByName = creatorUser.name, maxUses = 0, usesCount = 0,
             isRevoked = false, createdAtLabel = timeLabel
         )
+        val resolvedRules = rulesGuidelines.ifBlank { "Respect, entraide et bienveillance." }
         val newServer = Server(
             id = serverId, name = cleanName, iconText = cleanIcon, iconBgColor = bannerColorHex,
             channels = defaultChannels, members = listOf(creatorUser), ownerId = uid,
@@ -100,7 +103,8 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
             categoryTag = categoryTag.ifBlank { "Communauté" }, description = cleanDesc,
             uniqueHandle = normalizedHandle, imageUrl = imageUrl?.takeIf { it.isNotBlank() },
             bannerUrl = bannerUrl?.takeIf { it.isNotBlank() },
-            rulesGuidelines = rulesGuidelines.ifBlank { "Respect, entraide et bienveillance." },
+            rulesGuidelines = resolvedRules,
+            serverRulesList = resolvedRules.split("\n").map { it.trim() }.filter { it.isNotBlank() },
             homeWelcomeMessage = homeWelcomeMessage.ifBlank { "Bienvenue sur $cleanName !" },
             adminIds = listOf(uid), moderatorIds = emptyList(),
             categories = defaultCategories, invites = listOf(initialInvite),
@@ -118,6 +122,12 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
                         "name" to cleanName, "isPublic" to isPublic, "createdAt" to FieldValue.serverTimestamp()
                     )))
                     Tasks.await(srvRef.set(CommunityFirestoreSync.serverToMap(newServer, authUser.uid, listOf(authUser.uid))))
+                    Tasks.await(srvRef.collection("admin_settings").document("security").set(
+                        CommunityFirestoreSync.adminSecuritySettingsToMap(newServer, authUser.uid)
+                    ))
+                    Tasks.await(srvRef.collection("admin_settings").document("public_policy").set(
+                        CommunityFirestoreSync.adminPublicPolicyToMap(newServer, authUser.uid)
+                    ))
                     Tasks.await(srvRef.collection("members").document(authUser.uid).set(
                         CommunityFirestoreSync.memberToMap(creatorUser, serverId, UserRole.ADMIN, RolePermission.entries.toSet(), isPublic)
                     ))
@@ -283,6 +293,7 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
             if (res.isFailure) return Result.failure(res.exceptionOrNull()!!)
         }
 
+        customizationHelper.dispatchMembershipSystemMessage(srv, currentUserName(), isJoin = false)
         removeServerFromLocalState(serverId)
         chatRepo.notifyCommunityEvent("Communauté quittée", "Vous avez quitté ${srv.name}.", srv.name)
         chatRepo.botCommunityEventHandler?.invoke(serverId, "ON_MEMBER_LEAVE", currentUid(), currentUserName(), srv.name)
@@ -329,6 +340,7 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
             val flow = chatRepo.serversMutableFlow()
             flow.value = flow.value + hydratedServer!!
             chatRepo.selectServer(hydratedServer!!.id)
+            customizationHelper.dispatchMembershipSystemMessage(hydratedServer!!, currentUserName(), isJoin = true)
             chatRepo.botCommunityEventHandler?.invoke(hydratedServer!!.id, "ON_MEMBER_JOIN", currentUid(), currentUserName(), hydratedServer!!.name)
             return Result.success(hydratedServer!!)
         }
@@ -336,6 +348,7 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
         chatRepo.joinPublicServer(listing)
         val joined = chatRepo.servers.value.find { it.id == listing.id }
             ?: return Result.failure(IllegalStateException("Impossible de rejoindre la communauté."))
+        customizationHelper.dispatchMembershipSystemMessage(joined, currentUserName(), isJoin = true)
         chatRepo.botCommunityEventHandler?.invoke(joined.id, "ON_MEMBER_JOIN", currentUid(), currentUserName(), joined.name)
         return Result.success(joined)
     }
@@ -346,6 +359,9 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
 
         val localMatch = chatRepo.servers.value.find { srv ->
             !srv.isDmTab && (srv.inviteCode.equals(code, true) || srv.invites.any { it.code.equals(code, true) })
+        }
+        if (localMatch != null && !localMatch.customization.privacy.allowInviteLinks) {
+            return Result.failure(SecurityException("Les invitations sont désactivées dans les paramètres de confidentialité."))
         }
         val localInvite = localMatch?.invites?.find { it.code.equals(code, true) }
         if (localInvite != null && !localInvite.isUsable()) {
@@ -365,26 +381,30 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
                         if (!invite.isUsable()) {
                             return@withContext Result.failure(IllegalStateException("Invitation révoquée, expirée ou limite atteinte."))
                         }
-                        Tasks.await(inviteRef.update(mapOf("usesCount" to (invite.usesCount + 1), "updatedAt" to FieldValue.serverTimestamp())))
                         val srvRef = db.collection("servers").document(invite.serverId)
+                        val preSnap = Tasks.await(srvRef.get())
+                        val preParsed = CommunityFirestoreSync.mapDocToServer(preSnap)
+                            ?: return@withContext Result.failure(IllegalStateException("Communauté introuvable."))
+                        if (!preParsed.customization.privacy.allowInviteLinks) {
+                            return@withContext Result.failure(SecurityException("Les invitations sont désactivées sur ce serveur."))
+                        }
+                        Tasks.await(inviteRef.update(mapOf("usesCount" to (invite.usesCount + 1), "updatedAt" to FieldValue.serverTimestamp())))
                         Tasks.await(srvRef.update(mapOf(
                             "memberIds" to FieldValue.arrayUnion(authUser.uid),
                             "lastInviteCodeUsed" to code,
                             "updatedAt" to FieldValue.serverTimestamp()
                         )))
-                        val srvSnap = Tasks.await(srvRef.get())
-                        val parsed = CommunityFirestoreSync.mapDocToServer(srvSnap)
-                            ?: return@withContext Result.failure(IllegalStateException("Communauté introuvable."))
                         val memberUser = chatRepo.currentUser.value.copy(id = authUser.uid, role = UserRole.MEMBER)
                         Tasks.await(srvRef.collection("members").document(authUser.uid).set(
-                            CommunityFirestoreSync.memberToMap(memberUser, parsed.id, UserRole.MEMBER, setOf(RolePermission.SEND_MESSAGES, RolePermission.CONNECT_VOICE), parsed.isPublic)
+                            CommunityFirestoreSync.memberToMap(memberUser, preParsed.id, UserRole.MEMBER, setOf(RolePermission.SEND_MESSAGES, RolePermission.CONNECT_VOICE), preParsed.isPublic)
                         ))
-                        val finalSrv = parsed.copy(members = listOf(memberUser))
+                        val finalSrv = preParsed.copy(members = listOf(memberUser))
                         val flow = chatRepo.serversMutableFlow()
                         if (flow.value.none { it.id == finalSrv.id }) {
                             flow.value = flow.value + finalSrv
                         }
                         chatRepo.selectServer(finalSrv.id)
+                        customizationHelper.dispatchMembershipSystemMessage(finalSrv, currentUserName(), isJoin = true)
                         chatRepo.notifyCommunityEvent("Invitation acceptée", "Vous avez rejoint ${finalSrv.name}.", finalSrv.name)
                         chatRepo.botCommunityEventHandler?.invoke(finalSrv.id, "ON_MEMBER_JOIN", authUser.uid, currentUserName(), finalSrv.name)
                         return@withContext Result.success(finalSrv)
@@ -399,16 +419,24 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
 
         if (localMatch != null) {
             chatRepo.selectServer(localMatch.id)
+            customizationHelper.dispatchMembershipSystemMessage(localMatch, currentUserName(), isJoin = true)
             return Result.success(localMatch)
         }
         val ok = chatRepo.joinServerByInviteCode(code)
         val joined = chatRepo.servers.value.find { it.inviteCode.equals(code, true) }
-        return if (ok && joined != null) Result.success(joined) else Result.failure(IllegalStateException("Code invalide."))
+        if (ok && joined != null) {
+            customizationHelper.dispatchMembershipSystemMessage(joined, currentUserName(), isJoin = true)
+            return Result.success(joined)
+        }
+        return Result.failure(IllegalStateException("Code invalide."))
     }
 
     suspend fun createInvite(serverId: String, maxUses: Int = 0, expiresInHours: Int = 0): Result<CommunityInvite> {
         val srv = chatRepo.servers.value.find { it.id == serverId }
             ?: return Result.failure(IllegalArgumentException("Communauté introuvable."))
+        if (!srv.customization.privacy.allowInviteLinks) {
+            return Result.failure(SecurityException("Les liens d'invitation sont désactivés sur ce serveur."))
+        }
         val uid = currentUid()
         if (!CommunityPermissions.hasPermission(srv, uid, RolePermission.MANAGE_INVITES)) {
             return Result.failure(SecurityException("Permission MANAGE_INVITES requise."))
@@ -514,7 +542,7 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
 
     internal fun syncPublicListingState(updated: Server) {
         val discFlow = chatRepo.discoverMutableFlow()
-        discFlow.value = if (updated.isPublic) {
+        discFlow.value = if (updated.isPublic && updated.customization.privacy.discoverableInCatalog) {
             listOf(CommunityPermissions.serverToPublicListing(updated)) + discFlow.value.filterNot { it.id == updated.id }
         } else {
             discFlow.value.filterNot { it.id == updated.id }

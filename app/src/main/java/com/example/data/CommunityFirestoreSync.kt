@@ -15,52 +15,147 @@ internal object CommunityFirestoreSync {
         srv: Server,
         ownerUid: String,
         memberIds: List<String>
-    ): HashMap<String, Any> = hashMapOf<String, Any>(
-        "id" to srv.id,
-        "name" to srv.name,
-        "iconText" to srv.iconText,
-        "iconBgColor" to srv.iconBgColor,
-        "ownerId" to ownerUid,
-        "adminIds" to (srv.adminIds + ownerUid).distinct(),
-        "moderatorIds" to srv.moderatorIds.distinct(),
-        "uniqueHandle" to srv.uniqueHandle,
-        "inviteCode" to srv.inviteCode,
-        "boostCount" to srv.boostCount,
-        "boostLevel" to srv.boostLevel,
-        "isPublic" to srv.isPublic,
-        "isVerified" to srv.isVerified,
-        "categoryTag" to srv.categoryTag,
-        "description" to srv.description,
-        "rulesGuidelines" to srv.rulesGuidelines,
-        "homeWelcomeMessage" to srv.homeWelcomeMessage,
-        "categories" to srv.categories.map { cat ->
-            mapOf(
-                "id" to cat.id,
-                "name" to cat.name,
-                "position" to cat.position,
-                "isPrivate" to cat.isPrivate,
-                "allowedRoleIds" to cat.allowedRoleIds
-            )
-        },
-        "customRoles" to srv.customRoles.map { r ->
-            buildMap<String, Any> {
-                put("id", r.id)
-                put("name", r.name)
-                put("colorHex", r.colorHex)
-                r.secondaryColorHex?.let { put("secondaryColorHex", it) }
-                put("isAdmin", r.isAdmin)
-                put("canKickBan", r.canKickBan)
-                put("canManageChannels", r.canManageChannels)
-                put("permissions", r.permissions.map { it.name })
-                put("position", r.position)
-            }
-        },
-        "memberIds" to memberIds.distinct(),
-        "updatedAt" to FieldValue.serverTimestamp()
-    ).apply {
-        srv.customBannerColorHex?.let { put("customBannerColorHex", it) }
-        srv.imageUrl?.takeIf { it.isNotBlank() }?.let { put("imageUrl", it) }
-        srv.bannerUrl?.takeIf { it.isNotBlank() }?.let { put("bannerUrl", it) }
+    ): HashMap<String, Any> {
+        val theme = srv.customization.theme
+        val welcome = srv.customization.welcome
+        val notif = srv.customization.notifications
+        val mod = srv.customization.moderation
+        val privacy = srv.customization.privacy
+
+        val themeMap = hashMapOf<String, Any>(
+            "accentColorHex" to theme.accentColorHex,
+            "secondaryColorHex" to theme.secondaryColorHex,
+            "surfaceStyle" to theme.surfaceStyle.name
+        ).apply {
+            theme.iconPresetKey?.takeIf { it.isNotBlank() }?.let { put("iconPresetKey", it) }
+        }
+
+        val welcomeMap = hashMapOf<String, Any>(
+            "welcomeEnabled" to welcome.welcomeEnabled,
+            "welcomeMessageTemplate" to welcome.welcomeMessageTemplate,
+            "goodbyeEnabled" to welcome.goodbyeEnabled,
+            "goodbyeMessageTemplate" to welcome.goodbyeMessageTemplate,
+            "dmWelcomeEnabled" to welcome.dmWelcomeEnabled
+        ).apply {
+            welcome.welcomeChannelId?.takeIf { it.isNotBlank() }?.let { put("welcomeChannelId", it) }
+            welcome.goodbyeChannelId?.takeIf { it.isNotBlank() }?.let { put("goodbyeChannelId", it) }
+        }
+
+        val notifMap = hashMapOf<String, Any>(
+            "defaultLevel" to notif.defaultLevel.name,
+            "suppressEveryoneMentions" to notif.suppressEveryoneMentions,
+            "suppressRoleMentions" to notif.suppressRoleMentions,
+            "highlightAnnouncements" to notif.highlightAnnouncements
+        )
+
+        val modSummaryMap = hashMapOf<String, Any>(
+            "autoModEnabled" to mod.autoModEnabled,
+            "blockSpamAndLinks" to mod.blockSpamAndLinks,
+            "blockBadWords" to mod.blockBadWords,
+            "defaultSlowmodeSeconds" to mod.defaultSlowmodeSeconds,
+            "maxMentionsPerMessage" to mod.maxMentionsPerMessage,
+            "antiRaidModeEnabled" to mod.antiRaidModeEnabled
+        )
+
+        val privacyMap = hashMapOf<String, Any>(
+            "discoverableInCatalog" to privacy.discoverableInCatalog,
+            "allowInviteLinks" to privacy.allowInviteLinks,
+            "requireInviteApproval" to privacy.requireInviteApproval,
+            "allowMemberDms" to privacy.allowMemberDms,
+            "hideMemberListForNonStaff" to privacy.hideMemberListForNonStaff
+        )
+
+        return hashMapOf<String, Any>(
+            "id" to srv.id,
+            "name" to srv.name,
+            "iconText" to srv.iconText,
+            "iconBgColor" to srv.iconBgColor,
+            "ownerId" to ownerUid,
+            "adminIds" to (srv.adminIds + ownerUid).distinct(),
+            "moderatorIds" to srv.moderatorIds.distinct(),
+            "uniqueHandle" to srv.uniqueHandle,
+            "inviteCode" to srv.inviteCode,
+            "boostCount" to srv.boostCount,
+            "boostLevel" to srv.boostLevel,
+            "isPublic" to srv.isPublic,
+            "isVerified" to srv.isVerified,
+            "categoryTag" to srv.categoryTag,
+            "description" to srv.description,
+            "rulesGuidelines" to srv.rulesGuidelines,
+            "serverRulesList" to srv.serverRulesList,
+            "homeWelcomeMessage" to srv.homeWelcomeMessage,
+            "verificationLevel" to srv.customization.verificationLevel.name,
+            "requireRulesAcceptance" to srv.customization.requireRulesAcceptance,
+            "themeConfig" to themeMap,
+            "welcomeConfig" to welcomeMap,
+            "notificationConfig" to notifMap,
+            "moderationConfig" to modSummaryMap,
+            "privacyConfig" to privacyMap,
+            "categories" to srv.categories.sortedBy { it.position }.map { cat ->
+                mapOf(
+                    "id" to cat.id,
+                    "name" to cat.name,
+                    "position" to cat.position,
+                    "isPrivate" to cat.isPrivate,
+                    "allowedRoleIds" to cat.allowedRoleIds
+                )
+            },
+            "customRoles" to srv.customRoles.sortedBy { it.position }.map { r ->
+                buildMap<String, Any> {
+                    put("id", r.id)
+                    put("name", r.name)
+                    put("colorHex", r.colorHex)
+                    r.secondaryColorHex?.let { put("secondaryColorHex", it) }
+                    put("isAdmin", r.isAdmin)
+                    put("canKickBan", r.canKickBan)
+                    put("canManageChannels", r.canManageChannels)
+                    put("permissions", r.permissions.map { it.name })
+                    put("position", r.position)
+                }
+            },
+            "memberIds" to memberIds.distinct(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        ).apply {
+            srv.customBannerColorHex?.let { put("customBannerColorHex", it) }
+            srv.imageUrl?.takeIf { it.isNotBlank() }?.let { put("imageUrl", it) }
+            srv.bannerUrl?.takeIf { it.isNotBlank() }?.let { put("bannerUrl", it) }
+        }
+    }
+
+    fun adminSecuritySettingsToMap(srv: Server, updatedByUid: String): HashMap<String, Any> {
+        val mod = srv.customization.moderation
+        return hashMapOf(
+            "settingType" to "security",
+            "serverId" to srv.id,
+            "updatedByUid" to updatedByUid,
+            "verificationLevel" to srv.customization.verificationLevel.name,
+            "autoModEnabled" to mod.autoModEnabled,
+            "blockSpamAndLinks" to mod.blockSpamAndLinks,
+            "blockBadWords" to mod.blockBadWords,
+            "blockedWords" to mod.blockedWords,
+            "defaultSlowmodeSeconds" to mod.defaultSlowmodeSeconds,
+            "maxMentionsPerMessage" to mod.maxMentionsPerMessage,
+            "antiRaidModeEnabled" to mod.antiRaidModeEnabled,
+            "requireInviteApproval" to srv.customization.privacy.requireInviteApproval,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+    }
+
+    fun adminPublicPolicyToMap(srv: Server, updatedByUid: String): HashMap<String, Any> {
+        val privacy = srv.customization.privacy
+        return hashMapOf(
+            "settingType" to "public_policy",
+            "serverId" to srv.id,
+            "updatedByUid" to updatedByUid,
+            "verificationLevel" to srv.customization.verificationLevel.name,
+            "requireRulesAcceptance" to srv.customization.requireRulesAcceptance,
+            "serverRulesList" to srv.serverRulesList,
+            "discoverableInCatalog" to privacy.discoverableInCatalog,
+            "allowInviteLinks" to privacy.allowInviteLinks,
+            "allowMemberDms" to privacy.allowMemberDms,
+            "hideMemberListForNonStaff" to privacy.hideMemberListForNonStaff,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
     }
 
     fun memberToMap(
@@ -112,13 +207,14 @@ internal object CommunityFirestoreSync {
         serverId: String,
         isPublicServer: Boolean,
         memberIds: List<String>
-    ): HashMap<String, Any> = hashMapOf(
+    ): HashMap<String, Any> = hashMapOf<String, Any>(
         "id" to channel.id,
         "serverId" to serverId,
         "name" to channel.name,
         "type" to channel.type.name,
         "category" to channel.category,
         "topic" to channel.topic,
+        "position" to channel.position,
         "isPrivate" to channel.isPrivate,
         "isLocked" to channel.isLocked,
         "maxParticipants" to channel.maxParticipants,
@@ -131,7 +227,9 @@ internal object CommunityFirestoreSync {
         "isPublic" to isPublicServer,
         "memberIds" to memberIds.distinct(),
         "updatedAt" to FieldValue.serverTimestamp()
-    )
+    ).apply {
+        channel.iconKey?.takeIf { it.isNotBlank() }?.let { put("iconKey", it) }
+    }
 
     @Suppress("UNCHECKED_CAST")
     fun mapDocToServer(doc: DocumentSnapshot): Server? {
@@ -193,6 +291,68 @@ internal object CommunityFirestoreSync {
             )
         }.ifEmpty { defaultServerRoles() }
 
+        val serverRulesList = (doc.get("serverRulesList") as? List<*>)?.mapNotNull { it as? String }
+            ?: rulesGuidelines.split("\n").map { it.trim() }.filter { it.isNotBlank() }
+
+        val themeRaw = doc.get("themeConfig") as? Map<String, Any?>
+        val themeConfig = ServerThemeConfig(
+            accentColorHex = (themeRaw?.get("accentColorHex") as? Number)?.toLong() ?: customBannerHex ?: iconBgColor,
+            secondaryColorHex = (themeRaw?.get("secondaryColorHex") as? Number)?.toLong() ?: 0xFFEB459EL,
+            surfaceStyle = (themeRaw?.get("surfaceStyle") as? String)?.let { key ->
+                ServerThemeSurfaceStyle.entries.find { it.name == key }
+            } ?: ServerThemeSurfaceStyle.DARK_SLATE,
+            iconPresetKey = themeRaw?.get("iconPresetKey") as? String
+        )
+
+        val welcomeRaw = doc.get("welcomeConfig") as? Map<String, Any?>
+        val welcomeConfig = ServerWelcomeConfig(
+            welcomeEnabled = welcomeRaw?.get("welcomeEnabled") as? Boolean ?: true,
+            welcomeMessageTemplate = (welcomeRaw?.get("welcomeMessageTemplate") as? String)
+                ?: "Bienvenue {user} sur {server} ! Présentez-vous et explorez les salons.",
+            welcomeChannelId = welcomeRaw?.get("welcomeChannelId") as? String,
+            goodbyeEnabled = welcomeRaw?.get("goodbyeEnabled") as? Boolean ?: true,
+            goodbyeMessageTemplate = (welcomeRaw?.get("goodbyeMessageTemplate") as? String)
+                ?: "{user} a quitté {server}.",
+            goodbyeChannelId = welcomeRaw?.get("goodbyeChannelId") as? String,
+            dmWelcomeEnabled = welcomeRaw?.get("dmWelcomeEnabled") as? Boolean ?: false
+        )
+
+        val notifRaw = doc.get("notificationConfig") as? Map<String, Any?>
+        val notifConfig = ServerNotificationConfig(
+            defaultLevel = (notifRaw?.get("defaultLevel") as? String)?.let { key ->
+                ServerNotificationLevel.entries.find { it.name == key }
+            } ?: ServerNotificationLevel.MENTIONS_ONLY,
+            suppressEveryoneMentions = notifRaw?.get("suppressEveryoneMentions") as? Boolean ?: false,
+            suppressRoleMentions = notifRaw?.get("suppressRoleMentions") as? Boolean ?: false,
+            highlightAnnouncements = notifRaw?.get("highlightAnnouncements") as? Boolean ?: true
+        )
+
+        val modRaw = doc.get("moderationConfig") as? Map<String, Any?>
+        val modConfig = ServerModerationConfig(
+            autoModEnabled = modRaw?.get("autoModEnabled") as? Boolean ?: true,
+            blockSpamAndLinks = modRaw?.get("blockSpamAndLinks") as? Boolean ?: false,
+            blockBadWords = modRaw?.get("blockBadWords") as? Boolean ?: true,
+            blockedWords = (modRaw?.get("blockedWords") as? List<*>)?.mapNotNull { it as? String }
+                ?: listOf("scam", "phishing", "freenitro"),
+            defaultSlowmodeSeconds = (modRaw?.get("defaultSlowmodeSeconds") as? Number)?.toInt() ?: 0,
+            maxMentionsPerMessage = (modRaw?.get("maxMentionsPerMessage") as? Number)?.toInt() ?: 5,
+            antiRaidModeEnabled = modRaw?.get("antiRaidModeEnabled") as? Boolean ?: false
+        )
+
+        val privacyRaw = doc.get("privacyConfig") as? Map<String, Any?>
+        val privacyConfig = ServerPrivacyConfig(
+            discoverableInCatalog = privacyRaw?.get("discoverableInCatalog") as? Boolean ?: true,
+            allowInviteLinks = privacyRaw?.get("allowInviteLinks") as? Boolean ?: true,
+            requireInviteApproval = privacyRaw?.get("requireInviteApproval") as? Boolean ?: false,
+            allowMemberDms = privacyRaw?.get("allowMemberDms") as? Boolean ?: true,
+            hideMemberListForNonStaff = privacyRaw?.get("hideMemberListForNonStaff") as? Boolean ?: false
+        )
+
+        val verificationLevel = doc.getString("verificationLevel")?.let { key ->
+            ServerVerificationLevel.entries.find { it.name == key }
+        } ?: ServerVerificationLevel.LOW
+        val requireRulesAcceptance = doc.getBoolean("requireRulesAcceptance") ?: false
+
         return Server(
             id = id,
             name = name,
@@ -211,15 +371,50 @@ internal object CommunityFirestoreSync {
             categoryTag = categoryTag,
             description = description,
             rulesGuidelines = rulesGuidelines,
+            serverRulesList = serverRulesList,
             homeWelcomeMessage = homeWelcome,
             adminIds = adminIds,
             moderatorIds = modIds,
-            categories = categories,
-            customRoles = customRoles,
+            categories = categories.sortedBy { it.position },
+            customRoles = customRoles.sortedBy { it.position },
+            customization = ServerCustomizationSettings(
+                theme = themeConfig,
+                welcome = welcomeConfig,
+                notifications = notifConfig,
+                verificationLevel = verificationLevel,
+                requireRulesAcceptance = requireRulesAcceptance,
+                moderation = modConfig,
+                privacy = privacyConfig
+            ),
             channels = listOf(
-                Channel("${id}_annonces", id, "annonces", ChannelType.ANNOUNCEMENT, "INFORMATIONS", isReadOnly = true),
-                Channel("${id}_general", id, "général", ChannelType.TEXT, "SALONS TEXTUELS"),
-                Channel("${id}_voice", id, "Salon vocal", ChannelType.VOICE, "SALONS VOCAUX")
+                Channel("${id}_annonces", id, "annonces", ChannelType.ANNOUNCEMENT, "INFORMATIONS", isReadOnly = true, position = 0, iconKey = "announcement"),
+                Channel("${id}_general", id, "général", ChannelType.TEXT, "SALONS TEXTUELS", position = 1, iconKey = "chat"),
+                Channel("${id}_voice", id, "Salon vocal", ChannelType.VOICE, "SALONS VOCAUX", position = 2, iconKey = "mic")
+            )
+        )
+    }
+
+    fun applyAdminSecurityDoc(doc: DocumentSnapshot, server: Server): Server {
+        val currentMod = server.customization.moderation
+        val blockedWords = (doc.get("blockedWords") as? List<*>)?.mapNotNull { it as? String } ?: currentMod.blockedWords
+        val nextMod = currentMod.copy(
+            autoModEnabled = doc.getBoolean("autoModEnabled") ?: currentMod.autoModEnabled,
+            blockSpamAndLinks = doc.getBoolean("blockSpamAndLinks") ?: currentMod.blockSpamAndLinks,
+            blockBadWords = doc.getBoolean("blockBadWords") ?: currentMod.blockBadWords,
+            blockedWords = blockedWords,
+            defaultSlowmodeSeconds = doc.getLong("defaultSlowmodeSeconds")?.toInt() ?: currentMod.defaultSlowmodeSeconds,
+            maxMentionsPerMessage = doc.getLong("maxMentionsPerMessage")?.toInt() ?: currentMod.maxMentionsPerMessage,
+            antiRaidModeEnabled = doc.getBoolean("antiRaidModeEnabled") ?: currentMod.antiRaidModeEnabled
+        )
+        val ver = doc.getString("verificationLevel")?.let { k ->
+            ServerVerificationLevel.entries.find { it.name == k }
+        } ?: server.customization.verificationLevel
+        val reqApproval = doc.getBoolean("requireInviteApproval") ?: server.customization.privacy.requireInviteApproval
+        return server.copy(
+            customization = server.customization.copy(
+                verificationLevel = ver,
+                moderation = nextMod,
+                privacy = server.customization.privacy.copy(requireInviteApproval = reqApproval)
             )
         )
     }
@@ -321,7 +516,9 @@ internal object CommunityFirestoreSync {
             slowmodeSeconds = doc.getLong("slowmodeSeconds")?.toInt() ?: 0,
             allowedRoles = allowed,
             allowedRoleIds = allowedRoleIds,
-            kickedVoiceUids = kickedVoiceUids
+            kickedVoiceUids = kickedVoiceUids,
+            position = doc.getLong("position")?.toInt() ?: 0,
+            iconKey = doc.getString("iconKey")
         )
     }
 

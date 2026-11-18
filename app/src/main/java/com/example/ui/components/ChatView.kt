@@ -243,11 +243,7 @@ fun ChatView(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = when {
-                                    channel.isPrivate -> Icons.Default.Lock
-                                    channel.type == ChannelType.ANNOUNCEMENT -> Icons.Default.Campaign
-                                    else -> Icons.Default.Tag
-                                },
+                                imageVector = resolveChannelIconVector(channel),
                                 contentDescription = null,
                                 tint = palette.textMuted,
                                 modifier = Modifier.size(20.dp)

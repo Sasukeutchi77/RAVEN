@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Explore
@@ -51,6 +52,8 @@ fun ServerRail(
     onOpenOrbsShop: () -> Unit = {},
     onOpenBotsDashboard: () -> Unit = {},
     onOpenAiAssistant: () -> Unit = {},
+    unseenStoriesCount: Int = 0,
+    onOpenStories: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -335,6 +338,48 @@ fun ServerRail(
                         modifier = Modifier.size(22.dp)
                     )
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("server_rail_stories_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(Brush.linearGradient(listOf(Color(0xFFF97316), Color(0xFFEB459E))))
+                            .clickable { onOpenStories() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoStories,
+                            contentDescription = "Stories RAVEN",
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    if (unseenStoriesCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .size(18.dp)
+                                .align(Alignment.TopEnd)
+                                .clip(CircleShape)
+                                .background(DiscordRed),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = unseenStoriesCount.toString(),
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -352,19 +397,29 @@ private fun ServerRailIconButton(
         onClick = onSelectServer,
         testTag = "server_rail_${server.id}"
     ) {
+        val themeAccent = server.customization.theme.accentColorHex
+        val bgCol = if (isSelected) DiscordBlurple else Color(if (themeAccent != 0xFF5865F2L) themeAccent else server.iconBgColor)
         Box(
             modifier = Modifier
                 .size(46.dp)
                 .clip(if (isSelected) RoundedCornerShape(16.dp) else CircleShape)
-                .background(if (isSelected) DiscordBlurple else Color(server.iconBgColor)),
+                .background(bgCol),
             contentAlignment = Alignment.Center
         ) {
+            val presetKey = server.customization.theme.iconPresetKey
             if (!server.imageUrl.isNullOrBlank()) {
                 AsyncImage(
                     model = server.imageUrl,
                     contentDescription = "Logo ${server.name}",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
+                )
+            } else if (!presetKey.isNullOrBlank()) {
+                Icon(
+                    imageVector = resolveCatalogIconVector(presetKey),
+                    contentDescription = server.name,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
                 )
             } else {
                 val iconKeys = listOf("game", "code", "rocket", "star", "shield", "bolt", "headset")
