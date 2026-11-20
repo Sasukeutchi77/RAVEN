@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.model.*
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.PollUiState
+import com.example.ui.viewmodel.PollViewModel
 import com.example.util.AudioPlayerHelper
 import com.example.util.AudioRecorderHelper
 import com.example.util.CloudinaryHelper
@@ -108,6 +110,9 @@ fun ChatView(
     botSlashCommands: List<SlashCommandOption> = emptyList(),
     currentUserId: String = "",
     currentUserName: String = "",
+    pollViewModel: PollViewModel? = null,
+    onOpenPollsHub: () -> Unit = {},
+    onOpenAdvancedPollEditor: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -115,6 +120,8 @@ fun ChatView(
     val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
     val listState = rememberLazyListState()
+    val pollUiState = pollViewModel?.uiState?.collectAsState()?.value
+    var inspectAdvancedPollPair by remember { mutableStateOf<Pair<AdvancedPoll, Boolean>?>(null) }
 
     var inputText by remember(channel.id) { mutableStateOf(initialDraft) }
     var isSearchActive by remember { mutableStateOf(false) }
@@ -374,6 +381,17 @@ fun ChatView(
                                     )
                                 }
                             }
+                        }
+
+                        IconButton(
+                            onClick = onOpenPollsHub,
+                            modifier = Modifier.testTag("chat_polls_hub_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Poll,
+                                contentDescription = "Sondages avancés",
+                                tint = Color(0xFFEB459E)
+                            )
                         }
 
                         IconButton(
@@ -738,7 +756,7 @@ fun ChatView(
                             AssistChip(
                                 onClick = {
                                     isAttachmentTrayOpen = false
-                                    showCreatePollDialog = true
+                                    if (pollViewModel != null) onOpenAdvancedPollEditor() else showCreatePollDialog = true
                                 },
                                 label = { Text("Sondage", color = DiscordTextWhite, fontSize = 12.sp) },
                                 leadingIcon = { Icon(Icons.Default.Poll, contentDescription = null, tint = Color(0xFFEB459E), modifier = Modifier.size(16.dp)) },
@@ -1117,7 +1135,12 @@ fun ChatView(
                             onAddReactionClick = { messageForEmojiPicker = message },
                             onReplyClick = { onReplyClick(message) },
                             onOpenThread = { onOpenThread(message) },
-                            onVotePoll = { optId -> onVotePoll(message.id, optId) }
+                            onVotePoll = { optId -> onVotePoll(message.id, optId) },
+                            pollViewModel = pollViewModel,
+                            pollUiState = pollUiState,
+                            onOpenAdvancedPollStats = { advPoll, startExport ->
+                                inspectAdvancedPollPair = advPoll to startExport
+                            }
                         )
                     }
                 }
@@ -1372,6 +1395,20 @@ fun ChatView(
             onDismiss = { showScheduleMessageDialog = false }
         )
     }
+
+    if (pollViewModel != null) {
+        inspectAdvancedPollPair?.let { (advPoll, startExport) ->
+            val freshPoll = pollUiState?.polls?.find { it.id == advPoll.id } ?: advPoll
+            val stats = remember(freshPoll, pollUiState?.votesByPoll) { pollViewModel.computeStats(freshPoll) }
+            AdvancedPollStatsAndExportSheet(
+                poll = freshPoll,
+                stats = stats,
+                startOnExportTab = startExport,
+                exportContentProvider = { fmt -> pollViewModel.exportPoll(freshPoll, fmt) },
+                onDismiss = { inspectAdvancedPollPair = null }
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -1389,7 +1426,10 @@ fun MessageItem(
     onAddReactionClick: () -> Unit = onLongClick,
     onReplyClick: () -> Unit,
     onOpenThread: (() -> Unit)? = null,
-    onVotePoll: (String) -> Unit = {}
+    onVotePoll: (String) -> Unit = {},
+    pollViewModel: PollViewModel? = null,
+    pollUiState: PollUiState? = null,
+    onOpenAdvancedPollStats: (AdvancedPoll, Boolean) -> Unit = { _, _ -> }
 ) {
     val palette = ravenPalette()
     val isMine = message.sender.id == currentUserId || message.sender.id == "user_me"
@@ -1751,14 +1791,39 @@ fun MessageItem(
                     }
                 }
 
-                // Poll Card if present
+                // Poll Card if present (live AdvancedPollCard when linked, fallback to basic PollCard)
                 if (message.poll != null) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    PollCard(
-                        poll = message.poll,
-                        currentUserId = currentUserId,
-                        onVoteOption = onVotePoll
-                    )
+                    val advId = message.poll.advancedPollId
+                    val linkedAdv = if (advId != null && pollViewModel != null && pollUiState != null) {
+                        pollUiState.polls.find { it.id == advId }
+                    } else null
+                    if (linkedAdv != null && pollViewModel != null && pollUiState != null) {
+                        val (canVote, blockedReason) = pollViewModel.canVote(linkedAdv)
+                        AdvancedPollCard(
+                            poll = linkedAdv,
+                            myVote = pollUiState.myVotesByPoll[linkedAdv.id],
+                            allVotes = pollUiState.votesByPoll[linkedAdv.id].orEmpty(),
+                            currentUserId = pollViewModel.currentUserId(),
+                            canVote = canVote,
+                            voteBlockedReason = blockedReason,
+                            canManage = pollViewModel.canManage(linkedAdv),
+                            onToggleOption = { optId -> pollViewModel.toggleVote(linkedAdv.id, optId) },
+                            onRetractVote = { pollViewModel.retractVote(linkedAdv.id) },
+                            onEditDraft = {},
+                            onPublishDraft = { pollViewModel.publishExistingDraft(linkedAdv.id) },
+                            onClosePoll = { pollViewModel.closePollManually(linkedAdv.id) },
+                            onOpenStats = { onOpenAdvancedPollStats(linkedAdv, false) },
+                            onOpenExport = { onOpenAdvancedPollStats(linkedAdv, true) },
+                            onDeletePoll = { pollViewModel.deletePoll(linkedAdv.id) }
+                        )
+                    } else {
+                        PollCard(
+                            poll = message.poll,
+                            currentUserId = currentUserId,
+                            onVoteOption = onVotePoll
+                        )
+                    }
                 }
 
                 // Thread pill if replies exist

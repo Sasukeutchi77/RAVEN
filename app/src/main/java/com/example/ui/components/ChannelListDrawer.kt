@@ -53,6 +53,7 @@ fun ChannelListDrawer(
     onOpenCategoriesManager: () -> Unit = {},
     onOpenBotsDashboard: () -> Unit = {},
     onOpenAiAssistant: () -> Unit = {},
+    onOpenPollsHub: () -> Unit = {},
     onOpenAdminDashboard: () -> Unit = {},
     onEditCommunity: () -> Unit = {},
     onLeaveCommunity: () -> Unit = {},
@@ -186,6 +187,15 @@ fun ChannelListDrawer(
                             isMenuOpen = false
                             onOpenAiAssistant()
                         }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Sondages avancés", color = palette.textPrimary, fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(Icons.Default.Poll, contentDescription = null, tint = Color(0xFFEB459E)) },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenPollsHub()
+                        },
+                        modifier = Modifier.testTag("drawer_menu_polls_hub")
                     )
                     if (canManageRoles) {
                         DropdownMenuItem(

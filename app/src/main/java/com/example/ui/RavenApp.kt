@@ -28,19 +28,25 @@ import com.example.data.BotRepository
 import com.example.data.ChatRepository
 import com.example.data.CommunityPermissions
 import com.example.data.CommunityRepository
+import com.example.data.EventRepository
+import com.example.data.PollRepository
 import com.example.data.StoryRepository
 import com.example.data.searchCommunities
+import com.example.model.AdvancedPoll
 import com.example.model.Channel
 import com.example.model.ChannelType
 import com.example.model.Message
 import com.example.model.RavenBot
 import com.example.model.RolePermission
 import com.example.model.Server
+import com.example.model.UserRole
 import com.example.ui.components.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.AiAssistantViewModel
 import com.example.ui.viewmodel.BotDashboardViewModel
 import com.example.ui.viewmodel.CommunityViewModel
+import com.example.ui.viewmodel.EventViewModel
+import com.example.ui.viewmodel.PollViewModel
 import com.example.ui.viewmodel.StoryViewModel
 import com.example.util.AudioPlayerHelper
 import com.example.util.NotificationHelper
@@ -121,6 +127,14 @@ fun RavenApp(
     val storyViewModel = remember(storyRepo) { StoryViewModel(storyRepo) }
     val storyUiState by storyViewModel.uiState.collectAsState()
 
+    val pollRepo = remember(repository) { PollRepository(repository) }
+    val pollViewModel = remember(pollRepo) { PollViewModel(pollRepo) }
+    val pollUiState by pollViewModel.uiState.collectAsState()
+
+    val eventRepo = remember(repository) { EventRepository(repository) }
+    val eventViewModel = remember(eventRepo) { EventViewModel(eventRepo) }
+    val eventUiState by eventViewModel.uiState.collectAsState()
+
     val unreadNotificationsCount = remember(notifications) { notifications.count { !it.isRead } }
 
     // Navigation and drawer states
@@ -135,6 +149,9 @@ fun RavenApp(
     var isViewingCommunityHome by remember { mutableStateOf(false) }
     var showBotDashboardSheet by remember { mutableStateOf(false) }
     var showAiAssistantSheet by remember { mutableStateOf(false) }
+    var showPollsHubSheet by remember { mutableStateOf(false) }
+    var showAdvancedPollEditor by remember { mutableStateOf(false) }
+    var editingPollDraft by remember { mutableStateOf<AdvancedPoll?>(null) }
     var showCreateStoryDialog by remember { mutableStateOf(false) }
     var viewingStoryAuthorId by remember { mutableStateOf<String?>(null) }
     var showStoryModerationSheet by remember { mutableStateOf(false) }
@@ -217,6 +234,22 @@ fun RavenApp(
         botViewModel.startObserving(selectedServerId)
         aiViewModel.startObserving()
         storyViewModel.startObserving()
+        pollViewModel.syncWithAuthUid(if (isFirebaseSignedIn) repository.authInstance()?.currentUser?.uid else null)
+        eventViewModel.syncWithAuthUid(if (isFirebaseSignedIn) repository.authInstance()?.currentUser?.uid else null)
+    }
+
+    LaunchedEffect(eventUiState.feedbackMessage, eventUiState.errorMessage) {
+        if (eventUiState.feedbackMessage != null || eventUiState.errorMessage != null) {
+            delay(3500)
+            eventViewModel.clearFeedback()
+        }
+    }
+
+    LaunchedEffect(pollUiState.feedbackMessage, pollUiState.errorMessage) {
+        if (pollUiState.feedbackMessage != null || pollUiState.errorMessage != null) {
+            delay(3500)
+            pollViewModel.clearFeedback()
+        }
     }
 
     LaunchedEffect(storyUiState.feedbackMessage, storyUiState.errorMessage) {
@@ -368,6 +401,10 @@ fun RavenApp(
                     onOpenAiAssistant = {
                         if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                         showAiAssistantSheet = true
+                    },
+                    onOpenPollsHub = {
+                        if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                        showPollsHubSheet = true
                     },
                     onOpenAdminDashboard = {
                         if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
@@ -676,7 +713,22 @@ fun RavenApp(
                                 },
                                 onTimeoutMember = { uid -> communityViewModel.timeoutMember(activeServer.id, uid) },
                                 onKickMember = { uid -> communityViewModel.kickMember(activeServer.id, uid) },
-                                onMemberClick = { member -> selectedUserProfile = member }
+                                onMemberClick = { member -> selectedUserProfile = member },
+                                pollViewModel = pollViewModel,
+                                onOpenPollsHub = { showPollsHubSheet = true },
+                                eventViewModel = eventViewModel,
+                                knownFriends = (directConversations.filter { !it.isGroup }.map { it.friend } + com.example.data.MockData.allFriends)
+                                    .distinctBy { it.id }
+                                    .filter { it.id != currentUser.id },
+                                onRequestNotificationPermission = { requestNotificationPermission() },
+                                onJoinVoiceChannel = { ch ->
+                                    isViewingCommunityHome = false
+                                    if (repository.joinVoiceChannel(ch)) {
+                                        requestAudioPermission()
+                                        setViewingVoiceRoom(true)
+                                    }
+                                },
+                                onOpenEventsHub = { showServerEventsSheet = true }
                             )
                         }
 
@@ -770,7 +822,13 @@ fun RavenApp(
                                     botRepo.getSlashCommandsForServer(activeServer.id)
                                 },
                                 currentUserId = currentUser.id,
-                                currentUserName = currentUser.name
+                                currentUserName = currentUser.name,
+                                pollViewModel = pollViewModel,
+                                onOpenPollsHub = { showPollsHubSheet = true },
+                                onOpenAdvancedPollEditor = {
+                                    editingPollDraft = null
+                                    showAdvancedPollEditor = true
+                                }
                             )
                         }
                     }
@@ -1195,17 +1253,24 @@ fun RavenApp(
         )
     }
 
-    // Server Events Sheet
-    if (showServerEventsSheet && !activeServer.isDmTab) {
-        ServerEventsSheet(
-            server = activeServer,
+    // RAVEN Events Hub Sheet (Global + Server + Voice + Private Invites + History)
+    if (showServerEventsSheet) {
+        val knownFriends = remember(directConversations, currentUser.id) {
+            (directConversations.filter { !it.isGroup }.map { it.friend } + com.example.data.MockData.allFriends)
+                .distinctBy { it.id }
+                .filter { it.id != currentUser.id }
+        }
+        RavenEventsHubSheet(
+            eventViewModel = eventViewModel,
+            activeServer = activeServer.takeIf { !it.isDmTab },
             currentUserId = currentUser.id,
-            onToggleInterest = { evtId ->
-                requestNotificationPermission()
-                repository.toggleEventInterest(activeServer.id, evtId)
-            },
-            onCreateEvent = { title, desc, dateTime, location ->
-                repository.createServerEvent(activeServer.id, title, desc, dateTime, location)
+            knownFriends = knownFriends,
+            onRequestNotificationPermission = { requestNotificationPermission() },
+            onJoinVoiceChannel = { ch ->
+                if (repository.joinVoiceChannel(ch)) {
+                    requestAudioPermission()
+                    setViewingVoiceRoom(true)
+                }
             },
             onDismiss = { showServerEventsSheet = false }
         )
@@ -1524,6 +1589,31 @@ fun RavenApp(
                 communityViewModel.updatePrivacyConfig(activeServer.id, pub, cfg)
             },
             onDismiss = { showServerAdminDashboard = false }
+        )
+    }
+
+    if (showPollsHubSheet) {
+        PollsHubSheet(
+            pollViewModel = pollViewModel,
+            activeServer = activeServer,
+            activeChannel = activeChannel,
+            onDismiss = { showPollsHubSheet = false }
+        )
+    }
+
+    if (showAdvancedPollEditor) {
+        AdvancedPollEditorDialog(
+            server = activeServer.takeIf { !it.isDmTab },
+            channel = if (!activeServer.isDmTab) activeChannel else null,
+            initialDraft = editingPollDraft,
+            onDismiss = {
+                showAdvancedPollEditor = false
+                editingPollDraft = null
+            },
+            onSaveDraft = { input -> pollViewModel.saveDraft(input) },
+            onPublish = { input, shareInChannel ->
+                pollViewModel.createAndPublish(input, shareInChannel)
+            }
         )
     }
 }

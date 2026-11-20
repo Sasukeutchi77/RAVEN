@@ -18,6 +18,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -27,6 +28,8 @@ import coil.compose.AsyncImage
 import com.example.data.CommunityPermissions
 import com.example.model.*
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.EventViewModel
+import com.example.ui.viewmodel.PollViewModel
 
 @Composable
 fun CommunityHomeView(
@@ -50,6 +53,13 @@ fun CommunityHomeView(
     onTimeoutMember: (uid: String) -> Unit,
     onKickMember: (uid: String) -> Unit,
     onMemberClick: (User) -> Unit,
+    pollViewModel: PollViewModel? = null,
+    onOpenPollsHub: () -> Unit = {},
+    eventViewModel: EventViewModel? = null,
+    knownFriends: List<User> = emptyList(),
+    onRequestNotificationPermission: () -> Unit = {},
+    onJoinVoiceChannel: (Channel) -> Unit = {},
+    onOpenEventsHub: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -149,7 +159,7 @@ fun CommunityHomeView(
             contentColor = accentColor,
             edgePadding = 12.dp
         ) {
-            listOf("Accueil", "Annonces", "Événements", "Membres", "Salons").forEachIndexed { idx, label ->
+            listOf("Accueil", "Annonces", "Événements", "Membres", "Salons", "Sondages").forEachIndexed { idx, label ->
                 Tab(
                     selected = selectedTab == idx,
                     onClick = { selectedTab = idx },
@@ -165,6 +175,191 @@ fun CommunityHomeView(
             }
         }
 
+        if (selectedTab == 5) {
+            if (pollViewModel != null) {
+                val pollUiState by pollViewModel.uiState.collectAsState()
+                var showInlinePollEditor by remember { mutableStateOf(false) }
+                var inlineEditingDraft by remember { mutableStateOf<AdvancedPoll?>(null) }
+                var inlineInspectPoll by remember { mutableStateOf<Pair<AdvancedPoll, Boolean>?>(null) }
+
+                PollsFeedContent(
+                    pollViewModel = pollViewModel,
+                    uiState = pollUiState,
+                    serverFilterId = server.id,
+                    accentColor = accentColor,
+                    onCreateNew = {
+                        inlineEditingDraft = null
+                        showInlinePollEditor = true
+                    },
+                    onEditDraft = { draft ->
+                        inlineEditingDraft = draft
+                        showInlinePollEditor = true
+                    },
+                    onOpenStats = { poll, startExport ->
+                        inlineInspectPoll = poll to startExport
+                    },
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                )
+
+                if (showInlinePollEditor) {
+                    AdvancedPollEditorDialog(
+                        server = server,
+                        channel = server.channels.firstOrNull { it.type == ChannelType.TEXT },
+                        initialDraft = inlineEditingDraft,
+                        onDismiss = {
+                            showInlinePollEditor = false
+                            inlineEditingDraft = null
+                        },
+                        onSaveDraft = { input -> pollViewModel.saveDraft(input) },
+                        onPublish = { input, shareInChannel ->
+                            pollViewModel.createAndPublish(input, shareInChannel)
+                        }
+                    )
+                }
+
+                inlineInspectPoll?.let { (poll, startExport) ->
+                    val freshPoll = pollUiState.polls.find { it.id == poll.id } ?: poll
+                    val stats = remember(freshPoll, pollUiState.votesByPoll) { pollViewModel.computeStats(freshPoll) }
+                    AdvancedPollStatsAndExportSheet(
+                        poll = freshPoll,
+                        stats = stats,
+                        startOnExportTab = startExport,
+                        exportContentProvider = { fmt -> pollViewModel.exportPoll(freshPoll, fmt) },
+                        onDismiss = { inlineInspectPoll = null }
+                    )
+                }
+            } else {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Button(
+                        onClick = onOpenPollsHub,
+                        colors = ButtonDefaults.buttonColors(containerColor = accentColor),
+                        modifier = Modifier.defaultMinSize(minHeight = 48.dp)
+                    ) {
+                        Icon(Icons.Default.Poll, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Ouvrir les sondages avancés")
+                    }
+                }
+            }
+        } else if (selectedTab == 2 && eventViewModel != null) {
+            val context = LocalContext.current
+            val eventUiState by eventViewModel.uiState.collectAsState()
+            var showInlineEventEditor by remember { mutableStateOf(false) }
+            var inlineEditingEvent by remember { mutableStateOf<RavenEvent?>(null) }
+            var inlineInspectedEventId by remember { mutableStateOf<String?>(null) }
+
+            Column(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                EventsFeedContent(
+                    uiState = eventUiState,
+                    currentUserId = currentUser.id,
+                    serverFilterId = server.id,
+                    canCreateEvent = canManageEvents,
+                    titleLabel = "Événements • ${server.name}",
+                    onSelectFilter = { eventViewModel.setFilter(it) },
+                    onSearchChange = { eventViewModel.setSearchQuery(it) },
+                    onOpenCreate = {
+                        inlineEditingEvent = null
+                        showInlineEventEditor = true
+                    },
+                    onOpenDetail = { ev ->
+                        eventViewModel.inspectEvent(ev.id)
+                        inlineInspectedEventId = ev.id
+                    },
+                    onQuickRsvp = { ev, status ->
+                        onRequestNotificationPermission()
+                        eventViewModel.rsvp(ev.id, status)
+                    },
+                    onJoinVoice = { chId ->
+                        val ch = server.channels.find { it.id == chId }
+                        if (ch != null) onJoinVoiceChannel(ch)
+                    },
+                    modifier = Modifier.weight(1f).fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                OutlinedButton(
+                    onClick = onOpenEventsHub,
+                    modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 44.dp).testTag("open_global_events_hub_btn")
+                ) {
+                    Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Tous les événements & invitations privées", fontSize = 12.sp)
+                }
+            }
+
+            if (showInlineEventEditor) {
+                RavenEventEditorDialog(
+                    server = server,
+                    existingEvent = inlineEditingEvent,
+                    knownFriends = knownFriends,
+                    currentUserId = currentUser.id,
+                    isBusy = eventUiState.isBusy,
+                    onDismiss = {
+                        showInlineEventEditor = false
+                        inlineEditingEvent = null
+                    },
+                    onSubmit = { input, uri ->
+                        onRequestNotificationPermission()
+                        val target = inlineEditingEvent
+                        if (target != null) {
+                            eventViewModel.updateEvent(target.id, input, uri, context) {
+                                showInlineEventEditor = false
+                                inlineEditingEvent = null
+                            }
+                        } else {
+                            eventViewModel.createEvent(input, uri, context) {
+                                showInlineEventEditor = false
+                            }
+                        }
+                    }
+                )
+            }
+
+            inlineInspectedEventId?.let { evId ->
+                val freshEv = eventUiState.events.find { it.id == evId }
+                if (freshEv == null) {
+                    inlineInspectedEventId = null
+                } else {
+                    RavenEventDetailSheet(
+                        event = freshEv,
+                        currentUserId = currentUser.id,
+                        canManage = eventViewModel.canManage(freshEv),
+                        rsvpRecords = eventUiState.rsvpsByEvent[freshEv.id].orEmpty(),
+                        reminders = eventUiState.myRemindersByEvent[freshEv.id].orEmpty(),
+                        historyEntries = eventUiState.historyByEvent[freshEv.id].orEmpty(),
+                        serverMembers = server.members,
+                        shareChannels = server.channels,
+                        onRsvp = { st ->
+                            onRequestNotificationPermission()
+                            eventViewModel.rsvp(freshEv.id, st)
+                        },
+                        onToggleReminder = { mins ->
+                            onRequestNotificationPermission()
+                            eventViewModel.toggleReminder(freshEv.id, mins)
+                        },
+                        onEdit = {
+                            inlineEditingEvent = freshEv
+                            inlineInspectedEventId = null
+                            showInlineEventEditor = true
+                        },
+                        onCancelEvent = { reason -> eventViewModel.cancelEvent(freshEv.id, reason) },
+                        onDeleteEvent = {
+                            eventViewModel.deleteEvent(freshEv.id) {
+                                inlineInspectedEventId = null
+                            }
+                        },
+                        onJoinVoiceChannel = { chId ->
+                            val ch = server.channels.find { it.id == chId }
+                            if (ch != null) {
+                                inlineInspectedEventId = null
+                                onJoinVoiceChannel(ch)
+                            }
+                        },
+                        onShareInChannel = { chId -> eventViewModel.shareInChannel(freshEv.id, chId) },
+                        onDismiss = { inlineInspectedEventId = null }
+                    )
+                }
+            }
+        } else {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = PaddingValues(14.dp),
@@ -632,6 +827,7 @@ fun CommunityHomeView(
                     }
                 }
             }
+        }
         }
     }
 

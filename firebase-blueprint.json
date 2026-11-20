@@ -581,6 +581,140 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["storyId", "storyAuthorId", "reporterUid", "reason", "status"]
+    },
+    "AdvancedPoll": {
+      "title": "AdvancedPoll",
+      "description": "Advanced poll supporting drafts, single/multiple choice, anonymous voting, role restrictions, expiration, live counts, and manual closure.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "serverId": { "type": "string" },
+        "channelId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "question": { "type": "string" },
+        "description": { "type": "string" },
+        "options": { "type": "array" },
+        "optionCounts": { "type": "object" },
+        "allowsMultiple": { "type": "boolean" },
+        "maxChoices": { "type": "integer" },
+        "allowVoteChange": { "type": "boolean" },
+        "isAnonymous": { "type": "boolean" },
+        "visibility": { "type": "string" },
+        "isPublic": { "type": "boolean" },
+        "allowedRoleIds": { "type": "array" },
+        "memberIds": { "type": "array" },
+        "status": { "type": "string" },
+        "durationMinutes": { "type": "integer" },
+        "expiresAtMs": { "type": "integer" },
+        "publishedAtMs": { "type": "integer" },
+        "closedAtMs": { "type": "integer" },
+        "totalVotes": { "type": "integer" },
+        "totalVoters": { "type": "integer" },
+        "createdAtMs": { "type": "integer" },
+        "updatedAtMs": { "type": "integer" }
+      },
+      "required": ["id", "authorId", "authorName", "question", "options", "optionCounts", "visibility", "isPublic", "status"]
+    },
+    "PollVoteRecord": {
+      "title": "PollVoteRecord",
+      "description": "Single vote document per voter UID enforcing anti-fraud single-vote uniqueness and anonymous isolation.",
+      "type": "object",
+      "properties": {
+        "pollId": { "type": "string" },
+        "voterId": { "type": "string" },
+        "voterName": { "type": "string" },
+        "selectedOptionIds": { "type": "array" },
+        "votedAtMs": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["pollId", "voterId", "voterName", "selectedOptionIds"]
+    },
+    "RavenEvent": {
+      "title": "RavenEvent",
+      "description": "Full RAVEN event supporting server/voice/external types, timezones, duration, public/private invite visibility, capacity, RSVP, FIFO waitlist, and cancellation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "serverId": { "type": "string" },
+        "serverName": { "type": "string" },
+        "voiceChannelId": { "type": "string" },
+        "voiceChannelName": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "creatorName": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "bannerColorHex": { "type": "integer" },
+        "eventType": { "type": "string" },
+        "visibility": { "type": "string" },
+        "isPublic": { "type": "boolean" },
+        "startAtMs": { "type": "integer" },
+        "durationMinutes": { "type": "integer" },
+        "endAtMs": { "type": "integer" },
+        "timezoneId": { "type": "string" },
+        "dateLabel": { "type": "string" },
+        "timeLabel": { "type": "string" },
+        "location": { "type": "string" },
+        "maxParticipants": { "type": "integer" },
+        "goingIds": { "type": "array" },
+        "interestedIds": { "type": "array" },
+        "waitlistIds": { "type": "array" },
+        "invitedUserIds": { "type": "array" },
+        "memberIds": { "type": "array" },
+        "status": { "type": "string" },
+        "cancellationReason": { "type": "string" },
+        "createdAtMs": { "type": "integer" },
+        "updatedAtMs": { "type": "integer" }
+      },
+      "required": ["id", "creatorId", "creatorName", "title", "eventType", "visibility", "isPublic", "startAtMs", "durationMinutes", "timezoneId", "status"]
+    },
+    "EventRsvpRecord": {
+      "title": "EventRsvpRecord",
+      "description": "Per-user RSVP metadata record for an event.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "eventId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "avatarColor": { "type": "integer" },
+        "status": { "type": "string" },
+        "updatedAtMs": { "type": "integer" }
+      },
+      "required": ["uid", "eventId", "displayName", "status"]
+    },
+    "EventReminderRecord": {
+      "title": "EventReminderRecord",
+      "description": "Per-user scheduled reminder for an upcoming RAVEN event.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventId": { "type": "string" },
+        "userId": { "type": "string" },
+        "eventTitle": { "type": "string" },
+        "minutesBefore": { "type": "integer" },
+        "triggerAtMs": { "type": "integer" },
+        "triggered": { "type": "boolean" },
+        "createdAtMs": { "type": "integer" }
+      },
+      "required": ["id", "eventId", "userId", "minutesBefore", "triggerAtMs", "triggered"]
+    },
+    "EventHistoryEntry": {
+      "title": "EventHistoryEntry",
+      "description": "Immutable event audit/modification/waitlist/cancellation history entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventId": { "type": "string" },
+        "actorId": { "type": "string" },
+        "actorName": { "type": "string" },
+        "actionType": { "type": "string" },
+        "summary": { "type": "string" },
+        "timestampLabel": { "type": "string" },
+        "createdAtMs": { "type": "integer" }
+      },
+      "required": ["id", "eventId", "actorId", "actionType", "summary"]
     }
   },
   "firestore": {
@@ -699,6 +833,30 @@
     "/story_reports/{reportId}": {
       "schema": { "$ref": "#/entities/StoryReport" },
       "description": "Moderation reports flagged against stories."
+    },
+    "/polls/{pollId}": {
+      "schema": { "$ref": "#/entities/AdvancedPoll" },
+      "description": "Advanced polls with draft lifecycle, role restrictions, expiration, and server-verified tallies."
+    },
+    "/polls/{pollId}/votes/{voteId}": {
+      "schema": { "$ref": "#/entities/PollVoteRecord" },
+      "description": "Per-UID vote ballot preventing duplicate votes and protecting anonymous voter identities."
+    },
+    "/events/{eventId}": {
+      "schema": { "$ref": "#/entities/RavenEvent" },
+      "description": "RAVEN scheduled events (server, voice, public, private invite) with capacity, waitlist, and lifecycle."
+    },
+    "/events/{eventId}/rsvps/{rsvpId}": {
+      "schema": { "$ref": "#/entities/EventRsvpRecord" },
+      "description": "Per-UID participant RSVP records for an event."
+    },
+    "/events/{eventId}/reminders/{reminderId}": {
+      "schema": { "$ref": "#/entities/EventReminderRecord" },
+      "description": "Private user-scoped scheduled reminders for an event."
+    },
+    "/events/{eventId}/history/{entryId}": {
+      "schema": { "$ref": "#/entities/EventHistoryEntry" },
+      "description": "Immutable chronological modification, RSVP, waitlist promotion, and cancellation log."
     }
   }
 }

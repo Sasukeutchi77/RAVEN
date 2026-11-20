@@ -58,7 +58,8 @@ data class Poll(
     val options: List<PollOption>,
     val allowsMultiple: Boolean = false,
     val durationLabel: String = "Se termine dans 24h",
-    val isClosed: Boolean = false
+    val isClosed: Boolean = false,
+    val advancedPollId: String? = null
 )
 
 object ShopCatalog {

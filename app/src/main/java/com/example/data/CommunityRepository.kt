@@ -382,23 +382,21 @@ class CommunityRepository(internal val chatRepo: ChatRepository) {
                             return@withContext Result.failure(IllegalStateException("Invitation révoquée, expirée ou limite atteinte."))
                         }
                         val srvRef = db.collection("servers").document(invite.serverId)
-                        val preSnap = Tasks.await(srvRef.get())
-                        val preParsed = CommunityFirestoreSync.mapDocToServer(preSnap)
-                            ?: return@withContext Result.failure(IllegalStateException("Communauté introuvable."))
-                        if (!preParsed.customization.privacy.allowInviteLinks) {
-                            return@withContext Result.failure(SecurityException("Les invitations sont désactivées sur ce serveur."))
-                        }
-                        Tasks.await(inviteRef.update(mapOf("usesCount" to (invite.usesCount + 1), "updatedAt" to FieldValue.serverTimestamp())))
+                        // Add self to memberIds first (enforced server-side by hasValidCommunityInvite + allowInviteLinks)
                         Tasks.await(srvRef.update(mapOf(
                             "memberIds" to FieldValue.arrayUnion(authUser.uid),
                             "lastInviteCodeUsed" to code,
                             "updatedAt" to FieldValue.serverTimestamp()
                         )))
+                        Tasks.await(inviteRef.update(mapOf("usesCount" to (invite.usesCount + 1), "updatedAt" to FieldValue.serverTimestamp())))
+                        val postSnap = Tasks.await(srvRef.get())
+                        val parsed = CommunityFirestoreSync.mapDocToServer(postSnap)
+                            ?: return@withContext Result.failure(IllegalStateException("Communauté introuvable."))
                         val memberUser = chatRepo.currentUser.value.copy(id = authUser.uid, role = UserRole.MEMBER)
                         Tasks.await(srvRef.collection("members").document(authUser.uid).set(
-                            CommunityFirestoreSync.memberToMap(memberUser, preParsed.id, UserRole.MEMBER, setOf(RolePermission.SEND_MESSAGES, RolePermission.CONNECT_VOICE), preParsed.isPublic)
+                            CommunityFirestoreSync.memberToMap(memberUser, parsed.id, UserRole.MEMBER, setOf(RolePermission.SEND_MESSAGES, RolePermission.CONNECT_VOICE), parsed.isPublic)
                         ))
-                        val finalSrv = preParsed.copy(members = listOf(memberUser))
+                        val finalSrv = parsed.copy(members = listOf(memberUser))
                         val flow = chatRepo.serversMutableFlow()
                         if (flow.value.none { it.id == finalSrv.id }) {
                             flow.value = flow.value + finalSrv

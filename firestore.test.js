@@ -1009,5 +1009,822 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
   await assertSucceeds(aliceDb.collection("stories").doc("st_priv").delete());
 });
 
+test("Advanced Server Customization: admin-only sensitive config, secret blockedWords isolation, channel order/icons, and invite privacy lock", async () => {
+  const DANA_UID = "dana_admin";
+  const EVE_UID = "eve_outsider";
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("servers").doc("cust_srv").set({
+      name: "Raven Custom HQ",
+      uniqueHandle: "raven-custom-hq",
+      description: "Serveur personnalisable",
+      ownerId: ALICE_UID,
+      adminIds: [ALICE_UID, DANA_UID],
+      moderatorIds: [CHARLIE_UID],
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+      isPublic: false,
+      verificationLevel: "LOW",
+      privacyConfig: {
+        discoverableInCatalog: false,
+        allowInviteLinks: true,
+        requireInviteApproval: false,
+        allowMemberDms: true,
+        hideMemberListForNonStaff: false,
+      },
+    });
+    await db.collection("servers").doc("cust_srv").collection("channels").doc("ch_cust").set({
+      serverId: "cust_srv",
+      name: "general",
+      type: "TEXT",
+      isPublic: false,
+      position: 0,
+      iconKey: "tag",
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const danaDb = testEnv.authenticatedContext(DANA_UID).firestore();
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const eveDb = testEnv.authenticatedContext(EVE_UID).firestore();
+
+  const srvRefDana = danaDb.collection("servers").doc("cust_srv");
+  const srvRefCharlie = charlieDb.collection("servers").doc("cust_srv");
+  const srvRefBob = bobDb.collection("servers").doc("cust_srv");
+
+  // 1. Blocked words MUST NOT be placed inside readable servers/{serverId}.moderationConfig
+  await assertFails(
+    danaDb.collection("servers").doc("cust_srv").update({
+      moderationConfig: {
+        autoModEnabled: true,
+        blockedWords: ["secret_bad_word"],
+      },
+    })
+  );
+
+  // 2. Admin (Dana) CAN customize theme, welcome, notifications, verification, privacy, channel position/iconKey, and admin_settings docs
+  await assertSucceeds(
+    srvRefDana.update({
+      themeConfig: { accentColorHex: 0xFFEB459E, secondaryColorHex: 0xFF5865F2, surfaceStyle: "ROYAL_PURPLE", iconPresetKey: "rocket" },
+      welcomeConfig: { welcomeEnabled: true, welcomeMessageTemplate: "Salut {user} !", goodbyeEnabled: true, goodbyeMessageTemplate: "Bye {user}" },
+      notificationConfig: { defaultLevel: "ALL_MESSAGES", suppressEveryoneMentions: true, suppressRoleMentions: false, highlightAnnouncements: true },
+      verificationLevel: "HIGH",
+      serverRulesList: ["Respect mutuel", "Pas de spam"],
+      privacyConfig: { discoverableInCatalog: false, allowInviteLinks: true, requireInviteApproval: true, allowMemberDms: false, hideMemberListForNonStaff: true },
+    })
+  );
+  await assertSucceeds(
+    srvRefDana.collection("channels").doc("ch_cust").update({
+      position: 3,
+      iconKey: "shield",
+    })
+  );
+  await assertSucceeds(
+    srvRefDana.collection("admin_settings").doc("security").set({
+      serverId: "cust_srv",
+      settingType: "security",
+      updatedByUid: DANA_UID,
+      verificationLevel: "HIGH",
+      autoModEnabled: true,
+      blockSpamAndLinks: true,
+      blockBadWords: true,
+      blockedWords: ["phishing", "scamlink"],
+      defaultSlowmodeSeconds: 10,
+      maxMentionsPerMessage: 3,
+      antiRaidModeEnabled: false,
+      requireInviteApproval: true,
+    })
+  );
+  await assertSucceeds(
+    srvRefDana.collection("admin_settings").doc("public_policy").set({
+      serverId: "cust_srv",
+      settingType: "public_policy",
+      updatedByUid: DANA_UID,
+      verificationLevel: "HIGH",
+      requireRulesAcceptance: true,
+      serverRulesList: ["Respect mutuel", "Pas de spam"],
+      discoverableInCatalog: false,
+      allowInviteLinks: true,
+      allowMemberDms: false,
+      hideMemberListForNonStaff: true,
+    })
+  );
+
+  // 3. Moderator (Charlie) CANNOT alter sensitive customization settings, admin_settings, or reorder/re-icon channels
+  await assertFails(srvRefCharlie.update({ themeConfig: { accentColorHex: 0xFF000000 } }));
+  await assertFails(srvRefCharlie.update({ verificationLevel: "NONE" }));
+  await assertFails(srvRefCharlie.update({ welcomeConfig: { welcomeEnabled: false } }));
+  await assertFails(srvRefCharlie.update({ privacyConfig: { allowInviteLinks: false } }));
+  await assertFails(srvRefCharlie.collection("channels").doc("ch_cust").update({ position: 9, iconKey: "star" }));
+  await assertFails(
+    srvRefCharlie.collection("admin_settings").doc("security").update({
+      autoModEnabled: false,
+      updatedByUid: CHARLIE_UID,
+    })
+  );
+  await assertFails(
+    srvRefCharlie.collection("admin_settings").doc("public_policy").update({
+      hideMemberListForNonStaff: false,
+      updatedByUid: CHARLIE_UID,
+    })
+  );
+  // Moderator CAN still read admin_settings/security and moderate permitted channel flags
+  await assertSucceeds(srvRefCharlie.collection("admin_settings").doc("security").get());
+  await assertSucceeds(srvRefCharlie.collection("channels").doc("ch_cust").update({ slowmodeSeconds: 15, isLocked: true }));
+
+  // 4. Regular member (Bob) and Outsider (Eve) CANNOT read admin_settings/security or write any customization
+  await assertFails(srvRefBob.collection("admin_settings").doc("security").get());
+  await assertFails(eveDb.collection("servers").doc("cust_srv").collection("admin_settings").doc("security").get());
+  await assertSucceeds(srvRefBob.collection("admin_settings").doc("public_policy").get());
+  await assertFails(srvRefBob.update({ verificationLevel: "NONE" }));
+  await assertFails(srvRefBob.update({ welcomeConfig: { welcomeEnabled: false } }));
+  await assertFails(srvRefBob.collection("channels").doc("ch_cust").update({ position: 5 }));
+
+  // 5. Invite privacy lock: when privacyConfig.allowInviteLinks == false, creating invites and joining by invite FAIL server-side
+  await assertSucceeds(
+    danaDb.collection("community_invites").doc("ALLOW-1").set({
+      code: "ALLOW-1",
+      serverId: "cust_srv",
+      createdByUid: DANA_UID,
+      isRevoked: false,
+      maxUses: 10,
+      usesCount: 0,
+    })
+  );
+  await assertSucceeds(
+    srvRefDana.update({
+      privacyConfig: { discoverableInCatalog: false, allowInviteLinks: false, requireInviteApproval: true, allowMemberDms: false, hideMemberListForNonStaff: true },
+    })
+  );
+  await assertFails(
+    danaDb.collection("community_invites").doc("BLOCK-1").set({
+      code: "BLOCK-1",
+      serverId: "cust_srv",
+      createdByUid: DANA_UID,
+      isRevoked: false,
+      maxUses: 5,
+      usesCount: 0,
+    })
+  );
+  await assertFails(
+    eveDb.collection("servers").doc("cust_srv").update({
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID, EVE_UID],
+      lastInviteCodeUsed: "ALLOW-1",
+    })
+  );
+
+  // Admin cannot delete admin_settings (Owner-only)
+  await assertFails(srvRefDana.collection("admin_settings").doc("security").delete());
+  await assertSucceeds(aliceDb.collection("servers").doc("cust_srv").collection("admin_settings").doc("security").delete());
+});
+
+test("RAVEN Advanced Polls: draft isolation, publish immutability, single-vote/maxChoices, anti-fraud tally verification, anonymous voter privacy, role restrictions, expiration, and manual close", async () => {
+  const EVE_UID = "eve_outsider";
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("servers").doc("poll_srv").set({
+      name: "Poll Guild",
+      ownerId: ALICE_UID,
+      adminIds: [ALICE_UID],
+      moderatorIds: [CHARLIE_UID],
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      isPublic: false,
+    });
+    await db.collection("servers").doc("poll_srv").collection("members").doc(BOB_UID).set({
+      uid: BOB_UID,
+      serverId: "poll_srv",
+      name: "Bob",
+      role: "MEMBER",
+    });
+    await db.collection("servers").doc("poll_srv").collection("members").doc(CHARLIE_UID).set({
+      uid: CHARLIE_UID,
+      serverId: "poll_srv",
+      name: "Charlie",
+      role: "MODERATOR",
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+  const eveDb = testEnv.authenticatedContext(EVE_UID).firestore();
+  const now = Date.now();
+
+  // 1. Draft isolation: Alice creates a DRAFT; Bob CANNOT read or modify Alice's draft
+  const draftDoc = {
+    id: "poll_draft_1",
+    serverId: "poll_srv",
+    authorId: ALICE_UID,
+    authorName: "Alice",
+    question: "Choix initial brouillon ?",
+    description: "Description brouillon",
+    options: [
+      { id: "opt_0", text: "Option A" },
+      { id: "opt_1", text: "Option B" },
+      { id: "opt_2", text: "Option C" },
+    ],
+    optionCounts: { opt_0: 0, opt_1: 0, opt_2: 0 },
+    allowsMultiple: true,
+    maxChoices: 2,
+    allowVoteChange: true,
+    isAnonymous: false,
+    visibility: "PUBLIC",
+    isPublic: false,
+    allowedRoleIds: [],
+    memberIds: [],
+    status: "DRAFT",
+    durationMinutes: 1440,
+    totalVotes: 0,
+    totalVoters: 0,
+  };
+  await assertSucceeds(aliceDb.collection("polls").doc("poll_draft_1").set(draftDoc));
+  await assertFails(bobDb.collection("polls").doc("poll_draft_1").get());
+  await assertFails(bobDb.collection("polls").doc("poll_draft_1").update({ question: "Piraté" }));
+
+  // Alice CAN edit her draft BEFORE publication
+  await assertSucceeds(
+    aliceDb.collection("polls").doc("poll_draft_1").update({
+      question: "Question révisée avant publication ?",
+      totalVotes: 0,
+      totalVoters: 0,
+    })
+  );
+
+  // Alice publishes the draft; once PUBLISHED, even author CANNOT fraudulently edit question/options/tallies
+  await assertSucceeds(
+    aliceDb.collection("polls").doc("poll_draft_1").update({
+      status: "PUBLISHED",
+      isPublic: true,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      publishedAtMs: now,
+      expiresAtMs: now + 3600_000,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("polls").doc("poll_draft_1").update({
+      question: "Modification après publication interdite",
+    })
+  );
+  await assertFails(
+    bobDb.collection("polls").doc("poll_draft_1").update({
+      totalVotes: 99,
+      optionCounts: { opt_0: 99, opt_1: 0, opt_2: 0 },
+    })
+  );
+
+  // 2. Anti-fraud voting checks via runTransaction / WriteBatch
+  // 2a. Spoofing voteId != auth.uid MUST FAIL
+  await assertFails(
+    bobDb.runTransaction(async (tx) => {
+      const pRef = bobDb.collection("polls").doc("poll_draft_1");
+      const vRef = pRef.collection("votes").doc("fake_other_uid");
+      tx.set(vRef, {
+        pollId: "poll_draft_1",
+        voterId: BOB_UID,
+        voterName: "Bob",
+        selectedOptionIds: ["opt_0"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 0, opt_2: 0 },
+        totalVotes: 1,
+        totalVoters: 1,
+      });
+    })
+  );
+
+  // 2b. Exceeding maxChoices (maxChoices=2, sending 3) MUST FAIL
+  await assertFails(
+    bobDb.runTransaction(async (tx) => {
+      const pRef = bobDb.collection("polls").doc("poll_draft_1");
+      const vRef = pRef.collection("votes").doc(BOB_UID);
+      tx.set(vRef, {
+        pollId: "poll_draft_1",
+        voterId: BOB_UID,
+        voterName: "Bob",
+        selectedOptionIds: ["opt_0", "opt_1", "opt_2"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 1, opt_2: 1 },
+        totalVotes: 3,
+        totalVoters: 1,
+      });
+    })
+  );
+
+  // 2c. Fraudulent tally bump (+50 instead of +1) MUST FAIL
+  await assertFails(
+    bobDb.runTransaction(async (tx) => {
+      const pRef = bobDb.collection("polls").doc("poll_draft_1");
+      const vRef = pRef.collection("votes").doc(BOB_UID);
+      tx.set(vRef, {
+        pollId: "poll_draft_1",
+        voterId: BOB_UID,
+        voterName: "Bob",
+        selectedOptionIds: ["opt_0"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 50, opt_1: 0, opt_2: 0 },
+        totalVotes: 50,
+        totalVoters: 1,
+      });
+    })
+  );
+
+  // 2d. Legitimate atomic vote by Bob succeeds (2 choices within maxChoices=2)
+  await assertSucceeds(
+    bobDb.runTransaction(async (tx) => {
+      const pRef = bobDb.collection("polls").doc("poll_draft_1");
+      const vRef = pRef.collection("votes").doc(BOB_UID);
+      tx.set(vRef, {
+        pollId: "poll_draft_1",
+        voterId: BOB_UID,
+        voterName: "Bob",
+        selectedOptionIds: ["opt_0", "opt_1"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 1, opt_2: 0 },
+        totalVotes: 2,
+        totalVoters: 1,
+      });
+    })
+  );
+
+  // Charlie CANNOT delete or overwrite Bob's vote doc
+  await assertFails(
+    charlieDb.collection("polls").doc("poll_draft_1").collection("votes").doc(BOB_UID).delete()
+  );
+
+  // 3. Anonymous poll privacy: cannot expose non-anonymous voterName, and outsiders/other voters CANNOT list/get others' vote docs
+  await assertSucceeds(
+    aliceDb.collection("polls").doc("poll_anon_1").set({
+      id: "poll_anon_1",
+      serverId: "poll_srv",
+      authorId: ALICE_UID,
+      authorName: "Alice",
+      question: "Vote secret unique ?",
+      options: [
+        { id: "opt_0", text: "Oui" },
+        { id: "opt_1", text: "Non" },
+      ],
+      optionCounts: { opt_0: 0, opt_1: 0 },
+      allowsMultiple: false,
+      maxChoices: 1,
+      allowVoteChange: false,
+      isAnonymous: true,
+      visibility: "SERVER",
+      isPublic: false,
+      allowedRoleIds: [],
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      status: "PUBLISHED",
+      durationMinutes: 60,
+      publishedAtMs: now,
+      expiresAtMs: now + 3600_000,
+      totalVotes: 0,
+      totalVoters: 0,
+    })
+  );
+
+  // Trying to write real name 'Bob' on anonymous poll MUST FAIL
+  await assertFails(
+    bobDb.runTransaction(async (tx) => {
+      const pRef = bobDb.collection("polls").doc("poll_anon_1");
+      tx.set(pRef.collection("votes").doc(BOB_UID), {
+        pollId: "poll_anon_1",
+        voterId: BOB_UID,
+        voterName: "Bob",
+        selectedOptionIds: ["opt_0"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 0 },
+        totalVotes: 1,
+        totalVoters: 1,
+      });
+    })
+  );
+
+  // Trying to submit 2 choices on single-choice poll MUST FAIL
+  await assertFails(
+    bobDb.runTransaction(async (tx) => {
+      const pRef = bobDb.collection("polls").doc("poll_anon_1");
+      tx.set(pRef.collection("votes").doc(BOB_UID), {
+        pollId: "poll_anon_1",
+        voterId: BOB_UID,
+        voterName: "Anonyme",
+        selectedOptionIds: ["opt_0", "opt_1"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 1 },
+        totalVotes: 2,
+        totalVoters: 1,
+      });
+    })
+  );
+
+  // Legitimate anonymous vote with 'Anonyme' succeeds
+  await assertSucceeds(
+    bobDb.runTransaction(async (tx) => {
+      const pRef = bobDb.collection("polls").doc("poll_anon_1");
+      tx.set(pRef.collection("votes").doc(BOB_UID), {
+        pollId: "poll_anon_1",
+        voterId: BOB_UID,
+        voterName: "Anonyme",
+        selectedOptionIds: ["opt_0"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 0 },
+        totalVotes: 1,
+        totalVoters: 1,
+      });
+    })
+  );
+
+  // allowVoteChange=false -> Bob CANNOT change or delete his vote once cast!
+  await assertFails(
+    bobDb.runTransaction(async (tx) => {
+      const pRef = bobDb.collection("polls").doc("poll_anon_1");
+      tx.set(pRef.collection("votes").doc(BOB_UID), {
+        pollId: "poll_anon_1",
+        voterId: BOB_UID,
+        voterName: "Anonyme",
+        selectedOptionIds: ["opt_1"],
+        votedAtMs: now + 1000,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 0, opt_1: 1 },
+        totalVotes: 1,
+        totalVoters: 1,
+      });
+    })
+  );
+
+  // Even poll author Alice CANNOT read or list /votes on an anonymous poll!
+  await assertFails(aliceDb.collection("polls").doc("poll_anon_1").collection("votes").doc(BOB_UID).get());
+  await assertFails(aliceDb.collection("polls").doc("poll_anon_1").collection("votes").get());
+  // Bob CAN read his own anonymous vote doc
+  await assertSucceeds(bobDb.collection("polls").doc("poll_anon_1").collection("votes").doc(BOB_UID).get());
+
+  // 4. Role-restricted poll: only MODERATOR/ADMIN allowed -> Member Bob REJECTED, Moderator Charlie ALLOWED, Outsider Eve REJECTED
+  await assertSucceeds(
+    aliceDb.collection("polls").doc("poll_mod_only").set({
+      id: "poll_mod_only",
+      serverId: "poll_srv",
+      authorId: ALICE_UID,
+      authorName: "Alice",
+      question: "Décision réservée au staff ?",
+      options: [
+        { id: "opt_0", text: "Valider" },
+        { id: "opt_1", text: "Refuser" },
+      ],
+      optionCounts: { opt_0: 0, opt_1: 0 },
+      allowsMultiple: false,
+      maxChoices: 1,
+      allowVoteChange: true,
+      isAnonymous: false,
+      visibility: "ROLE_RESTRICTED",
+      isPublic: false,
+      allowedRoleIds: ["MODERATOR", "ADMIN"],
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      status: "PUBLISHED",
+      durationMinutes: 60,
+      publishedAtMs: now,
+      expiresAtMs: now + 3600_000,
+      totalVotes: 0,
+      totalVoters: 0,
+    })
+  );
+  await assertFails(
+    bobDb.runTransaction(async (tx) => {
+      const pRef = bobDb.collection("polls").doc("poll_mod_only");
+      tx.set(pRef.collection("votes").doc(BOB_UID), {
+        pollId: "poll_mod_only",
+        voterId: BOB_UID,
+        voterName: "Bob",
+        selectedOptionIds: ["opt_0"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 0 },
+        totalVotes: 1,
+        totalVoters: 1,
+      });
+    })
+  );
+  await assertFails(
+    eveDb.runTransaction(async (tx) => {
+      const pRef = eveDb.collection("polls").doc("poll_mod_only");
+      tx.set(pRef.collection("votes").doc(EVE_UID), {
+        pollId: "poll_mod_only",
+        voterId: EVE_UID,
+        voterName: "Eve",
+        selectedOptionIds: ["opt_0"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 0 },
+        totalVotes: 1,
+        totalVoters: 1,
+      });
+    })
+  );
+  await assertSucceeds(
+    charlieDb.runTransaction(async (tx) => {
+      const pRef = charlieDb.collection("polls").doc("poll_mod_only");
+      tx.set(pRef.collection("votes").doc(CHARLIE_UID), {
+        pollId: "poll_mod_only",
+        voterId: CHARLIE_UID,
+        voterName: "Charlie",
+        selectedOptionIds: ["opt_0"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 0 },
+        totalVotes: 1,
+        totalVoters: 1,
+      });
+    })
+  );
+
+  // 5. Expired poll blocks new votes, and manual close blocks further votes without altering tallies
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("polls").doc("poll_expired").set({
+      id: "poll_expired",
+      authorId: ALICE_UID,
+      authorName: "Alice",
+      question: "Sondage déjà expiré ?",
+      options: [
+        { id: "opt_0", text: "Oui" },
+        { id: "opt_1", text: "Non" },
+      ],
+      optionCounts: { opt_0: 0, opt_1: 0 },
+      allowsMultiple: false,
+      maxChoices: 1,
+      allowVoteChange: true,
+      isAnonymous: false,
+      visibility: "PUBLIC",
+      isPublic: true,
+      allowedRoleIds: [],
+      memberIds: [ALICE_UID],
+      status: "PUBLISHED",
+      durationMinutes: 15,
+      publishedAtMs: now - 3600_000,
+      expiresAtMs: now - 60_000,
+      totalVotes: 0,
+      totalVoters: 0,
+    });
+  });
+  await assertFails(
+    bobDb.runTransaction(async (tx) => {
+      const pRef = bobDb.collection("polls").doc("poll_expired");
+      tx.set(pRef.collection("votes").doc(BOB_UID), {
+        pollId: "poll_expired",
+        voterId: BOB_UID,
+        voterName: "Bob",
+        selectedOptionIds: ["opt_0"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 0 },
+        totalVotes: 1,
+        totalVoters: 1,
+      });
+    })
+  );
+
+  // Manual close: Bob cannot close; Author/Staff Alice CAN close (without mutating tallies) -> subsequent votes FAIL
+  await assertFails(bobDb.collection("polls").doc("poll_draft_1").update({ status: "CLOSED", closedAtMs: now }));
+  await assertSucceeds(aliceDb.collection("polls").doc("poll_draft_1").update({ status: "CLOSED", closedAtMs: now }));
+  await assertFails(
+    charlieDb.runTransaction(async (tx) => {
+      const pRef = charlieDb.collection("polls").doc("poll_draft_1");
+      tx.set(pRef.collection("votes").doc(CHARLIE_UID), {
+        pollId: "poll_draft_1",
+        voterId: CHARLIE_UID,
+        voterName: "Charlie",
+        selectedOptionIds: ["opt_2"],
+        votedAtMs: now,
+      });
+      tx.update(pRef, {
+        optionCounts: { opt_0: 1, opt_1: 1, opt_2: 1 },
+        totalVotes: 3,
+        totalVoters: 2,
+      });
+    })
+  );
+});
+
+test("RAVEN Events: server permissions, private invite isolation, atomic RSVP/waitlist FIFO promotion, reminders, and history", async () => {
+  const EVE_UID = "eve_outsider_evt";
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("servers").doc("evt_srv").set({
+      name: "Events HQ",
+      ownerId: ALICE_UID,
+      adminIds: [ALICE_UID],
+      moderatorIds: [CHARLIE_UID],
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+      isPublic: false,
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+  const eveDb = testEnv.authenticatedContext(EVE_UID).firestore();
+  const unauthDb = testEnv.unauthenticatedContext().firestore();
+  const now = Date.now();
+  const startAt = now + 3600_000;
+
+  // 1. Unauthenticated read/write is rejected
+  await assertFails(unauthDb.collection("events").doc("ev_pub_1").get());
+
+  // 2. Non-staff member (Bob) CANNOT create a server event; Admin Alice CAN
+  const serverEventPayload = {
+    id: "ev_srv_1",
+    serverId: "evt_srv",
+    serverName: "Events HQ",
+    creatorId: ALICE_UID,
+    creatorName: "Alice",
+    title: "Live Vocal Soirée",
+    description: "Capacité 1 place pour tester la liste d'attente FIFO.",
+    bannerColorHex: 0x5865F2,
+    eventType: "VOICE",
+    voiceChannelId: "vc_main",
+    visibility: "SERVER",
+    isPublic: false,
+    status: "SCHEDULED",
+    startAtMs: startAt,
+    durationMinutes: 90,
+    timezoneId: "Europe/Paris",
+    location: "Vocal Général",
+    maxParticipants: 1,
+    goingIds: [ALICE_UID],
+    interestedIds: [],
+    waitlistIds: [],
+    invitedUserIds: [],
+    memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+    createdAtMs: now,
+    updatedAtMs: now,
+  };
+
+  await assertFails(
+    bobDb.collection("events").doc("ev_bob_forged").set({
+      ...serverEventPayload,
+      id: "ev_bob_forged",
+      creatorId: BOB_UID,
+      creatorName: "Bob",
+      goingIds: [BOB_UID],
+    })
+  );
+  await assertSucceeds(aliceDb.collection("events").doc("ev_srv_1").set(serverEventPayload));
+
+  // Outsider Eve CANNOT read private SERVER event
+  await assertFails(eveDb.collection("events").doc("ev_srv_1").get());
+
+  // 3. Regular member Bob joins full event -> MUST enter waitlistIds (cannot force into goingIds when full)
+  await assertFails(
+    bobDb.collection("events").doc("ev_srv_1").update({
+      goingIds: [ALICE_UID, BOB_UID],
+      updatedAtMs: now,
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("events").doc("ev_srv_1").update({
+      waitlistIds: [BOB_UID],
+      updatedAtMs: now,
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("events").doc("ev_srv_1").collection("rsvps").doc(BOB_UID).set({
+      uid: BOB_UID,
+      eventId: "ev_srv_1",
+      displayName: "Bob",
+      status: "WAITLISTED",
+      updatedAtMs: now,
+    })
+  );
+
+  // 4. Bob creates his own private reminder; Alice CANNOT read or overwrite it
+  await assertSucceeds(
+    bobDb.collection("events").doc("ev_srv_1").collection("reminders").doc("rem_bob_15").set({
+      id: "rem_bob_15",
+      eventId: "ev_srv_1",
+      userId: BOB_UID,
+      minutesBefore: 15,
+      triggerAtMs: startAt - 900_000,
+      triggered: false,
+      createdAtMs: now,
+    })
+  );
+  await assertFails(aliceDb.collection("events").doc("ev_srv_1").collection("reminders").doc("rem_bob_15").get());
+
+  // 5. Non-staff Charlie joins waitlist (behind Bob? No, Alice leaves promoting Bob, then Charlie waitlists, then Bob leaves promoting Charlie!)
+  await assertSucceeds(
+    aliceDb.collection("events").doc("ev_srv_1").update({
+      goingIds: [BOB_UID],
+      waitlistIds: [],
+      updatedAtMs: now + 1000,
+    })
+  );
+  // Now Bob (non-staff) is going (1/1) and non-staff Eve joins after being added or Charlie waitlists; actually use regular member DAVE_UID for non-staff RSVP promo!
+  const DAVE_UID = "dave_member_evt";
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().collection("servers").doc("evt_srv").update({
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DAVE_UID],
+    });
+    await ctx.firestore().collection("events").doc("ev_srv_1").update({
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DAVE_UID],
+      waitlistIds: [DAVE_UID],
+    });
+  });
+  const daveDb = testEnv.authenticatedContext(DAVE_UID).firestore();
+  // Non-staff Bob leaves goingIds -> non-staff FIFO promotion puts Dave into goingIds!
+  await assertSucceeds(
+    bobDb.collection("events").doc("ev_srv_1").update({
+      goingIds: [DAVE_UID],
+      waitlistIds: [],
+      updatedAtMs: now + 1500,
+    })
+  );
+  // Dave steps down -> allowed
+  await assertSucceeds(
+    daveDb.collection("events").doc("ev_srv_1").update({
+      goingIds: [],
+      updatedAtMs: now + 1800,
+    })
+  );
+
+  // 6. Regular member Bob CANNOT tamper with event title, cancel it, or forge another user's history
+  await assertFails(bobDb.collection("events").doc("ev_srv_1").update({ title: "Hijacked" }));
+  await assertFails(bobDb.collection("events").doc("ev_srv_1").update({ status: "CANCELLED" }));
+  await assertFails(
+    bobDb.collection("events").doc("ev_srv_1").collection("history").doc("h_forged").set({
+      id: "h_forged",
+      eventId: "ev_srv_1",
+      actorId: ALICE_UID,
+      actorName: "Alice",
+      actionType: "CANCELLED",
+      summary: "Forged history",
+      timestampLabel: "12:00",
+      createdAtMs: now,
+    })
+  );
+
+  // 7. Personal PRIVATE_INVITE event created by Bob inviting Charlie only -> Alice CANNOT view
+  await assertSucceeds(
+    bobDb.collection("events").doc("ev_priv_bob").set({
+      id: "ev_priv_bob",
+      serverId: null,
+      creatorId: BOB_UID,
+      creatorName: "Bob",
+      title: "Atelier Secret",
+      description: "Privé sur invitation",
+      eventType: "EXTERNAL",
+      visibility: "PRIVATE_INVITE",
+      isPublic: false,
+      status: "SCHEDULED",
+      startAtMs: startAt + 3600_000,
+      durationMinutes: 60,
+      timezoneId: "UTC",
+      location: "Paris",
+      maxParticipants: 5,
+      goingIds: [BOB_UID],
+      interestedIds: [],
+      waitlistIds: [],
+      invitedUserIds: [CHARLIE_UID],
+      memberIds: [],
+      createdAtMs: now,
+      updatedAtMs: now,
+    })
+  );
+  await assertSucceeds(charlieDb.collection("events").doc("ev_priv_bob").get());
+  await assertFails(aliceDb.collection("events").doc("ev_priv_bob").get());
+
+  // 8. Admin Alice cancels server event -> subsequent RSVP by Charlie MUST FAIL
+  await assertSucceeds(
+    aliceDb.collection("events").doc("ev_srv_1").update({
+      status: "CANCELLED",
+      cancellationReason: "Report technique",
+      updatedAtMs: now + 2000,
+    })
+  );
+  await assertFails(
+    charlieDb.collection("events").doc("ev_srv_1").update({
+      interestedIds: [CHARLIE_UID],
+      updatedAtMs: now + 3000,
+    })
+  );
+});
+
+
+
+
 
 

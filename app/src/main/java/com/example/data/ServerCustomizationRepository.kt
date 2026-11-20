@@ -46,7 +46,7 @@ class ServerCustomizationRepository(
             actorName = currentUserName(),
             actionDescription = action,
             targetName = srv.name,
-            timestampLabel = CommunityPermissions.nowTimeLabel()
+            timestamp = CommunityPermissions.nowTimeLabel()
         )
         return (listOf(entry) + srv.auditLogs).take(40)
     }
@@ -211,8 +211,8 @@ class ServerCustomizationRepository(
         val uid = currentUid()
         val existing = channelId?.let { cid -> srv.channels.find { it.id == cid } }
         val isChangingSensitiveChannelPerms = isPrivate != (existing?.isPrivate ?: false) ||
-            allowedRoles != (existing?.allowedRoles ?: emptyList()) ||
-            allowedRoleIds != (existing?.allowedRoleIds ?: emptyList()) ||
+            allowedRoles != (existing?.allowedRoles ?: emptyList<UserRole>()) ||
+            allowedRoleIds != (existing?.allowedRoleIds ?: emptyList<String>()) ||
             iconKey != existing?.iconKey
         if (isChangingSensitiveChannelPerms) {
             requireAdminAccess(srv, uid).onFailure { return Result.failure(it) }

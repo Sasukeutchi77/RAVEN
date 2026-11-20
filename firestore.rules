@@ -500,6 +500,270 @@ service cloud.firestore {
              (!('reviewedByUid' in data) || data.reviewedByUid == null || (data.reviewedByUid is string && data.reviewedByUid.size() <= 128));
     }
 
+    function pollDoc(pollId) {
+      return get(/databases/$(database)/documents/polls/$(pollId));
+    }
+
+    function pollExists(pollId) {
+      return exists(/databases/$(database)/documents/polls/$(pollId));
+    }
+
+    function isValidPollDoc(data, pollId) {
+      return data.id == pollId &&
+             isValidId(pollId) &&
+             data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
+             data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 64 &&
+             data.question is string && data.question.size() >= 3 && data.question.size() <= 300 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 1000)) &&
+             data.options is list && data.options.size() >= 2 && data.options.size() <= 10 &&
+             data.optionCounts is map &&
+             data.optionCounts.keys().size() == data.options.size() &&
+             data.optionCounts.keys().hasOnly(['opt_0', 'opt_1', 'opt_2', 'opt_3', 'opt_4', 'opt_5', 'opt_6', 'opt_7', 'opt_8', 'opt_9']) &&
+             data.allowsMultiple is bool &&
+             data.maxChoices is int && data.maxChoices >= 1 && data.maxChoices <= 10 &&
+             (data.allowsMultiple == true || data.maxChoices == 1) &&
+             data.allowVoteChange is bool &&
+             data.isAnonymous is bool &&
+             data.visibility is string && data.visibility in ['PUBLIC', 'SERVER', 'ROLE_RESTRICTED'] &&
+             data.status is string && data.status in ['DRAFT', 'PUBLISHED', 'CLOSED'] &&
+             data.isPublic is bool &&
+             ((data.status == 'DRAFT' && data.isPublic == false && (!('memberIds' in data) || data.memberIds.size() == 0)) ||
+              (data.status != 'DRAFT' && data.isPublic == (data.visibility == 'PUBLIC'))) &&
+             data.durationMinutes is int && data.durationMinutes >= 0 && data.durationMinutes <= 525600 &&
+             data.totalVotes is int && data.totalVotes >= 0 &&
+             data.totalVoters is int && data.totalVoters >= 0 &&
+             (!('expiresAtMs' in data) || data.expiresAtMs == null || data.expiresAtMs is int) &&
+             (!('publishedAtMs' in data) || data.publishedAtMs == null || data.publishedAtMs is int) &&
+             (!('closedAtMs' in data) || data.closedAtMs == null || data.closedAtMs is int) &&
+             (!('serverId' in data) || data.serverId == null || isValidId(data.serverId)) &&
+             (!('channelId' in data) || data.channelId == null || isValidId(data.channelId)) &&
+             (!('allowedRoleIds' in data) || (data.allowedRoleIds is list && data.allowedRoleIds.size() <= 30)) &&
+             (!('allowedRoleNames' in data) || (data.allowedRoleNames is list && data.allowedRoleNames.size() <= 30)) &&
+             (!('memberIds' in data) || (data.memberIds is list && data.memberIds.size() <= 200)) &&
+             (data.visibility != 'SERVER' || (('serverId' in data) && data.serverId != null)) &&
+             (data.visibility != 'ROLE_RESTRICTED' ||
+              (('serverId' in data) && data.serverId != null && ('allowedRoleIds' in data) && data.allowedRoleIds.size() >= 1));
+    }
+
+    function hasAllowedPollRole(serverId, allowedRoles) {
+      let srv = get(/databases/$(database)/documents/servers/$(serverId)).data;
+      let memExists = exists(/databases/$(database)/documents/servers/$(serverId)/members/$(request.auth.uid));
+      let mem = memExists ? get(/databases/$(database)/documents/servers/$(serverId)/members/$(request.auth.uid)).data : {};
+      return (srv.ownerId == request.auth.uid && ('ADMIN' in allowedRoles || 'role_admin' in allowedRoles)) ||
+             (('adminIds' in srv) && request.auth.uid in srv.adminIds && ('ADMIN' in allowedRoles || 'role_admin' in allowedRoles)) ||
+             (('moderatorIds' in srv) && request.auth.uid in srv.moderatorIds && ('MODERATOR' in allowedRoles || 'role_mod' in allowedRoles)) ||
+             ('role' in mem && (
+               mem.role in allowedRoles ||
+               ('MEMBER' in allowedRoles && mem.role in ['MEMBER', 'MODERATOR', 'ADMIN']) ||
+               ('role_member' in allowedRoles && mem.role == 'MEMBER')
+             )) ||
+             (('customRoleId' in mem) && mem.customRoleId != null && mem.customRoleId in allowedRoles);
+    }
+
+    function isEligiblePollVoter(poll) {
+      return poll.visibility == 'PUBLIC' ||
+             (poll.visibility == 'SERVER' && ('serverId' in poll) && poll.serverId != null && isServerMemberOrPublic(poll.serverId)) ||
+             (poll.visibility == 'ROLE_RESTRICTED' && ('serverId' in poll) && poll.serverId != null &&
+              isServerMemberOrPublic(poll.serverId) && ('allowedRoleIds' in poll) &&
+              hasAllowedPollRole(poll.serverId, poll.allowedRoleIds));
+    }
+
+    function isValidVoteDoc(data, pollId, poll) {
+      return data.pollId == pollId &&
+             data.voterId == request.auth.uid &&
+             data.voterName is string && data.voterName.size() >= 1 && data.voterName.size() <= 64 &&
+             (poll.isAnonymous == false || data.voterName == 'Anonyme') &&
+             data.selectedOptionIds is list &&
+             data.selectedOptionIds.size() >= 1 &&
+             data.selectedOptionIds.size() <= poll.maxChoices &&
+             (poll.allowsMultiple == true || data.selectedOptionIds.size() == 1) &&
+             data.selectedOptionIds.toSet().size() == data.selectedOptionIds.size() &&
+             poll.optionCounts.keys().hasAll(data.selectedOptionIds);
+    }
+
+    function slotOk(k, beforeSel, afterSel, oldC, newC) {
+      return !(k in oldC) || (
+        newC[k] is int && newC[k] >= 0 &&
+        newC[k] == oldC[k] + (k in afterSel ? 1 : 0) - (k in beforeSel ? 1 : 0)
+      );
+    }
+
+    function validPollTallyUpdate(pollId, oldPoll, newPoll) {
+      let votePath = /databases/$(database)/documents/polls/$(pollId)/votes/$(request.auth.uid);
+      let voteBefore = exists(votePath);
+      let voteAfter = existsAfter(votePath);
+      let beforeSel = voteBefore ? get(votePath).data.selectedOptionIds : [];
+      let afterSel = voteAfter ? getAfter(votePath).data.selectedOptionIds : [];
+      let oldC = oldPoll.optionCounts;
+      let newC = newPoll.optionCounts;
+      return (voteBefore || voteAfter) &&
+             (!voteBefore || oldPoll.allowVoteChange == true) &&
+             newPoll.totalVotes is int && newPoll.totalVotes >= 0 &&
+             newPoll.totalVoters is int && newPoll.totalVoters >= 0 &&
+             newPoll.totalVoters == oldPoll.totalVoters + (voteAfter ? 1 : 0) - (voteBefore ? 1 : 0) &&
+             newPoll.totalVotes == oldPoll.totalVotes - beforeSel.size() + afterSel.size() &&
+             slotOk('opt_0', beforeSel, afterSel, oldC, newC) &&
+             slotOk('opt_1', beforeSel, afterSel, oldC, newC) &&
+             slotOk('opt_2', beforeSel, afterSel, oldC, newC) &&
+             slotOk('opt_3', beforeSel, afterSel, oldC, newC) &&
+             slotOk('opt_4', beforeSel, afterSel, oldC, newC) &&
+             slotOk('opt_5', beforeSel, afterSel, oldC, newC) &&
+             slotOk('opt_6', beforeSel, afterSel, oldC, newC) &&
+             slotOk('opt_7', beforeSel, afterSel, oldC, newC) &&
+             slotOk('opt_8', beforeSel, afterSel, oldC, newC) &&
+             slotOk('opt_9', beforeSel, afterSel, oldC, newC);
+    }
+
+    function canReadPollVotes(pollId) {
+      let p = pollDoc(pollId).data;
+      return pollExists(pollId) &&
+             p.isAnonymous == false &&
+             p.status != 'DRAFT' && (
+               p.isPublic == true ||
+               (('serverId' in p) && p.serverId != null && isServerMemberOrPublic(p.serverId)) ||
+               (('memberIds' in p) && request.auth.uid in p.memberIds)
+             );
+    }
+
+    function canWriteVote(pollId, voteId, isCreate) {
+      let p = pollDoc(pollId).data;
+      let pAfter = getAfter(/databases/$(database)/documents/polls/$(pollId)).data;
+      return isValidId(voteId) && voteId == request.auth.uid &&
+             pollExists(pollId) &&
+             p.status == 'PUBLISHED' &&
+             (isCreate || p.allowVoteChange == true) &&
+             (!('expiresAtMs' in p) || p.expiresAtMs == null || request.time.toMillis() <= p.expiresAtMs) &&
+             isEligiblePollVoter(p) &&
+             isValidVoteDoc(incoming(), pollId, p) &&
+             pAfter.totalVoters == p.totalVoters + (isCreate ? 1 : 0);
+    }
+
+    function canDeleteVote(pollId, voteId) {
+      let p = pollDoc(pollId).data;
+      let pAfter = getAfter(/databases/$(database)/documents/polls/$(pollId)).data;
+      return isValidId(voteId) && voteId == request.auth.uid &&
+             existing().voterId == request.auth.uid &&
+             pollExists(pollId) &&
+             p.status == 'PUBLISHED' &&
+             p.allowVoteChange == true &&
+             (!('expiresAtMs' in p) || p.expiresAtMs == null || request.time.toMillis() <= p.expiresAtMs) &&
+             pAfter.totalVoters == p.totalVoters - 1;
+    }
+
+    function eventDoc(eventId) {
+      return get(/databases/$(database)/documents/events/$(eventId));
+    }
+
+    function eventExists(eventId) {
+      return exists(/databases/$(database)/documents/events/$(eventId));
+    }
+
+    function canManageServerEvents(serverId) {
+      return isCommunityStaff(serverId) || (
+        serverExists(serverId) &&
+        exists(/databases/$(database)/documents/servers/$(serverId)/members/$(request.auth.uid)) &&
+        'permissions' in get(/databases/$(database)/documents/servers/$(serverId)/members/$(request.auth.uid)).data &&
+        'MANAGE_EVENTS' in get(/databases/$(database)/documents/servers/$(serverId)/members/$(request.auth.uid)).data.permissions
+      );
+    }
+
+    function canManageRavenEvent(data) {
+      return data.creatorId == request.auth.uid ||
+             (('serverId' in data) && data.serverId != null && canManageServerEvents(data.serverId));
+    }
+
+    function canViewRavenEvent(data) {
+      return data.creatorId == request.auth.uid ||
+             data.isPublic == true ||
+             (('invitedUserIds' in data) && request.auth.uid in data.invitedUserIds) ||
+             (('memberIds' in data) && request.auth.uid in data.memberIds) ||
+             (('serverId' in data) && data.serverId != null && data.visibility != 'PRIVATE_INVITE' && isServerMemberOrPublic(data.serverId));
+    }
+
+    function isValidEventImage(url) {
+      return url is string &&
+             url.size() >= 1 &&
+             url.size() <= 900 &&
+             !url.matches('.*javascript:.*') &&
+             !url.matches('.*data:.*') &&
+             !url.matches('.*\\.\\..*');
+    }
+
+    function isValidRavenEvent(data, eventId) {
+      return data.id == eventId &&
+             isValidId(eventId) &&
+             data.creatorId is string && data.creatorId.size() >= 1 && data.creatorId.size() <= 128 &&
+             data.creatorName is string && data.creatorName.size() >= 1 && data.creatorName.size() <= 64 &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 120 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 1500)) &&
+             (!('imageUrl' in data) || data.imageUrl == null || isValidEventImage(data.imageUrl)) &&
+             (!('bannerColorHex' in data) || data.bannerColorHex is int) &&
+             data.eventType is string && data.eventType in ['VOICE', 'SERVER', 'EXTERNAL'] &&
+             data.visibility is string && data.visibility in ['PUBLIC', 'SERVER', 'PRIVATE_INVITE'] &&
+             data.isPublic is bool &&
+             data.isPublic == (data.visibility == 'PUBLIC') &&
+             data.status is string && data.status in ['SCHEDULED', 'ONGOING', 'COMPLETED', 'CANCELLED'] &&
+             data.startAtMs is int && data.startAtMs > 0 &&
+             data.durationMinutes is int && data.durationMinutes >= 5 && data.durationMinutes <= 10080 &&
+             data.timezoneId is string && data.timezoneId.size() >= 2 && data.timezoneId.size() <= 64 &&
+             (!('location' in data) || (data.location is string && data.location.size() <= 240)) &&
+             (!('serverId' in data) || data.serverId == null || isValidId(data.serverId)) &&
+             (!('voiceChannelId' in data) || data.voiceChannelId == null || isValidId(data.voiceChannelId)) &&
+             data.maxParticipants is int && data.maxParticipants >= 0 && data.maxParticipants <= 1000 &&
+             data.goingIds is list && data.goingIds.size() <= 500 &&
+             data.interestedIds is list && data.interestedIds.size() <= 500 &&
+             data.waitlistIds is list && data.waitlistIds.size() <= 500 &&
+             data.invitedUserIds is list && data.invitedUserIds.size() <= 200 &&
+             data.memberIds is list && data.memberIds.size() <= 200 &&
+             (data.visibility != 'PRIVATE_INVITE' || data.memberIds.size() == 0) &&
+             (data.visibility != 'SERVER' || (('serverId' in data) && data.serverId != null)) &&
+             (data.maxParticipants == 0 || data.goingIds.size() <= data.maxParticipants);
+    }
+
+    function validEventRsvpUpdate(oldEv, newEv) {
+      return oldEv.status == 'SCHEDULED' &&
+             newEv.status == 'SCHEDULED' &&
+             newEv.diff(oldEv).affectedKeys().hasOnly(['goingIds', 'interestedIds', 'waitlistIds', 'updatedAtMs', 'updatedAt']) &&
+             newEv.goingIds is list && newEv.goingIds.size() <= 500 &&
+             newEv.interestedIds is list && newEv.interestedIds.size() <= 500 &&
+             newEv.waitlistIds is list && newEv.waitlistIds.size() <= 500 &&
+             (newEv.interestedIds == oldEv.interestedIds || (
+               newEv.interestedIds.toSet().difference(oldEv.interestedIds.toSet()).hasOnly([request.auth.uid]) &&
+               oldEv.interestedIds.toSet().difference(newEv.interestedIds.toSet()).hasOnly([request.auth.uid])
+             )) &&
+             (!(request.auth.uid in newEv.waitlistIds) ||
+              (request.auth.uid in oldEv.waitlistIds) ||
+              (oldEv.maxParticipants > 0 && newEv.goingIds.size() >= oldEv.maxParticipants)) &&
+             (
+               (newEv.goingIds == oldEv.goingIds &&
+                (newEv.waitlistIds == oldEv.waitlistIds || (
+                  newEv.waitlistIds.toSet().difference(oldEv.waitlistIds.toSet()).hasOnly([request.auth.uid]) &&
+                  oldEv.waitlistIds.toSet().difference(newEv.waitlistIds.toSet()).hasOnly([request.auth.uid])
+                ))) ||
+               (
+                 oldEv.goingIds.toSet().difference(newEv.goingIds.toSet()).hasOnly([request.auth.uid]) &&
+                 newEv.goingIds.toSet().difference(oldEv.goingIds.toSet()).hasOnly([request.auth.uid]) &&
+                 (newEv.waitlistIds == oldEv.waitlistIds || (
+                   newEv.waitlistIds.toSet().difference(oldEv.waitlistIds.toSet()).hasOnly([request.auth.uid]) &&
+                   oldEv.waitlistIds.toSet().difference(newEv.waitlistIds.toSet()).hasOnly([request.auth.uid])
+                 )) &&
+                 (!(request.auth.uid in newEv.goingIds) ||
+                  (request.auth.uid in oldEv.goingIds) ||
+                  oldEv.maxParticipants == 0 ||
+                  oldEv.goingIds.size() < oldEv.maxParticipants)
+               ) ||
+               (
+                 (request.auth.uid in oldEv.goingIds) &&
+                 !(request.auth.uid in newEv.goingIds) &&
+                 oldEv.waitlistIds.size() > 0 &&
+                 oldEv.goingIds.toSet().difference(newEv.goingIds.toSet()).hasOnly([request.auth.uid]) &&
+                 newEv.goingIds.toSet().difference(oldEv.goingIds.toSet()).hasOnly([oldEv.waitlistIds[0]]) &&
+                 newEv.waitlistIds.toSet().difference(oldEv.waitlistIds.toSet()).size() == 0 &&
+                 oldEv.waitlistIds.toSet().difference(newEv.waitlistIds.toSet()).hasOnly([request.auth.uid, oldEv.waitlistIds[0]])
+               )
+             );
+    }
+
     // 1. Private User Profile (PII isolated to owner)
     match /users/{userId} {
       allow get, list: if isSignedIn() && request.auth.uid == userId;
@@ -934,6 +1198,152 @@ service cloud.firestore {
                        isStoryModerator(existing()) ||
                        (storyExists(existing().storyId) && isStoryModerator(storyDoc(existing().storyId).data))
                      );
+    }
+
+    // 8. RAVEN Advanced Polls, Anonymous Voting, Role Restrictions & Anti-Fraud Tallies
+    match /polls/{pollId} {
+      allow get: if isSignedIn() && isValidId(pollId) && (
+                    resource == null ||
+                    existing().authorId == request.auth.uid ||
+                    (existing().status != 'DRAFT' && (
+                      existing().isPublic == true ||
+                      (('serverId' in existing()) && existing().serverId != null && isServerMemberOrPublic(existing().serverId)) ||
+                      (('memberIds' in existing()) && request.auth.uid in existing().memberIds)
+                    ))
+                  );
+      allow list: if isSignedIn() && (
+                     resource.data.authorId == request.auth.uid ||
+                     resource.data.isPublic == true ||
+                     request.auth.uid in resource.data.memberIds
+                   );
+      allow create: if isSignedIn() && isValidId(pollId) && isValidPollDoc(incoming(), pollId) &&
+                       incoming().authorId == request.auth.uid &&
+                       incoming().totalVotes == 0 &&
+                       incoming().totalVoters == 0 &&
+                       incoming().status in ['DRAFT', 'PUBLISHED'] &&
+                       (incoming().visibility == 'PUBLIC' ||
+                        (('serverId' in incoming()) && incoming().serverId != null && isServerMemberOrPublic(incoming().serverId)));
+      allow update: if isSignedIn() && isValidId(pollId) &&
+                       incoming().authorId == existing().authorId &&
+                       incoming().id == existing().id && (
+                         // 8a. Author editing or publishing DRAFT before publication (zero votes guaranteed)
+                         (existing().status == 'DRAFT' &&
+                          existing().authorId == request.auth.uid &&
+                          isValidPollDoc(incoming(), pollId) &&
+                          incoming().status in ['DRAFT', 'PUBLISHED'] &&
+                          incoming().totalVotes == 0 &&
+                          incoming().totalVoters == 0) ||
+                         // 8b. Author or Community Staff manually closing a PUBLISHED poll (cannot alter tallies)
+                         (existing().status == 'PUBLISHED' &&
+                          incoming().status == 'CLOSED' &&
+                          (existing().authorId == request.auth.uid ||
+                           (('serverId' in existing()) && existing().serverId != null && isCommunityStaff(existing().serverId))) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'closedAtMs', 'updatedAtMs', 'updatedAt'])) ||
+                         // 8c. Eligible voter atomically updating poll tallies in lockstep with /votes/{uid}
+                         (existing().status == 'PUBLISHED' &&
+                          incoming().status == 'PUBLISHED' &&
+                          (!('expiresAtMs' in existing()) || existing().expiresAtMs == null || request.time.toMillis() <= existing().expiresAtMs) &&
+                          isEligiblePollVoter(existing()) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['optionCounts', 'totalVotes', 'totalVoters', 'updatedAtMs', 'updatedAt']) &&
+                          incoming().optionCounts is map &&
+                          incoming().optionCounts.keys().hasAll(existing().optionCounts.keys()) &&
+                          existing().optionCounts.keys().hasAll(incoming().optionCounts.keys()) &&
+                          validPollTallyUpdate(pollId, existing(), incoming()))
+                       );
+      allow delete: if isSignedIn() && isValidId(pollId) && (
+                       existing().authorId == request.auth.uid ||
+                       (('serverId' in existing()) && existing().serverId != null && isCommunityAdmin(existing().serverId))
+                     );
+
+      match /votes/{voteId} {
+        allow get: if isSignedIn() && isValidId(voteId) && (
+                      voteId == request.auth.uid || canReadPollVotes(pollId)
+                    );
+        allow list: if isSignedIn() && (
+                       resource.data.voterId == request.auth.uid || canReadPollVotes(pollId)
+                     );
+        allow create: if isSignedIn() && canWriteVote(pollId, voteId, true);
+        allow update: if isSignedIn() && existing().voterId == request.auth.uid && canWriteVote(pollId, voteId, false);
+        allow delete: if isSignedIn() && canDeleteVote(pollId, voteId);
+      }
+    }
+
+    // 9. RAVEN Advanced Events (Public/Private, Voice/Server, RSVP, Waitlist, Reminders & History)
+    match /events/{eventId} {
+      allow get: if isSignedIn() && isValidId(eventId) &&
+                    (resource == null || canViewRavenEvent(existing()));
+      allow list: if isSignedIn() && (
+                     resource.data.creatorId == request.auth.uid ||
+                     resource.data.isPublic == true ||
+                     request.auth.uid in resource.data.memberIds ||
+                     request.auth.uid in resource.data.invitedUserIds
+                   );
+      allow create: if isSignedIn() && isValidId(eventId) &&
+                       isValidRavenEvent(incoming(), eventId) &&
+                       incoming().creatorId == request.auth.uid &&
+                       incoming().status == 'SCHEDULED' &&
+                       incoming().waitlistIds.size() == 0 &&
+                       incoming().goingIds.size() <= 1 &&
+                       (incoming().goingIds.size() == 0 || request.auth.uid in incoming().goingIds) &&
+                       (!('serverId' in incoming()) || incoming().serverId == null || canManageServerEvents(incoming().serverId));
+      allow update: if isSignedIn() && isValidId(eventId) &&
+                       incoming().creatorId == existing().creatorId &&
+                       incoming().id == existing().id && (
+                         // 9a. Creator or Server Staff editing, cancelling, or expanding capacity
+                         (canManageRavenEvent(existing()) &&
+                          isValidRavenEvent(incoming(), eventId) &&
+                          (incoming().status != 'CANCELLED' || existing().status == 'SCHEDULED')) ||
+                         // 9b. Eligible attendee updating RSVP / waitlist + FIFO promotion
+                         (canViewRavenEvent(existing()) &&
+                          validEventRsvpUpdate(existing(), incoming()))
+                       );
+      allow delete: if isSignedIn() && isValidId(eventId) && canManageRavenEvent(existing());
+
+      match /rsvps/{rsvpId} {
+        allow get, list: if isSignedIn() && eventExists(eventId) && canViewRavenEvent(eventDoc(eventId).data);
+        allow create, update: if isSignedIn() && isValidId(rsvpId) && rsvpId == request.auth.uid &&
+                                 eventExists(eventId) && canViewRavenEvent(eventDoc(eventId).data) &&
+                                 incoming().uid == request.auth.uid &&
+                                 incoming().eventId == eventId &&
+                                 incoming().displayName is string && incoming().displayName.size() >= 1 && incoming().displayName.size() <= 64 &&
+                                 incoming().status is string && incoming().status in ['GOING', 'MAYBE', 'WAITLISTED', 'NOT_GOING'];
+        allow delete: if isSignedIn() && isValidId(rsvpId) &&
+                         (rsvpId == request.auth.uid || (eventExists(eventId) && canManageRavenEvent(eventDoc(eventId).data)));
+      }
+
+      match /reminders/{reminderId} {
+        allow get: if isSignedIn() && isValidId(reminderId) &&
+                      (resource == null || existing().userId == request.auth.uid);
+        allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+        allow create, update: if isSignedIn() && isValidId(reminderId) &&
+                                 incoming().userId == request.auth.uid &&
+                                 incoming().eventId == eventId &&
+                                 incoming().minutesBefore is int &&
+                                 incoming().minutesBefore >= 0 && incoming().minutesBefore <= 10080 &&
+                                 incoming().triggerAtMs is int &&
+                                 incoming().triggered is bool &&
+                                 eventExists(eventId) && canViewRavenEvent(eventDoc(eventId).data);
+        allow delete: if isSignedIn() && isValidId(reminderId) &&
+                         (existing().userId == request.auth.uid || (eventExists(eventId) && canManageRavenEvent(eventDoc(eventId).data)));
+      }
+
+      match /history/{entryId} {
+        allow get, list: if isSignedIn() && eventExists(eventId) && canViewRavenEvent(eventDoc(eventId).data);
+        allow create: if isSignedIn() && isValidId(entryId) &&
+                         eventExists(eventId) &&
+                         incoming().id == entryId &&
+                         incoming().eventId == eventId &&
+                         incoming().actorId == request.auth.uid &&
+                         incoming().actionType is string &&
+                         incoming().actionType in ['CREATED', 'UPDATED', 'CANCELLED', 'RSVP_GOING', 'RSVP_MAYBE', 'RSVP_WAITLIST', 'RSVP_CANCELLED', 'WAITLIST_PROMOTED', 'COMPLETED'] &&
+                         incoming().summary is string && incoming().summary.size() >= 1 && incoming().summary.size() <= 400 && (
+                           canManageRavenEvent(eventDoc(eventId).data) ||
+                           (canViewRavenEvent(eventDoc(eventId).data) &&
+                            incoming().actionType in ['RSVP_GOING', 'RSVP_MAYBE', 'RSVP_WAITLIST', 'RSVP_CANCELLED', 'WAITLIST_PROMOTED'])
+                         );
+        allow update: if false;
+        allow delete: if isSignedIn() && eventExists(eventId) && canManageRavenEvent(eventDoc(eventId).data);
+      }
     }
   }
 }

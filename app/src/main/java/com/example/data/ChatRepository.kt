@@ -235,6 +235,7 @@ class ChatRepository(
     internal fun authInstance(): FirebaseAuth? = currentAuth()
     internal fun appContextOrNull(): Context? = appContext
     internal val repoScope: CoroutineScope get() = scope
+    internal fun currentUserMutableFlow(): MutableStateFlow<User> = _currentUser
     internal fun serversMutableFlow(): MutableStateFlow<List<Server>> = _servers
     internal fun discoverMutableFlow(): MutableStateFlow<List<PublicServerListing>> = _discoverServers
     internal fun selectedServerMutableFlow(): MutableStateFlow<String> = _selectedServerId
@@ -912,6 +913,9 @@ class ChatRepository(
         val parsedPoll = rawPoll?.let { pollMap ->
             val q = pollMap["question"] as? String ?: ""
             val allowsMultiple = pollMap["allowsMultiple"] as? Boolean ?: false
+            val durationLabel = pollMap["durationLabel"] as? String ?: "Se termine dans 24h"
+            val isClosed = pollMap["isClosed"] as? Boolean ?: false
+            val advId = pollMap["advancedPollId"] as? String
             val opts = (pollMap["options"] as? List<Map<String, Any?>>).orEmpty().mapIndexed { idx, opt ->
                 val votes = (opt["votes"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
                 PollOption(
@@ -920,7 +924,16 @@ class ChatRepository(
                     votes = votes
                 )
             }
-            if (q.isNotBlank() && opts.isNotEmpty()) Poll(q, opts, allowsMultiple) else null
+            if (q.isNotBlank() && opts.isNotEmpty()) {
+                Poll(
+                    question = q,
+                    options = opts,
+                    allowsMultiple = allowsMultiple,
+                    durationLabel = durationLabel,
+                    isClosed = isClosed,
+                    advancedPollId = advId
+                )
+            } else null
         }
 
         return Message(
@@ -1172,13 +1185,17 @@ class ChatRepository(
         newMessage.stickerId?.let { payload["stickerId"] = it }
         newMessage.attachmentName?.let { payload["attachmentName"] = it }
         newMessage.poll?.let { poll ->
-            payload["poll"] = mapOf(
+            payload["poll"] = hashMapOf<String, Any>(
                 "question" to poll.question,
                 "allowsMultiple" to poll.allowsMultiple,
+                "durationLabel" to poll.durationLabel,
+                "isClosed" to poll.isClosed,
                 "options" to poll.options.map { opt ->
                     mapOf("id" to opt.id, "text" to opt.text, "votes" to opt.votes)
                 }
-            )
+            ).apply {
+                poll.advancedPollId?.takeIf { it.isNotBlank() }?.let { put("advancedPollId", it) }
+            }
         }
 
         scope.launch(Dispatchers.IO) {
@@ -1756,6 +1773,51 @@ class ChatRepository(
                 Log.w("ChatRepo", "Failed to sync poll vote", e)
             }
         }
+    }
+
+    fun postAdvancedPollChannelCard(targetId: String, advancedPoll: AdvancedPoll) {
+        if (!canPostInTarget(targetId)) return
+        val currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val inlinePoll = Poll(
+            question = advancedPoll.question,
+            options = advancedPoll.options.map { opt ->
+                PollOption(id = opt.id, text = opt.text, votes = emptyList())
+            },
+            allowsMultiple = advancedPoll.allowsMultiple,
+            durationLabel = if (advancedPoll.durationMinutes > 0) "${advancedPoll.durationMinutes} min" else "Sans limite",
+            isClosed = advancedPoll.status == PollStatus.CLOSED,
+            advancedPollId = advancedPoll.id
+        )
+        val msg = Message(
+            id = "msg_poll_${advancedPoll.id.take(12)}",
+            channelId = targetId,
+            sender = _currentUser.value,
+            text = "Sondage avancé : ${advancedPoll.question}",
+            timestamp = currentTime,
+            poll = inlinePoll
+        )
+        val currentList = _messages.value[targetId] ?: emptyList()
+        if (currentList.none { it.id == msg.id }) {
+            _messages.value = _messages.value + (targetId to (currentList + msg))
+            syncNewMessageToFirestore(msg, targetId)
+        }
+    }
+
+    fun syncLinkedPollCardFromAdvanced(advancedPoll: AdvancedPoll) {
+        val targetId = advancedPoll.channelId ?: return
+        val currentList = _messages.value[targetId] ?: return
+        val updated = currentList.map { msg ->
+            if (msg.poll?.advancedPollId == advancedPoll.id) {
+                msg.copy(
+                    poll = msg.poll.copy(
+                        question = advancedPoll.question,
+                        allowsMultiple = advancedPoll.allowsMultiple,
+                        isClosed = !advancedPoll.isEffectivelyOpen()
+                    )
+                )
+            } else msg
+        }
+        _messages.value = _messages.value + (targetId to updated)
     }
 
     private fun saveProfileToFirestore() {
