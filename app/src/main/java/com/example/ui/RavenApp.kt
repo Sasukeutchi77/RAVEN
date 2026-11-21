@@ -9,47 +9,80 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.data.AccountSecurityRepository
 import com.example.data.AiAssistantRepository
 import com.example.data.BotRepository
 import com.example.data.ChatRepository
 import com.example.data.CommunityPermissions
 import com.example.data.CommunityRepository
 import com.example.data.EventRepository
+import com.example.data.FriendFirestoreSync
+import com.example.data.FriendRepository
+import com.example.data.GlobalSearchRepository
+import com.example.data.PluginRepository
 import com.example.data.PollRepository
 import com.example.data.StoryRepository
 import com.example.data.searchCommunities
 import com.example.model.AdvancedPoll
 import com.example.model.Channel
 import com.example.model.ChannelType
+import com.example.model.FriendRelationStatus
 import com.example.model.Message
 import com.example.model.RavenBot
 import com.example.model.RolePermission
+import com.example.model.SearchEntityType
 import com.example.model.Server
 import com.example.model.UserRole
 import com.example.ui.components.*
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.AccountSecurityViewModel
 import com.example.ui.viewmodel.AiAssistantViewModel
 import com.example.ui.viewmodel.BotDashboardViewModel
 import com.example.ui.viewmodel.CommunityViewModel
 import com.example.ui.viewmodel.EventViewModel
+import com.example.ui.viewmodel.FriendViewModel
+import com.example.ui.viewmodel.GlobalSearchViewModel
+import com.example.ui.viewmodel.PluginManagerViewModel
 import com.example.ui.viewmodel.PollViewModel
 import com.example.ui.viewmodel.StoryViewModel
+import com.example.util.ActivePointerMode
 import com.example.util.AudioPlayerHelper
+import com.example.util.LocalRavenPlatform
 import com.example.util.NotificationHelper
+import com.example.util.PlatformEnvironmentDetector
+import com.example.util.RavenPlatformKind
+import com.example.util.desktopHoverPointer
+import com.example.util.rememberRavenPlatformProfile
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -135,11 +168,44 @@ fun RavenApp(
     val eventViewModel = remember(eventRepo) { EventViewModel(eventRepo) }
     val eventUiState by eventViewModel.uiState.collectAsState()
 
+    val pluginRepo = remember(repository) { PluginRepository(repository) }
+    val pluginViewModel = remember(pluginRepo) { PluginManagerViewModel(pluginRepo) }
+    val pluginUiState by pluginViewModel.uiState.collectAsState()
+
+    val friendRepo = remember(repository) { FriendRepository(repository) }
+    val friendViewModel = remember(friendRepo, repository) { FriendViewModel(friendRepo, repository) }
+    val friendUiState by friendViewModel.uiState.collectAsState()
+
+    val globalSearchRepo = remember(repository, friendRepo, storyRepo, eventRepo, botRepo) {
+        GlobalSearchRepository(
+            chatRepo = repository,
+            friendRepo = friendRepo,
+            storyRepo = storyRepo,
+            eventRepo = eventRepo,
+            botRepo = botRepo
+        )
+    }
+    val globalSearchViewModel = remember(globalSearchRepo) { GlobalSearchViewModel(globalSearchRepo) }
+    val globalSearchUiState by globalSearchViewModel.uiState.collectAsState()
+
+    val accountSecurityRepo = remember(repository) { AccountSecurityRepository(repository) }
+    val accountSecurityViewModel = remember(accountSecurityRepo) { AccountSecurityViewModel(accountSecurityRepo) }
+    val securityUiState by accountSecurityViewModel.uiState.collectAsState()
+
     val unreadNotificationsCount = remember(notifications) { notifications.count { !it.isRead } }
 
     // Navigation and drawer states
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     var isMemberListOpen by remember { mutableStateOf(false) }
+    var isDesktopMemberDockVisible by remember { mutableStateOf(true) }
+    var activePointerMode by remember { mutableStateOf(ActivePointerMode.TOUCH) }
+    var activePlatformProfile by remember {
+        mutableStateOf(
+            PlatformEnvironmentDetector.evaluate(
+                PlatformEnvironmentDetector.collectSignals(context)
+            )
+        )
+    }
     var internalViewingVoiceRoom by remember { mutableStateOf(false) }
     val effectiveViewingVoiceRoom = isViewingFullVoiceRoom ?: internalViewingVoiceRoom
     val setViewingVoiceRoom: (Boolean) -> Unit = { visible ->
@@ -162,6 +228,8 @@ fun RavenApp(
     var showRolesMatrixSheet by remember { mutableStateOf(false) }
     var showCategoriesManagerSheet by remember { mutableStateOf(false) }
     var selectedUserProfile by remember { mutableStateOf<com.example.model.User?>(null) }
+    var showUserDirectorySheet by remember { mutableStateOf(false) }
+    var showFriendPrivacySheet by remember { mutableStateOf(false) }
     var showCreateServerDialog by remember { mutableStateOf(false) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
     var showJoinServerDialog by remember { mutableStateOf(false) }
@@ -179,7 +247,9 @@ fun RavenApp(
     var showServerAdminDashboard by remember { mutableStateOf(false) }
     var showInboxSheet by remember { mutableStateOf(false) }
     var showAppSettingsDialog by remember { mutableStateOf(false) }
+    var showPluginsSheet by remember { mutableStateOf(false) }
     var showGlobalSearchSheet by remember { mutableStateOf(false) }
+    var showAccountSecuritySheet by remember { mutableStateOf(false) }
     var sharedMediaTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     var activeThreadParent by remember { mutableStateOf<Message?>(null) }
 
@@ -227,6 +297,10 @@ fun RavenApp(
         aiRepo.attachSlashCommandHook()
     }
 
+    LaunchedEffect(pluginRepo) {
+        pluginRepo.attachToChatRepository()
+    }
+
     LaunchedEffect(selectedServerId, isFirebaseSignedIn) {
         if (selectedServerId != "dm_tab") {
             communityViewModel.observeCommunity(selectedServerId)
@@ -236,6 +310,24 @@ fun RavenApp(
         storyViewModel.startObserving()
         pollViewModel.syncWithAuthUid(if (isFirebaseSignedIn) repository.authInstance()?.currentUser?.uid else null)
         eventViewModel.syncWithAuthUid(if (isFirebaseSignedIn) repository.authInstance()?.currentUser?.uid else null)
+        pluginViewModel.syncWithAuthUid(if (isFirebaseSignedIn) repository.authInstance()?.currentUser?.uid else null)
+        friendViewModel.syncWithAuthUid(if (isFirebaseSignedIn) repository.authInstance()?.currentUser?.uid else null)
+        globalSearchRepo.syncWithAuthUid(if (isFirebaseSignedIn) repository.authInstance()?.currentUser?.uid else null)
+        accountSecurityViewModel.syncWithAuthUid(if (isFirebaseSignedIn) repository.authInstance()?.currentUser?.uid else null)
+    }
+
+    LaunchedEffect(securityUiState.feedbackMessage, securityUiState.errorMessage) {
+        if (securityUiState.feedbackMessage != null || securityUiState.errorMessage != null) {
+            delay(3500)
+            accountSecurityViewModel.clearFeedback()
+        }
+    }
+
+    LaunchedEffect(pluginUiState.feedbackMessage, pluginUiState.errorMessage) {
+        if (pluginUiState.feedbackMessage != null || pluginUiState.errorMessage != null) {
+            delay(3500)
+            pluginViewModel.clearFeedback()
+        }
     }
 
     LaunchedEffect(eventUiState.feedbackMessage, eventUiState.errorMessage) {
@@ -406,6 +498,10 @@ fun RavenApp(
                         if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                         showPollsHubSheet = true
                     },
+                    onOpenPluginsManager = {
+                        if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                        showPluginsSheet = true
+                    },
                     onOpenAdminDashboard = {
                         if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                         showServerAdminDashboard = true
@@ -479,6 +575,14 @@ fun RavenApp(
         showDrawerButton: Boolean,
         modifier: Modifier = Modifier
     ) {
+        val currentPlatform = LocalRavenPlatform.current
+        val isDockedRightActive = currentPlatform.useDesktopLayout &&
+            currentPlatform.dockRightMemberPanel &&
+            isDesktopMemberDockVisible &&
+            canViewMemberList &&
+            !effectiveViewingVoiceRoom &&
+            !isViewingCommunityHome &&
+            !activeServer.isDmTab
         Box(modifier = modifier.fillMaxSize()) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Box(modifier = Modifier.weight(1f)) {
@@ -588,7 +692,7 @@ fun RavenApp(
                         activeServer.isDmTab -> {
                             DirectMessagesView(
                                 conversations = directConversations,
-                                allFriends = com.example.data.MockData.allFriends,
+                                allFriends = friendUiState.friends.map { it.user }.ifEmpty { com.example.data.MockData.allFriends },
                                 selectedDmId = selectedDmId,
                                 messages = messages,
                                 currentUser = currentUser,
@@ -600,7 +704,7 @@ fun RavenApp(
                                 onToggleReaction = { dmId, msgId, emoji ->
                                     repository.toggleReaction(dmId, msgId, emoji)
                                 },
-                                onAddFriend = { tag -> repository.addFriend(tag) },
+                                onAddFriend = { tag -> friendViewModel.sendFriendRequestByInput(tag) },
                                 onStartCall = { friend ->
                                     requestAudioPermission()
                                     val dmVoice = Channel(
@@ -644,10 +748,10 @@ fun RavenApp(
                                 onCreateGroup = { groupName, chosenFriends ->
                                     repository.createGroupConversation(groupName, chosenFriends)
                                 },
-                                onAcceptFriendRequest = { reqId -> repository.acceptFriendRequest(reqId) },
-                                onDeclineOrCancelFriendRequest = { reqId -> repository.declineOrCancelFriendRequest(reqId) },
-                                onBlockUser = { user -> repository.blockUser(user) },
-                                onUnblockUser = { uid -> repository.unblockUser(uid) },
+                                onAcceptFriendRequest = { reqId -> friendViewModel.acceptRequest(reqId) },
+                                onDeclineOrCancelFriendRequest = { reqId -> friendViewModel.declineOrCancelRequest(reqId) },
+                                onBlockUser = { user -> friendViewModel.blockUser(user) },
+                                onUnblockUser = { uid -> friendViewModel.unblockUser(uid) },
                                 onSendSticker = { dmId, stkId -> repository.sendSticker(dmId, stkId) },
                                 onUnlockAndSendSticker = { dmId, stkId, price ->
                                     val unlocked = repository.unlockSticker(stkId, price)
@@ -663,7 +767,15 @@ fun RavenApp(
                                 storyUiState = storyUiState,
                                 onCreateStoryClick = { showCreateStoryDialog = true },
                                 onOpenStoryGroup = { grp -> viewingStoryAuthorId = grp.authorId },
-                                onOpenStoryModeration = { showStoryModerationSheet = true }
+                                onOpenStoryModeration = { showStoryModerationSheet = true },
+                                friends = friendUiState.friends,
+                                onOpenFriendDm = { user -> friendViewModel.openDm(user) },
+                                onOpenUserProfile = { user -> selectedUserProfile = user },
+                                onRemoveFriend = { uid -> friendViewModel.removeFriend(uid) },
+                                onDeclineFriendRequest = { reqId -> friendViewModel.declineRequest(reqId) },
+                                onCancelFriendRequest = { reqId -> friendViewModel.cancelRequest(reqId) },
+                                onOpenUserSearchSheet = { showUserDirectorySheet = true },
+                                onOpenFriendPrivacy = { showFriendPrivacySheet = true }
                             )
                         }
 
@@ -717,7 +829,7 @@ fun RavenApp(
                                 pollViewModel = pollViewModel,
                                 onOpenPollsHub = { showPollsHubSheet = true },
                                 eventViewModel = eventViewModel,
-                                knownFriends = (directConversations.filter { !it.isGroup }.map { it.friend } + com.example.data.MockData.allFriends)
+                                knownFriends = (friendUiState.friends.map { it.user } + directConversations.filter { !it.isGroup }.map { it.friend })
                                     .distinctBy { it.id }
                                     .filter { it.id != currentUser.id },
                                 onRequestNotificationPermission = { requestNotificationPermission() },
@@ -761,7 +873,13 @@ fun RavenApp(
                                     coroutineScope.launch { drawerState.open() }
                                 },
                                 onToggleMemberList = {
-                                    if (canViewMemberList) isMemberListOpen = !isMemberListOpen
+                                    if (canViewMemberList) {
+                                        if (currentPlatform.useDesktopLayout && currentPlatform.dockRightMemberPanel) {
+                                            isDesktopMemberDockVisible = !isDesktopMemberDockVisible
+                                        } else {
+                                            isMemberListOpen = !isMemberListOpen
+                                        }
+                                    }
                                 },
                                 unreadNotificationsCount = unreadNotificationsCount,
                                 onOpenInbox = { showInboxSheet = true },
@@ -818,8 +936,8 @@ fun RavenApp(
                                 },
                                 onOpenWhiteboard = { whiteboardTarget = activeChannel.id to "#${activeChannel.name}" },
                                 onOpenAiAssistant = { showAiAssistantSheet = true },
-                                botSlashCommands = remember(activeServer.id, botInstallationsByServer, bots) {
-                                    botRepo.getSlashCommandsForServer(activeServer.id)
+                                botSlashCommands = remember(activeServer.id, botInstallationsByServer, bots, pluginUiState.plugins) {
+                                    botRepo.getSlashCommandsForServer(activeServer.id) + pluginRepo.activeSlashCommands()
                                 },
                                 currentUserId = currentUser.id,
                                 currentUserName = currentUser.name,
@@ -850,7 +968,7 @@ fun RavenApp(
             }
 
             AnimatedVisibility(
-                visible = isMemberListOpen && canViewMemberList && !effectiveViewingVoiceRoom,
+                visible = isMemberListOpen && canViewMemberList && !effectiveViewingVoiceRoom && !isDockedRightActive,
                 enter = slideInHorizontally(initialOffsetX = { it }),
                 exit = slideOutHorizontally(targetOffsetX = { it }),
                 modifier = Modifier.align(Alignment.CenterEnd)
@@ -867,10 +985,12 @@ fun RavenApp(
                     )
                 }
             }
-            // Community, Bot, Voice, Story & AI Action Toast Feedback Banner
-            val bannerError = voiceError ?: storyUiState.errorMessage ?: communityUiState.errorMessage ?: botUiState.errorMessage
+            // Community, Bot, Voice, Story, Plugin, Friend & AI Action Toast Feedback Banner
+            val bannerError = voiceError ?: friendUiState.errorMessage ?: storyUiState.errorMessage ?: communityUiState.errorMessage ?: botUiState.errorMessage
+                ?: (if (!showPluginsSheet) pluginUiState.errorMessage else null)
                 ?: if (!showAiAssistantSheet) aiUiState.errorMessage else null
-            val bannerText = bannerError ?: storyUiState.feedbackMessage ?: communityUiState.feedbackMessage ?: botUiState.feedbackMessage
+            val bannerText = bannerError ?: friendUiState.feedbackMessage ?: storyUiState.feedbackMessage ?: communityUiState.feedbackMessage ?: botUiState.feedbackMessage
+                ?: (if (!showPluginsSheet) pluginUiState.feedbackMessage else null)
                 ?: if (!showAiAssistantSheet) aiUiState.feedbackMessage else null
             if (bannerText != null) {
                 Surface(
@@ -896,10 +1016,12 @@ fun RavenApp(
                         Spacer(modifier = Modifier.width(8.dp))
                         TextButton(onClick = {
                             repository.clearVoiceError()
+                            friendViewModel.clearFeedback()
                             storyViewModel.clearFeedback()
                             communityViewModel.clearFeedback()
                             botViewModel.clearFeedback()
                             aiViewModel.clearFeedback()
+                            pluginViewModel.clearFeedback()
                         }) {
                             Text("OK", color = Color.White, fontWeight = FontWeight.Bold)
                         }
@@ -909,74 +1031,422 @@ fun RavenApp(
         }
     }
 
-    // Adaptive Layout using BoxWithConstraints (3 columns on wide screens/tablets, drawer on phones)
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val isWideScreen = maxWidth >= 840.dp
-
-        if (isWideScreen) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-            ) {
-                SidebarPanel(
-                    modifier = Modifier.width(332.dp),
-                    closeDrawerAfterSelect = false
-                )
-                VerticalDivider(color = palette.border, thickness = 1.dp)
-                MainContentPane(
-                    showDrawerButton = false,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        } else {
-            ModalNavigationDrawer(
-                drawerState = drawerState,
-                gesturesEnabled = !effectiveViewingVoiceRoom,
-                drawerContent = {
-                    ModalDrawerSheet(
-                        drawerContainerColor = palette.primaryBg,
-                        drawerContentColor = palette.textSecondary,
-                        modifier = Modifier.width(340.dp)
-                    ) {
-                        SidebarPanel(
-                            modifier = Modifier.fillMaxSize(),
-                            closeDrawerAfterSelect = true
-                        )
+    // Adaptive Layout using BoxWithConstraints (PC/Desktop multi-pane workspace, Tablet split-pane, Phone drawer)
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val ptrType = event.changes.firstOrNull()?.type
+                        val nextMode = when (ptrType) {
+                            PointerType.Mouse -> ActivePointerMode.MOUSE
+                            PointerType.Stylus, PointerType.Eraser -> ActivePointerMode.STYLUS
+                            PointerType.Touch -> ActivePointerMode.TOUCH
+                            else -> null
+                        }
+                        if (nextMode != null && nextMode != activePointerMode) {
+                            activePointerMode = nextMode
+                        }
                     }
                 }
-            ) {
-                MainContentPane(
-                    showDrawerButton = true,
-                    modifier = Modifier.fillMaxSize()
-                )
+            }
+            .onPreviewKeyEvent { keyEvent ->
+                if (keyEvent.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val modCtrlOrMeta = keyEvent.isCtrlPressed || keyEvent.isMetaPressed
+                when {
+                    modCtrlOrMeta && keyEvent.key == Key.K -> {
+                        showGlobalSearchSheet = true
+                        true
+                    }
+                    modCtrlOrMeta && (keyEvent.key == Key.P || keyEvent.key == Key.Comma) -> {
+                        showAppSettingsDialog = true
+                        true
+                    }
+                    modCtrlOrMeta && keyEvent.isShiftPressed && keyEvent.key == Key.S -> {
+                        showAccountSecuritySheet = true
+                        true
+                    }
+                    modCtrlOrMeta && keyEvent.key == Key.M -> {
+                        requestAudioPermission()
+                        repository.toggleMute()
+                        true
+                    }
+                    keyEvent.key == Key.Escape -> {
+                        when {
+                            showGlobalSearchSheet -> showGlobalSearchSheet = false
+                            showAccountSecuritySheet -> showAccountSecuritySheet = false
+                            showAppSettingsDialog -> showAppSettingsDialog = false
+                            isMemberListOpen -> isMemberListOpen = false
+                            drawerState.isOpen -> coroutineScope.launch { drawerState.close() }
+                            else -> return@onPreviewKeyEvent false
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+    ) {
+        val platformProfile = rememberRavenPlatformProfile(
+            windowWidthDp = maxWidth,
+            windowHeightDp = maxHeight,
+            layoutOverride = appSettings.platformLayoutOverride,
+            activePointerMode = activePointerMode
+        )
+        SideEffect {
+            activePlatformProfile = platformProfile
+        }
+
+        CompositionLocalProvider(LocalRavenPlatform provides platformProfile) {
+            if (platformProfile.useDesktopLayout) {
+                val dockRightMembers = platformProfile.dockRightMemberPanel &&
+                    isDesktopMemberDockVisible &&
+                    canViewMemberList &&
+                    !effectiveViewingVoiceRoom &&
+                    !isViewingCommunityHome &&
+                    !activeServer.isDmTab
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(palette.primaryBg)
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                ) {
+                    // Compact Desktop Environment Bar (PC / Tablet workspace controls & live platform badge)
+                    Surface(
+                        color = palette.primaryBg,
+                        border = BorderStroke(0.5.dp, palette.border),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("desktop_environment_bar")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    color = if (platformProfile.isPc) DiscordBlurple.copy(alpha = 0.2f) else DiscordGreen.copy(alpha = 0.16f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .desktopHoverPointer(platformProfile.isPc)
+                                        .clickable { showAppSettingsDialog = true }
+                                        .testTag("desktop_platform_chip")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = when (platformProfile.effectivePlatform) {
+                                                RavenPlatformKind.PC_DESKTOP -> Icons.Default.Computer
+                                                RavenPlatformKind.ANDROID_TABLET -> Icons.Default.TabletAndroid
+                                                RavenPlatformKind.ANDROID_MOBILE -> Icons.Default.PhoneAndroid
+                                            },
+                                            contentDescription = platformProfile.platformBadgeLabel,
+                                            tint = if (platformProfile.isPc) DiscordBlurple else DiscordGreen,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = platformProfile.platformBadgeLabel,
+                                            color = palette.textPrimary,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                                if (platformProfile.hasHardwareKeyboard) {
+                                    Icon(
+                                        imageVector = Icons.Default.Keyboard,
+                                        contentDescription = "Clavier physique détecté",
+                                        tint = palette.textMuted,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                                if (platformProfile.hasMouseOrTrackpad) {
+                                    Icon(
+                                        imageVector = Icons.Default.Mouse,
+                                        contentDescription = "Souris ou Trackpad détecté",
+                                        tint = palette.textMuted,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Surface(
+                                    color = palette.inputBg,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .desktopHoverPointer(platformProfile.isPc)
+                                        .clickable { showGlobalSearchSheet = true }
+                                        .testTag("desktop_quick_search_btn")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(Icons.Default.Search, contentDescription = "Recherche globale", tint = palette.textSecondary, modifier = Modifier.size(13.dp))
+                                        Text(
+                                            text = if (platformProfile.supportsEnterToSend) "Rechercher (Ctrl+K)" else "Rechercher",
+                                            color = palette.textSecondary,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    color = if (securityUiState.openAlertsCount > 0) DiscordRed.copy(alpha = 0.2f) else palette.inputBg,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .desktopHoverPointer(platformProfile.isPc)
+                                        .clickable { showAccountSecuritySheet = true }
+                                        .testTag("desktop_quick_security_btn")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Shield,
+                                            contentDescription = "Sécurité du compte",
+                                            tint = if (securityUiState.openAlertsCount > 0) DiscordRed else DiscordGreen,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        if (securityUiState.openAlertsCount > 0) {
+                                            Text(
+                                                text = "${securityUiState.openAlertsCount}",
+                                                color = DiscordRed,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (platformProfile.dockRightMemberPanel && canViewMemberList && !effectiveViewingVoiceRoom && !isViewingCommunityHome && !activeServer.isDmTab) {
+                                    Surface(
+                                        color = if (isDesktopMemberDockVisible) DiscordBlurple.copy(alpha = 0.22f) else palette.inputBg,
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .desktopHoverPointer(platformProfile.isPc)
+                                            .clickable { isDesktopMemberDockVisible = !isDesktopMemberDockVisible }
+                                            .testTag("desktop_toggle_member_dock_btn")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Group,
+                                                contentDescription = "Panneau des membres",
+                                                tint = if (isDesktopMemberDockVisible) DiscordBlurple else palette.textSecondary,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Text(
+                                                text = "Membres",
+                                                color = if (isDesktopMemberDockVisible) DiscordBlurple else palette.textSecondary,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    ) {
+                        SidebarPanel(
+                            modifier = Modifier.width(if (platformProfile.windowWidthDp >= 1200) 340.dp else 312.dp),
+                            closeDrawerAfterSelect = false
+                        )
+                        VerticalDivider(color = palette.border, thickness = 1.dp)
+                        MainContentPane(
+                            showDrawerButton = false,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (dockRightMembers) {
+                            VerticalDivider(color = palette.border, thickness = 1.dp)
+                            MemberListDrawer(
+                                members = activeServer.members,
+                                customRoles = activeServer.customRoles,
+                                onClose = { isDesktopMemberDockVisible = false },
+                                onMemberClick = { member -> selectedUserProfile = member },
+                                modifier = Modifier
+                                    .width(252.dp)
+                                    .testTag("desktop_docked_member_panel")
+                            )
+                        }
+                    }
+                }
+            } else {
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    gesturesEnabled = !effectiveViewingVoiceRoom,
+                    drawerContent = {
+                        ModalDrawerSheet(
+                            drawerContainerColor = palette.primaryBg,
+                            drawerContentColor = palette.textSecondary,
+                            modifier = Modifier.width(340.dp)
+                        ) {
+                            SidebarPanel(
+                                modifier = Modifier.fillMaxSize(),
+                                closeDrawerAfterSelect = true
+                            )
+                        }
+                    }
+                ) {
+                    MainContentPane(
+                        showDrawerButton = true,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }
 
-    // Global Search Sheet
+    LaunchedEffect(showGlobalSearchSheet) {
+        if (showGlobalSearchSheet) {
+            globalSearchViewModel.refreshInitial()
+        }
+    }
+
+    // Global Search Sheet (10 Permission-Aware Domains + Engine Abstraction)
     if (showGlobalSearchSheet) {
-        GlobalSearchSheet(
+        RavenGlobalSearchSheet(
+            uiState = globalSearchUiState,
+            activeServerId = activeServer.id.takeIf { !activeServer.isDmTab },
             activeServerName = activeServer.name,
             isDmTab = activeServer.isDmTab,
-            onSearch = { query, filter, currentServerOnly ->
-                repository.searchAllMessages(
-                    serverId = if (currentServerOnly) activeServer.id else null,
-                    query = query,
-                    filter = filter
-                )
-            },
-            onNavigateToResult = { res ->
-                if (res.isDm) {
-                    repository.selectServer("dm_tab")
-                    repository.selectDm(res.targetId)
-                } else {
-                    val targetServer = servers.find { srv -> srv.channels.any { it.id == res.targetId } }
-                    val targetChannel = targetServer?.channels?.find { it.id == res.targetId }
-                    if (targetServer != null && targetChannel != null) {
-                        repository.selectServer(targetServer.id)
-                        repository.selectChannel(targetChannel)
+            onQueryChange = { globalSearchViewModel.onQueryChanged(it) },
+            onSubmitQuery = { globalSearchViewModel.onSubmitQuery(it) },
+            onApplySuggestion = { globalSearchViewModel.onApplySuggestion(it) },
+            onToggleType = { globalSearchViewModel.onToggleType(it) },
+            onSelectDateRange = { range, s, e -> globalSearchViewModel.onSelectDateRange(range, s, e) },
+            onSetAuthorFilter = { globalSearchViewModel.onSetAuthorFilter(it) },
+            onSetSortOrder = { globalSearchViewModel.onSetSortOrder(it) },
+            onSetServerScope = { globalSearchViewModel.onSetServerScope(it) },
+            onSetMessageSubFilter = { globalSearchViewModel.onSetMessageSubFilter(it) },
+            onClearFilters = { globalSearchViewModel.onClearFilters() },
+            onLoadNextPage = { globalSearchViewModel.onLoadNextPage() },
+            onDeleteHistory = { globalSearchViewModel.onDeleteHistory(it) },
+            onClearHistory = { globalSearchViewModel.onClearHistory() },
+            onResultClick = { res ->
+                globalSearchViewModel.onOpenResult(res)
+                showGlobalSearchSheet = false
+                when (res.type) {
+                    SearchEntityType.USER -> {
+                        res.userPayload?.let { selectedUserProfile = it }
                     }
+                    SearchEntityType.SERVER -> {
+                        val srv = res.serverId?.let { id -> servers.find { it.id == id } }
+                        if (srv != null) {
+                            isViewingCommunityHome = false
+                            repository.selectServer(srv.id)
+                        }
+                    }
+                    SearchEntityType.COMMUNITY -> {
+                        val joinedSrv = res.serverId?.let { id -> servers.find { it.id == id } }
+                        if (joinedSrv != null) {
+                            repository.selectServer(joinedSrv.id)
+                            isViewingCommunityHome = true
+                        } else if (res.publicListingPayload != null) {
+                            communityViewModel.joinPublicCommunity(res.publicListingPayload) {
+                                isViewingCommunityHome = true
+                            }
+                        } else {
+                            showExploreServersSheet = true
+                        }
+                    }
+                    SearchEntityType.CHANNEL -> {
+                        val srv = res.serverId?.let { id -> servers.find { it.id == id } }
+                        val ch = srv?.channels?.find { it.id == res.channelId || it.id == res.targetId }
+                        if (srv != null && ch != null) {
+                            isViewingCommunityHome = false
+                            repository.selectServer(srv.id)
+                            if (ch.type == ChannelType.VOICE || ch.type == ChannelType.STAGE) {
+                                if (repository.joinVoiceChannel(ch)) {
+                                    requestAudioPermission()
+                                    setViewingVoiceRoom(true)
+                                }
+                            } else {
+                                repository.selectChannel(ch)
+                            }
+                        }
+                    }
+                    SearchEntityType.MESSAGE -> {
+                        if (!res.conversationId.isNullOrBlank()) {
+                            isViewingCommunityHome = false
+                            repository.selectServer("dm_tab")
+                            repository.selectDm(res.conversationId)
+                        } else {
+                            val srv = res.serverId?.let { id -> servers.find { it.id == id } }
+                            val ch = srv?.channels?.find { it.id == res.channelId || it.id == res.targetId }
+                            if (srv != null && ch != null) {
+                                isViewingCommunityHome = false
+                                repository.selectServer(srv.id)
+                                repository.selectChannel(ch)
+                            }
+                        }
+                    }
+                    SearchEntityType.CONVERSATION -> {
+                        val convId = res.conversationId ?: res.targetId
+                        if (!convId.isNullOrBlank()) {
+                            isViewingCommunityHome = false
+                            repository.selectServer("dm_tab")
+                            repository.selectDm(convId)
+                        }
+                    }
+                    SearchEntityType.EVENT -> {
+                        val srv = res.serverId?.let { id -> servers.find { it.id == id } }
+                        if (srv != null) {
+                            repository.selectServer(srv.id)
+                        }
+                        showServerEventsSheet = true
+                    }
+                    SearchEntityType.STORY -> {
+                        val authorId = res.storyPayload?.authorId ?: res.authorId
+                        if (!authorId.isNullOrBlank()) {
+                            viewingStoryAuthorId = authorId
+                        }
+                    }
+                    SearchEntityType.BOT -> {
+                        res.botPayload?.let { botViewModel.selectBot(it.id) }
+                        showBotDashboardSheet = true
+                    }
+                    SearchEntityType.MARKETPLACE -> {
+                        val srvPair = res.serverShopPayload
+                        if (srvPair != null && servers.any { it.id == srvPair.first }) {
+                            repository.selectServer(srvPair.first)
+                            showServerShopSheet = true
+                        } else {
+                            showOrbsShopDialog = true
+                        }
+                    }
+                    SearchEntityType.ALL -> Unit
                 }
             },
             onDismiss = { showGlobalSearchSheet = false }
@@ -1255,8 +1725,8 @@ fun RavenApp(
 
     // RAVEN Events Hub Sheet (Global + Server + Voice + Private Invites + History)
     if (showServerEventsSheet) {
-        val knownFriends = remember(directConversations, currentUser.id) {
-            (directConversations.filter { !it.isGroup }.map { it.friend } + com.example.data.MockData.allFriends)
+        val knownFriends = remember(directConversations, friendUiState.friends, currentUser.id) {
+            (friendUiState.friends.map { it.user } + directConversations.filter { !it.isGroup }.map { it.friend })
                 .distinctBy { it.id }
                 .filter { it.id != currentUser.id }
         }
@@ -1295,12 +1765,51 @@ fun RavenApp(
             lastCloudSyncTime = lastCloudSyncTime,
             isFirebaseSignedIn = isFirebaseSignedIn,
             firebaseUserEmail = firebaseUserEmail,
+            activePluginsCount = pluginUiState.activeCount,
+            onOpenPluginsManager = { showPluginsSheet = true },
             onRequestNotificationPermission = { requestNotificationPermission() },
             onSyncToCloud = { repository.syncFullStateToFirestore() },
             onRestoreFromCloud = { repository.loadFullStateFromFirestore() },
             onUpdateSettings = { transform -> repository.updateAppSettings(transform) },
             onOpenProfile = { selectedUserProfile = currentUser },
+            friendRequestPolicyLabel = friendUiState.privacySettings.friendRequestPolicy.label,
+            onOpenFriendPrivacy = { showFriendPrivacySheet = true },
+            activeSessionsCount = securityUiState.activeSessionsCount.coerceAtLeast(1),
+            openSecurityAlertsCount = securityUiState.openAlertsCount,
+            onOpenAccountSecurity = { showAccountSecuritySheet = true },
+            platformProfile = activePlatformProfile,
             onDismiss = { showAppSettingsDialog = false }
+        )
+    }
+
+    if (showUserDirectorySheet) {
+        UserDirectorySearchSheet(
+            searchQuery = friendUiState.searchQuery,
+            results = friendUiState.directoryResults,
+            onSearchQueryChange = { friendViewModel.setSearchQuery(it) },
+            onSendFriendRequest = { user -> friendViewModel.sendFriendRequestToUser(user) },
+            onAcceptRequest = { reqId -> friendViewModel.acceptRequest(reqId) },
+            onDeclineRequest = { reqId -> friendViewModel.declineRequest(reqId) },
+            onCancelRequest = { reqId -> friendViewModel.cancelRequest(reqId) },
+            onOpenDm = { user -> friendViewModel.openDm(user) },
+            onUnblockUser = { uid -> friendViewModel.unblockUser(uid) },
+            onOpenProfile = { entry -> selectedUserProfile = entry.user },
+            onDismiss = { showUserDirectorySheet = false }
+        )
+    }
+
+    if (showFriendPrivacySheet) {
+        FriendPrivacySettingsSheet(
+            privacy = friendUiState.privacySettings,
+            onSavePrivacy = { updated -> friendViewModel.updatePrivacy(updated) },
+            onDismiss = { showFriendPrivacySheet = false }
+        )
+    }
+
+    if (showPluginsSheet) {
+        RavenPluginsSheet(
+            pluginViewModel = pluginViewModel,
+            onDismiss = { showPluginsSheet = false }
         )
     }
 
@@ -1318,36 +1827,46 @@ fun RavenApp(
     // User Profile Bottom Sheet
     selectedUserProfile?.let { targetUser ->
         val isSelf = targetUser.id == currentUser.id || targetUser.id == "user_me"
+        val relStatus = if (isSelf) FriendRelationStatus.NONE else friendViewModel.relationStatusFor(targetUser.id)
+        val pendingReq = if (isSelf) null else friendViewModel.pendingRequestFor(targetUser.id)
+        val friendRel = friendUiState.friends.find { it.friendUid == targetUser.id }
+        val lastActiveMs = friendRel?.lastActiveAtMs ?: targetUser.lastActiveAtMs
+        val lastActivitySubtitle = if (lastActiveMs > 0L) {
+            FriendFirestoreSync.formatRelativeActivityTime(lastActiveMs)
+        } else ""
+
         UserProfileDialog(
-            user = if (isSelf) currentUser else targetUser,
+            user = if (isSelf) currentUser else (friendRel?.user ?: targetUser),
             isCurrentUser = isSelf,
             onDismiss = { selectedUserProfile = null },
             onUpdateStatus = { status, customStatus -> repository.updateUserStatus(status, customStatus) },
             onSaveFullProfile = { name, pronouns, bio, avUrl, avCol, banUrl, banCol, statusMsg, emoji, activity, email, phone ->
-                repository.updateUserProfile(
-                    name = name,
-                    pronouns = pronouns,
-                    bio = bio,
-                    avatarUrl = avUrl,
-                    avatarColor = avCol,
-                    bannerUrl = banUrl,
-                    bannerColor = banCol,
-                    customStatus = statusMsg,
-                    customStatusEmoji = emoji,
-                    activity = activity,
-                    email = email,
-                    phone = phone
-                )
+                val sensitiveChanged = email != currentUser.email || phone != currentUser.phone
+                val mutationAllowed = if (sensitiveChanged) {
+                    accountSecurityRepo.validateSensitiveAccountMutation("Modification email/téléphone").isSuccess
+                } else true
+                if (mutationAllowed) {
+                    repository.updateUserProfile(
+                        name = name,
+                        pronouns = pronouns,
+                        bio = bio,
+                        avatarUrl = avUrl,
+                        avatarColor = avCol,
+                        bannerUrl = banUrl,
+                        bannerColor = banCol,
+                        customStatus = statusMsg,
+                        customStatusEmoji = emoji,
+                        activity = activity,
+                        email = email,
+                        phone = phone
+                    )
+                } else {
+                    showAccountSecuritySheet = true
+                }
             },
             onStartDirectMessage = { friend ->
                 selectedUserProfile = null
-                repository.selectServer("dm_tab")
-                val existingDm = directConversations.find { it.friend.id == friend.id }
-                if (existingDm != null) {
-                    repository.selectDm(existingDm.id)
-                } else {
-                    repository.addFriend("${friend.name}${friend.tag}")
-                }
+                friendViewModel.openDm(friend)
             },
             onToggleBadge = { badgeId -> repository.toggleUserBadge(badgeId) },
             onOpenOrbsShop = { showOrbsShopDialog = true },
@@ -1355,9 +1874,25 @@ fun RavenApp(
                 { showAppSettingsDialog = true }
             } else null,
             privateNote = privateUserNotes[targetUser.id].orEmpty(),
-            onSavePrivateNote = { note -> repository.setPrivateUserNote(targetUser.id, note) },
+            onSavePrivateNote = { note -> friendViewModel.updatePrivateNote(targetUser.id, note) },
             onSaveClanTag = { tag -> repository.updateClanTag(tag) },
-            onFirebaseAuthChanged = { repository.syncFirebaseUser() }
+            onFirebaseAuthChanged = { repository.syncFirebaseUser() },
+            friendRelationStatus = relStatus,
+            showOnlineStatus = if (isSelf) friendUiState.privacySettings.showOnlineStatus else true,
+            lastActivityDisplay = lastActivitySubtitle,
+            onSendFriendRequest = { friendViewModel.sendFriendRequestToUser(targetUser) },
+            onAcceptFriendRequest = { pendingReq?.let { friendViewModel.acceptRequest(it.id) } },
+            onDeclineFriendRequest = { pendingReq?.let { friendViewModel.declineRequest(it.id) } },
+            onCancelFriendRequest = { pendingReq?.let { friendViewModel.cancelRequest(it.id) } },
+            onRemoveFriend = {
+                friendViewModel.removeFriend(targetUser.id)
+                selectedUserProfile = null
+            },
+            onBlockUser = {
+                friendViewModel.blockUser(targetUser)
+                selectedUserProfile = null
+            },
+            onUnblockUser = { friendViewModel.unblockUser(targetUser.id) }
         )
     }
 
@@ -1472,8 +2007,8 @@ fun RavenApp(
 
     // Create Story Dialog (Text, Image, Video, TTL, Privacy)
     if (showCreateStoryDialog) {
-        val storyFriends = remember(directConversations) {
-            (directConversations.filter { !it.isGroup }.map { it.friend } + com.example.data.MockData.allFriends)
+        val storyFriends = remember(directConversations, friendUiState.friends) {
+            (friendUiState.friends.map { it.user } + directConversations.filter { !it.isGroup }.map { it.friend })
                 .distinctBy { it.id }
                 .filter { it.id != currentUser.id }
         }
@@ -1613,6 +2148,42 @@ fun RavenApp(
             onSaveDraft = { input -> pollViewModel.saveDraft(input) },
             onPublish = { input, shareInChannel ->
                 pollViewModel.createAndPublish(input, shareInChannel)
+            }
+        )
+    }
+
+    if (showAccountSecuritySheet) {
+        AccountSecurityHubSheet(
+            securityViewModel = accountSecurityViewModel,
+            isFirebaseSignedIn = isFirebaseSignedIn,
+            firebaseUserEmail = firebaseUserEmail,
+            onDismiss = { showAccountSecuritySheet = false }
+        )
+    }
+
+    securityUiState.pendingConfirmation?.let { pending ->
+        SensitiveActionConfirmationDialog(
+            pending = pending,
+            hasSecurityPinConfigured = !securityUiState.securityProfile.pinHash.isNullOrBlank(),
+            isFirebaseSignedIn = isFirebaseSignedIn,
+            failedAttempts = securityUiState.securityProfile.failedChallengeCount,
+            errorMessage = securityUiState.errorMessage,
+            onConfirmWithPin = { pin -> accountSecurityViewModel.confirmWithSecurityPin(pin) },
+            onConfirmWithGoogleReauth = { ok -> accountSecurityViewModel.confirmWithGoogleReauth(ok) },
+            onConfirmExplicitly = { accountSecurityViewModel.confirmExplicitlyWhenNoPinOrCloud() },
+            onDismiss = { accountSecurityViewModel.dismissPendingConfirmation() }
+        )
+    }
+
+    securityUiState.remoteRevocationMessage?.let { revReason ->
+        AlertDialog(
+            onDismissRequest = { accountSecurityViewModel.clearRemoteRevocationMessage() },
+            title = { Text("Session déconnectée", fontWeight = FontWeight.Bold) },
+            text = { Text(revReason) },
+            confirmButton = {
+                Button(onClick = { accountSecurityViewModel.clearRemoteRevocationMessage() }) {
+                    Text("Compris")
+                }
             }
         )
     }

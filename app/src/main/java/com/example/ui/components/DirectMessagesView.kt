@@ -27,6 +27,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -43,6 +51,10 @@ import com.example.ui.viewmodel.StoryUiState
 import com.example.util.AudioPlayerHelper
 import com.example.util.AudioRecorderHelper
 import com.example.util.CloudinaryHelper
+import com.example.util.LocalRavenPlatform
+import com.example.util.desktopHoverHighlight
+import com.example.util.desktopHoverPointer
+import com.example.util.onSecondaryMouseClick
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -86,9 +98,19 @@ fun DirectMessagesView(
     onCreateStoryClick: () -> Unit = {},
     onOpenStoryGroup: (StoryAuthorGroup) -> Unit = {},
     onOpenStoryModeration: () -> Unit = {},
+    friends: List<FriendRelationship> = emptyList(),
+    onOpenFriendDm: (User) -> Unit = {},
+    onOpenUserProfile: (User) -> Unit = {},
+    onRemoveFriend: (String) -> Unit = {},
+    onDeclineFriendRequest: ((String) -> Unit)? = null,
+    onCancelFriendRequest: ((String) -> Unit)? = null,
+    onOpenUserSearchSheet: () -> Unit = {},
+    onOpenFriendPrivacy: () -> Unit = {},
+    useSplitPane: Boolean = LocalRavenPlatform.current.useSplitPaneDm,
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
+    val platform = LocalRavenPlatform.current
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
@@ -164,15 +186,22 @@ fun DirectMessagesView(
         }
     }
 
-    if (activeConversation != null) {
-        // Active 1-on-1 DM Chat View
+    @Composable
+    fun renderConversationPane(paneConversation: DirectConversation, paneModifier: Modifier, showBackNav: Boolean) {
+        val activeConversation = paneConversation
+        val conv = paneConversation
         Scaffold(
-            modifier = modifier.fillMaxSize(),
+            modifier = paneModifier.fillMaxSize(),
             containerColor = palette.chatBg,
             topBar = {
                 TopAppBar(
                     title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable(enabled = !activeConversation.isGroup) {
+                                onOpenUserProfile(activeConversation.friend)
+                            }
+                        ) {
                             if (activeConversation.isGroup) {
                                 Box(
                                     modifier = Modifier
@@ -258,7 +287,9 @@ fun DirectMessagesView(
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = activeConversation.friend.customStatus.ifBlank { activeConversation.friend.status.label },
+                                        text = activeConversation.friend.customStatus.ifBlank {
+                                            activeConversation.friend.lastActivityLabel.ifBlank { activeConversation.friend.status.label }
+                                        },
                                         color = DiscordTextMuted,
                                         fontSize = 11.sp,
                                         maxLines = 1,
@@ -269,15 +300,17 @@ fun DirectMessagesView(
                         }
                     },
                     navigationIcon = {
-                        IconButton(
-                            onClick = onCloseDm,
-                            modifier = Modifier.testTag("dm_back_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Retour",
-                                tint = DiscordTextWhite
-                            )
+                        if (showBackNav) {
+                            IconButton(
+                                onClick = onCloseDm,
+                                modifier = Modifier.testTag("dm_back_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Retour",
+                                    tint = DiscordTextWhite
+                                )
+                            }
                         }
                     },
                     actions = {
@@ -491,14 +524,21 @@ fun DirectMessagesView(
 
                             Spacer(modifier = Modifier.width(8.dp))
 
+                            val dispatchDmSend = {
+                                if (dmInputText.isNotBlank()) {
+                                    onSendMessage(conv.id, dmInputText, null, null, 0)
+                                    dmInputText = ""
+                                }
+                            }
+
                             OutlinedTextField(
                                 value = dmInputText,
                                 onValueChange = { dmInputText = it },
                                 placeholder = {
-                                    val destLabel = if (activeConversation.isGroup) {
-                                        activeConversation.groupName ?: "ce groupe"
+                                    val destLabel = if (conv.isGroup) {
+                                        conv.groupName ?: "ce groupe"
                                     } else {
-                                        "@${activeConversation.friend.name}"
+                                        "@${conv.friend.name}"
                                     }
                                     Text(
                                         text = "Envoyer un message à $destLabel",
@@ -508,6 +548,19 @@ fun DirectMessagesView(
                                 },
                                 modifier = Modifier
                                     .weight(1f)
+                                    .onPreviewKeyEvent { keyEvent ->
+                                        val isEnter = keyEvent.key == Key.Enter || keyEvent.key == Key.NumPadEnter
+                                        if (platform.supportsEnterToSend &&
+                                            isEnter &&
+                                            keyEvent.type == KeyEventType.KeyDown &&
+                                            !keyEvent.isShiftPressed &&
+                                            !keyEvent.isCtrlPressed &&
+                                            !keyEvent.isAltPressed
+                                        ) {
+                                            dispatchDmSend()
+                                            true
+                                        } else false
+                                    }
                                     .testTag("dm_input_field"),
                                 shape = RoundedCornerShape(20.dp),
                                 colors = OutlinedTextFieldDefaults.colors(
@@ -556,14 +609,12 @@ fun DirectMessagesView(
                                 }
                             } else {
                                 IconButton(
-                                    onClick = {
-                                        onSendMessage(activeConversation.id, dmInputText, null, null, 0)
-                                        dmInputText = ""
-                                    },
+                                    onClick = dispatchDmSend,
                                     modifier = Modifier
                                         .size(38.dp)
                                         .clip(CircleShape)
                                         .background(DiscordBlurple)
+                                        .desktopHoverPointer(platform.isPc)
                                         .testTag("dm_send_button")
                                 ) {
                                     Icon(
@@ -574,6 +625,14 @@ fun DirectMessagesView(
                                     )
                                 }
                             }
+                        }
+                        if (platform.supportsEnterToSend) {
+                            Text(
+                                text = "Entrée pour envoyer • Maj+Entrée nouvelle ligne",
+                                color = palette.textMuted,
+                                fontSize = 10.sp,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
+                            )
                         }
                     }
                 }
@@ -836,18 +895,20 @@ fun DirectMessagesView(
                 StickerPickerSheet(
                     unlockedStickerIds = unlockedStickers,
                     orbsBalance = orbsBalance,
-                    onSelectSticker = { stkId -> onSendSticker(activeConversation.id, stkId) },
+                    onSelectSticker = { stkId -> onSendSticker(conv.id, stkId) },
                     onUnlockAndSendSticker = { stkId, price ->
-                        onUnlockAndSendSticker(activeConversation.id, stkId, price)
+                        onUnlockAndSendSticker(conv.id, stkId, price)
                     },
                     onDismiss = { showStickerPicker = false }
                 )
             }
         }
-    } else {
-        // DM List & Friends Dashboard
+    }
+
+    @Composable
+    fun renderDirectoryPane(paneModifier: Modifier) {
         Scaffold(
-            modifier = modifier.fillMaxSize(),
+            modifier = paneModifier.fillMaxSize(),
             containerColor = palette.sidebarBg,
             topBar = {
                 Column {
@@ -875,6 +936,26 @@ fun DirectMessagesView(
                             }
                         },
                         actions = {
+                            IconButton(
+                                onClick = onOpenUserSearchSheet,
+                                modifier = Modifier.testTag("dm_search_users_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PersonSearch,
+                                    contentDescription = "Rechercher des utilisateurs",
+                                    tint = palette.textSecondary
+                                )
+                            }
+                            IconButton(
+                                onClick = onOpenFriendPrivacy,
+                                modifier = Modifier.testTag("dm_friend_privacy_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Security,
+                                    contentDescription = "Confidentialité des amis",
+                                    tint = palette.textSecondary
+                                )
+                            }
                             IconButton(
                                 onClick = onOpenGlobalSearch,
                                 modifier = Modifier.testTag("dm_global_search_button")
@@ -934,7 +1015,7 @@ fun DirectMessagesView(
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("Rechercher ou démarrer une conversation", color = DiscordTextMuted, fontSize = 13.sp) },
+                        placeholder = { Text("Rechercher un ami ou une conversation", color = DiscordTextMuted, fontSize = 13.sp) },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -956,7 +1037,8 @@ fun DirectMessagesView(
                     )
 
                     // Filter chips row
-                    val filters = listOf("En ligne", "Tous", "En attente", "Bloqués", "+ Ajouter")
+                    val onlineFriendsCount = friends.count { it.user.status != UserStatus.OFFLINE }
+                    val filters = listOf("En ligne", "Amis", "Tous", "En attente", "Bloqués", "+ Ajouter")
                     LazyRow(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -967,6 +1049,8 @@ fun DirectMessagesView(
                             val isSelected = selectedFilter == filter
                             val isAdd = filter == "+ Ajouter"
                             val displayLabel = when (filter) {
+                                "En ligne" -> if (onlineFriendsCount > 0) "En ligne ($onlineFriendsCount)" else "En ligne"
+                                "Amis" -> if (friends.isNotEmpty()) "Amis (${friends.size})" else "Amis"
                                 "En attente" -> if (friendRequests.isNotEmpty()) "En attente (${friendRequests.size})" else "En attente"
                                 "Bloqués" -> if (blockedUsers.isNotEmpty()) "Bloqués (${blockedUsers.size})" else "Bloqués"
                                 else -> filter
@@ -1016,6 +1100,20 @@ fun DirectMessagesView(
                     matchesSearch && matchesFilter
                 }
             }
+            val filteredFriends = remember(friends, searchQuery) {
+                friends.filter { rel ->
+                    searchQuery.isBlank() ||
+                        rel.user.name.contains(searchQuery, ignoreCase = true) ||
+                        "${rel.user.name}${rel.user.tag}".contains(searchQuery, ignoreCase = true) ||
+                        rel.privateNote.contains(searchQuery, ignoreCase = true)
+                }
+            }
+            val onlineFilteredFriends = remember(filteredFriends) {
+                filteredFriends.filter { it.user.status != UserStatus.OFFLINE }
+            }
+            val offlineFilteredFriends = remember(filteredFriends) {
+                filteredFriends.filter { it.user.status == UserStatus.OFFLINE }
+            }
 
             LazyColumn(
                 modifier = Modifier
@@ -1024,27 +1122,100 @@ fun DirectMessagesView(
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
                 when (selectedFilter) {
+                    "Amis" -> {
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "AMIS EN LIGNE (${onlineFilteredFriends.size})",
+                                    color = DiscordTextMuted,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                TextButton(
+                                    onClick = onOpenUserSearchSheet,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.testTag("friends_open_directory_btn")
+                                ) {
+                                    Icon(Icons.Default.PersonSearch, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Annuaire", color = DiscordBlurple, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+
+                        if (filteredFriends.isEmpty()) {
+                            item {
+                                Text(
+                                    text = "Aucun ami dans cette liste pour le moment. Utilisez + Ajouter ou l'annuaire pour trouver des membres.",
+                                    color = palette.textMuted,
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+                                )
+                            }
+                        } else {
+                            items(onlineFilteredFriends, key = { "online_${it.friendUid}" }) { rel ->
+                                FriendRelationshipCard(
+                                    relationship = rel,
+                                    onOpenDm = { u -> onOpenFriendDm(u) },
+                                    onStartCall = onStartCall,
+                                    onOpenProfile = onOpenUserProfile,
+                                    onRemoveFriend = onRemoveFriend,
+                                    onBlockUser = onBlockUser
+                                )
+                            }
+                            if (offlineFilteredFriends.isNotEmpty()) {
+                                item {
+                                    Text(
+                                        text = "HORS LIGNE & DERNIÈRE ACTIVITÉ (${offlineFilteredFriends.size})",
+                                        color = DiscordTextMuted,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                    )
+                                }
+                                items(offlineFilteredFriends, key = { "offline_${it.friendUid}" }) { rel ->
+                                    FriendRelationshipCard(
+                                        relationship = rel,
+                                        onOpenDm = { u -> onOpenFriendDm(u) },
+                                        onStartCall = onStartCall,
+                                        onOpenProfile = onOpenUserProfile,
+                                        onRemoveFriend = onRemoveFriend,
+                                        onBlockUser = onBlockUser
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     "En attente" -> {
+                        val incomingReqs = friendRequests.filter { it.direction == FriendRequestDirection.RECEIVED }
+                        val outgoingReqs = friendRequests.filter { it.direction == FriendRequestDirection.SENT }
                         item {
                             Text(
-                                text = "DEMANDES D'AMIS EN ATTENTE (${friendRequests.size})",
+                                text = "DEMANDES REÇUES (${incomingReqs.size})",
                                 color = DiscordTextMuted,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                             )
                         }
-                        if (friendRequests.isEmpty()) {
+                        if (incomingReqs.isEmpty()) {
                             item {
                                 Text(
-                                    text = "Aucune demande en attente.",
+                                    text = "Aucune demande reçue.",
                                     color = palette.textMuted,
                                     fontSize = 13.sp,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                                 )
                             }
                         } else {
-                            items(friendRequests, key = { it.id }) { req ->
+                            items(incomingReqs, key = { "in_${it.id}" }) { req ->
                                 Surface(
                                     color = palette.cardBg,
                                     shape = RoundedCornerShape(12.dp),
@@ -1052,6 +1223,7 @@ fun DirectMessagesView(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(horizontal = 14.dp, vertical = 4.dp)
+                                        .clickable { onOpenUserProfile(req.user) }
                                         .testTag("friend_request_${req.id}")
                                 ) {
                                     Row(
@@ -1082,37 +1254,113 @@ fun DirectMessagesView(
                                                     fontWeight = FontWeight.Bold
                                                 )
                                                 Text(
-                                                    text = if (req.direction == FriendRequestDirection.RECEIVED)
-                                                        "Demande reçue • ${req.timestamp}"
-                                                    else "Demande envoyée • ${req.timestamp}",
-                                                    color = palette.textMuted,
+                                                    text = "Demande reçue • ${req.timestamp}",
+                                                    color = DiscordGreen,
                                                     fontSize = 11.sp
                                                 )
                                             }
                                         }
                                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            if (req.direction == FriendRequestDirection.RECEIVED) {
-                                                IconButton(
-                                                    onClick = { onAcceptFriendRequest(req.id) },
-                                                    modifier = Modifier
-                                                        .size(34.dp)
-                                                        .clip(CircleShape)
-                                                        .background(DiscordGreen.copy(alpha = 0.2f))
-                                                        .testTag("accept_friend_req_${req.id}")
-                                                ) {
-                                                    Icon(Icons.Default.Check, contentDescription = "Accepter", tint = DiscordGreen, modifier = Modifier.size(18.dp))
-                                                }
+                                            IconButton(
+                                                onClick = { onAcceptFriendRequest(req.id) },
+                                                modifier = Modifier
+                                                    .size(36.dp)
+                                                    .clip(CircleShape)
+                                                    .background(DiscordGreen.copy(alpha = 0.2f))
+                                                    .testTag("accept_friend_req_${req.id}")
+                                            ) {
+                                                Icon(Icons.Default.Check, contentDescription = "Accepter", tint = DiscordGreen, modifier = Modifier.size(18.dp))
                                             }
                                             IconButton(
-                                                onClick = { onDeclineOrCancelFriendRequest(req.id) },
+                                                onClick = {
+                                                    (onDeclineFriendRequest ?: onDeclineOrCancelFriendRequest)(req.id)
+                                                },
                                                 modifier = Modifier
-                                                    .size(34.dp)
+                                                    .size(36.dp)
                                                     .clip(CircleShape)
                                                     .background(DiscordRed.copy(alpha = 0.2f))
                                                     .testTag("decline_friend_req_${req.id}")
                                             ) {
-                                                Icon(Icons.Default.Close, contentDescription = "Refuser / Annuler", tint = DiscordRed, modifier = Modifier.size(18.dp))
+                                                Icon(Icons.Default.Close, contentDescription = "Refuser", tint = DiscordRed, modifier = Modifier.size(18.dp))
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Text(
+                                text = "DEMANDES ENVOYÉES (${outgoingReqs.size})",
+                                color = DiscordTextMuted,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                            )
+                        }
+                        if (outgoingReqs.isEmpty()) {
+                            item {
+                                Text(
+                                    text = "Aucune demande envoyée en attente.",
+                                    color = palette.textMuted,
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                )
+                            }
+                        } else {
+                            items(outgoingReqs, key = { "out_${it.id}" }) { req ->
+                                Surface(
+                                    color = palette.cardBg,
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, palette.border),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 4.dp)
+                                        .clickable { onOpenUserProfile(req.user) }
+                                        .testTag("friend_request_${req.id}")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(38.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color(req.user.avatarColor)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = req.user.name.take(1).uppercase(),
+                                                    color = Color.White,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column {
+                                                Text(
+                                                    text = "${req.user.name}${req.user.tag}",
+                                                    color = palette.textPrimary,
+                                                    fontSize = 14.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                                Text(
+                                                    text = "Demande envoyée • ${req.timestamp}",
+                                                    color = palette.textMuted,
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                (onCancelFriendRequest ?: onDeclineOrCancelFriendRequest)(req.id)
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier.testTag("cancel_friend_req_${req.id}")
+                                        ) {
+                                            Text("Annuler", color = DiscordRed, fontSize = 12.sp)
                                         }
                                     }
                                 }
@@ -1196,6 +1444,28 @@ fun DirectMessagesView(
                             )
                         }
 
+                        if (selectedFilter == "En ligne" && onlineFilteredFriends.isNotEmpty()) {
+                            item {
+                                Text(
+                                    text = "AMIS EN LIGNE (${onlineFilteredFriends.size})",
+                                    color = DiscordTextMuted,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                                )
+                            }
+                            items(onlineFilteredFriends, key = { "strip_online_${it.friendUid}" }) { rel ->
+                                FriendRelationshipCard(
+                                    relationship = rel,
+                                    onOpenDm = { u -> onOpenFriendDm(u) },
+                                    onStartCall = onStartCall,
+                                    onOpenProfile = onOpenUserProfile,
+                                    onRemoveFriend = onRemoveFriend,
+                                    onBlockUser = onBlockUser
+                                )
+                            }
+                        }
+
                         item {
                             Text(
                                 text = "MESSAGES DIRECTS & GROUPES (${filteredConversations.size})",
@@ -1209,12 +1479,80 @@ fun DirectMessagesView(
                         items(filteredConversations, key = { it.id }) { conv ->
                             DirectConversationRow(
                                 conversation = conv,
+                                isSelected = useSplitPane && conv.id == selectedDmId,
                                 onClick = { onSelectDm(conv.id) }
                             )
                         }
                     }
                 }
             }
+        }
+    }
+
+    if (useSplitPane) {
+        Row(modifier = modifier.fillMaxSize()) {
+            renderDirectoryPane(Modifier.width(320.dp))
+            VerticalDivider(color = palette.border, thickness = 1.dp)
+            if (activeConversation != null) {
+                renderConversationPane(activeConversation, Modifier.weight(1f), showBackNav = false)
+            } else {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .background(palette.chatBg)
+                        .testTag("dm_desktop_empty_state"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(32.dp)
+                    ) {
+                        Surface(
+                            color = DiscordBlurple.copy(alpha = 0.16f),
+                            shape = CircleShape,
+                            modifier = Modifier.size(64.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Forum, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(30.dp))
+                            }
+                        }
+                        Text(
+                            text = "Espace Messages Privés PC",
+                            color = palette.textPrimary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Sélectionnez un ami ou une conversation à gauche pour discuter sans quitter votre liste.",
+                            color = palette.textMuted,
+                            fontSize = 13.sp
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(onClick = onOpenUserSearchSheet) {
+                                Icon(Icons.Default.PersonSearch, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Annuaire", fontSize = 12.sp)
+                            }
+                            Button(
+                                onClick = { showCreateGroupDialog = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
+                            ) {
+                                Icon(Icons.Default.GroupAdd, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Nouveau groupe", color = Color.White, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        if (activeConversation != null) {
+            renderConversationPane(activeConversation, modifier, showBackNav = true)
+        } else {
+            renderDirectoryPane(modifier)
         }
     }
 
@@ -1303,13 +1641,23 @@ fun DirectMessagesView(
 @Composable
 fun DirectConversationRow(
     conversation: DirectConversation,
+    isSelected: Boolean = false,
     onClick: () -> Unit
 ) {
+    val platform = LocalRavenPlatform.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isSelected) DiscordBlurple.copy(alpha = 0.22f) else Color.Transparent)
+            .desktopHoverHighlight(
+                shape = RoundedCornerShape(10.dp),
+                enabled = platform.isPc || platform.hasMouseOrTrackpad
+            )
+            .desktopHoverPointer(platform.isPc)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
             .testTag("dm_row_${conversation.id}"),
         verticalAlignment = Alignment.CenterVertically
     ) {

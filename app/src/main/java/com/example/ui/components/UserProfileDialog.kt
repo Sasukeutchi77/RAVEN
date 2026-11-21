@@ -77,6 +77,16 @@ fun UserProfileDialog(
     onSavePrivateNote: (String) -> Unit = {},
     onSaveClanTag: (String) -> Unit = {},
     onFirebaseAuthChanged: () -> Unit = {},
+    friendRelationStatus: com.example.model.FriendRelationStatus = com.example.model.FriendRelationStatus.NONE,
+    showOnlineStatus: Boolean = true,
+    lastActivityDisplay: String = "",
+    onSendFriendRequest: (() -> Unit)? = null,
+    onAcceptFriendRequest: (() -> Unit)? = null,
+    onDeclineFriendRequest: (() -> Unit)? = null,
+    onCancelFriendRequest: (() -> Unit)? = null,
+    onRemoveFriend: (() -> Unit)? = null,
+    onBlockUser: (() -> Unit)? = null,
+    onUnblockUser: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -203,22 +213,24 @@ fun UserProfileDialog(
                                 }
 
                                 // Status badge
-                                Box(
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .align(Alignment.BottomEnd)
-                                        .offset(x = (-2).dp, y = (-2).dp)
-                                        .border(3.dp, DiscordDarkCard, CircleShape)
-                                        .clip(CircleShape)
-                                        .background(
-                                            when (user.status) {
-                                                UserStatus.ONLINE -> DiscordGreen
-                                                UserStatus.IDLE -> DiscordAmber
-                                                UserStatus.DND -> DiscordRed
-                                                UserStatus.OFFLINE -> DiscordTextDark
-                                            }
-                                        )
-                                )
+                                if (isCurrentUser || showOnlineStatus) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .align(Alignment.BottomEnd)
+                                            .offset(x = (-2).dp, y = (-2).dp)
+                                            .border(3.dp, DiscordDarkCard, CircleShape)
+                                            .clip(CircleShape)
+                                            .background(
+                                                when (user.status) {
+                                                    UserStatus.ONLINE -> DiscordGreen
+                                                    UserStatus.IDLE -> DiscordAmber
+                                                    UserStatus.DND -> DiscordRed
+                                                    UserStatus.OFFLINE -> DiscordTextDark
+                                                }
+                                            )
+                                    )
+                                }
                                 AvatarDecorationOverlay(
                                     decorationKey = user.avatarDecoration,
                                     size = 80.dp,
@@ -272,23 +284,24 @@ fun UserProfileDialog(
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("Modifier", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
                                     }
-                                } else if (onStartDirectMessage != null) {
-                                Button(
-                                    onClick = {
-                                        onStartDirectMessage(user)
-                                        onDismiss()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.White)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Message", fontSize = 13.sp, color = Color.White)
+                                } else if (onStartDirectMessage != null && friendRelationStatus != com.example.model.FriendRelationStatus.BLOCKED_BY_ME) {
+                                    Button(
+                                        onClick = {
+                                            onStartDirectMessage(user)
+                                            onDismiss()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        modifier = Modifier.testTag("profile_dm_button")
+                                    ) {
+                                        Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color.White)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Message", fontSize = 13.sp, color = Color.White)
+                                    }
                                 }
                             }
                         }
-                    }
 
                     // Name & Identity Info
                     Column(modifier = Modifier.offset(y = (-14).dp)) {
@@ -407,6 +420,99 @@ fun UserProfileDialog(
                 Spacer(modifier = Modifier.height(14.dp))
             }
 
+            if (!isCurrentUser) {
+                ProfileSectionCard(title = "RELATION & ACTIONS") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        when (friendRelationStatus) {
+                            com.example.model.FriendRelationStatus.NONE -> {
+                                if (onSendFriendRequest != null) {
+                                    Button(
+                                        onClick = onSendFriendRequest,
+                                        colors = ButtonDefaults.buttonColors(containerColor = DiscordGreen),
+                                        modifier = Modifier.weight(1f).testTag("profile_add_friend_btn")
+                                    ) {
+                                        Icon(Icons.Default.PersonAdd, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Ajouter en ami", color = Color.White, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+
+                            com.example.model.FriendRelationStatus.REQUEST_SENT -> {
+                                if (onCancelFriendRequest != null) {
+                                    OutlinedButton(
+                                        onClick = onCancelFriendRequest,
+                                        modifier = Modifier.weight(1f).testTag("profile_cancel_req_btn")
+                                    ) {
+                                        Text("Annuler la demande", color = DiscordRed, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+
+                            com.example.model.FriendRelationStatus.REQUEST_RECEIVED -> {
+                                if (onAcceptFriendRequest != null) {
+                                    Button(
+                                        onClick = onAcceptFriendRequest,
+                                        colors = ButtonDefaults.buttonColors(containerColor = DiscordGreen),
+                                        modifier = Modifier.weight(1f).testTag("profile_accept_req_btn")
+                                    ) {
+                                        Text("Accepter", color = Color.White, fontSize = 12.sp)
+                                    }
+                                }
+                                if (onDeclineFriendRequest != null) {
+                                    OutlinedButton(
+                                        onClick = onDeclineFriendRequest,
+                                        modifier = Modifier.weight(1f).testTag("profile_decline_req_btn")
+                                    ) {
+                                        Text("Refuser", color = DiscordRed, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+
+                            com.example.model.FriendRelationStatus.FRIENDS -> {
+                                if (onRemoveFriend != null) {
+                                    OutlinedButton(
+                                        onClick = onRemoveFriend,
+                                        modifier = Modifier.weight(1f).testTag("profile_remove_friend_btn")
+                                    ) {
+                                        Icon(Icons.Default.PersonRemove, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Retirer l'ami", color = DiscordAmber, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+
+                            com.example.model.FriendRelationStatus.BLOCKED_BY_ME -> {
+                                if (onUnblockUser != null) {
+                                    Button(
+                                        onClick = onUnblockUser,
+                                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                                        modifier = Modifier.weight(1f).testTag("profile_unblock_btn")
+                                    ) {
+                                        Text("Débloquer", color = Color.White, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+
+                        if (friendRelationStatus != com.example.model.FriendRelationStatus.BLOCKED_BY_ME && onBlockUser != null) {
+                            OutlinedButton(
+                                onClick = onBlockUser,
+                                modifier = Modifier.testTag("profile_block_user_btn")
+                            ) {
+                                Icon(Icons.Default.Block, contentDescription = "Bloquer", tint = DiscordRed, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Bloquer", color = DiscordRed, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
             if (selectedTab == 0) {
                 // Section: Progression XP & Niveau
                 ProfileSectionCard(title = "NIVEAU & PROGRESSION RAVEN") {
@@ -468,24 +574,33 @@ fun UserProfileDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Section: Activité en cours
-                if (user.activity.isNotBlank()) {
-                    ProfileSectionCard(title = "ACTIVITÉ ACTUELLE") {
+                // Section: Activité en cours & Dernière activité
+                val effectiveActivity = user.activity.ifBlank { user.lastActivityLabel }
+                val activitySubtitle = lastActivityDisplay.ifBlank {
+                    if (user.lastActiveAtMs > 0L) com.example.data.FriendFirestoreSync.formatRelativeActivityTime(user.lastActiveAtMs)
+                    else ""
+                }
+                if (effectiveActivity.isNotBlank() || activitySubtitle.isNotBlank()) {
+                    ProfileSectionCard(title = "DERNIÈRE ACTIVITÉ") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.SportsEsports, contentDescription = null, tint = DiscordGreen, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
-                                Text(
-                                    text = user.activity,
-                                    color = DiscordTextWhite,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = "Depuis 45 minutes",
-                                    color = DiscordTextMuted,
-                                    fontSize = 11.sp
-                                )
+                                if (effectiveActivity.isNotBlank()) {
+                                    Text(
+                                        text = effectiveActivity,
+                                        color = DiscordTextWhite,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                if (activitySubtitle.isNotBlank()) {
+                                    Text(
+                                        text = activitySubtitle,
+                                        color = DiscordTextMuted,
+                                        fontSize = 11.sp
+                                    )
+                                }
                             }
                         }
                     }

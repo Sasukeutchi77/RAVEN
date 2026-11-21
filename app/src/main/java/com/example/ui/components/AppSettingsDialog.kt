@@ -21,10 +21,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.AppSettingsState
 import com.example.model.AppThemeMode
+import com.example.model.PlatformLayoutOverride
 import com.example.model.User
 import com.example.ui.theme.*
+import com.example.util.LocalRavenPlatform
+import com.example.util.RavenPlatformKind
+import com.example.util.RavenPlatformProfile
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AppSettingsDialog(
     settings: AppSettingsState,
@@ -33,11 +37,19 @@ fun AppSettingsDialog(
     lastCloudSyncTime: String? = null,
     isFirebaseSignedIn: Boolean = false,
     firebaseUserEmail: String? = null,
+    activePluginsCount: Int = 0,
+    onOpenPluginsManager: () -> Unit = {},
     onRequestNotificationPermission: () -> Unit = {},
     onSyncToCloud: () -> Unit = {},
     onRestoreFromCloud: () -> Unit = {},
     onUpdateSettings: ((AppSettingsState) -> AppSettingsState) -> Unit,
     onOpenProfile: () -> Unit,
+    friendRequestPolicyLabel: String = "Tout le monde",
+    onOpenFriendPrivacy: (() -> Unit)? = null,
+    activeSessionsCount: Int = 1,
+    openSecurityAlertsCount: Int = 0,
+    onOpenAccountSecurity: (() -> Unit)? = null,
+    platformProfile: RavenPlatformProfile = LocalRavenPlatform.current,
     onDismiss: () -> Unit
 ) {
     val palette = ravenPalette()
@@ -65,6 +77,133 @@ fun AppSettingsDialog(
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
+            }
+
+            // Platform Detection & PC / Android Adaptation
+            SettingsGroupCard(title = "PLATEFORME & ADAPTATION PC / ANDROID", palette = palette) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        color = if (platformProfile.isDetectedPc) DiscordBlurple.copy(alpha = 0.2f) else DiscordGreen.copy(alpha = 0.16f),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = when (platformProfile.detectedPlatform) {
+                                    RavenPlatformKind.PC_DESKTOP -> Icons.Default.Computer
+                                    RavenPlatformKind.ANDROID_TABLET -> Icons.Default.TabletAndroid
+                                    RavenPlatformKind.ANDROID_MOBILE -> Icons.Default.PhoneAndroid
+                                },
+                                contentDescription = platformProfile.detectedPlatform.label,
+                                tint = if (platformProfile.isDetectedPc) DiscordBlurple else DiscordGreen,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Détecté : ${platformProfile.detectedPlatform.label}",
+                            color = palette.textPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.testTag("platform_detected_badge")
+                        )
+                        Text(
+                            text = "${platformProfile.platformBadgeLabel} • ${platformProfile.windowWidthDp}×${platformProfile.windowHeightDp} dp",
+                            color = palette.textMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PlatformCapabilityBadge(
+                        label = if (platformProfile.hasHardwareKeyboard) "Clavier physique actif" else "Clavier virtuel",
+                        active = platformProfile.hasHardwareKeyboard,
+                        palette = palette
+                    )
+                    PlatformCapabilityBadge(
+                        label = if (platformProfile.hasMouseOrTrackpad) "Souris / Trackpad" else "Navigation tactile",
+                        active = platformProfile.hasMouseOrTrackpad,
+                        palette = palette
+                    )
+                    if (platformProfile.isChromeOs) {
+                        PlatformCapabilityBadge(label = "ChromeOS", active = true, palette = palette)
+                    }
+                    if (platformProfile.isWindowsPlayGamesPc) {
+                        PlatformCapabilityBadge(label = "PC Windows", active = true, palette = palette)
+                    }
+                    if (platformProfile.supportsEnterToSend) {
+                        PlatformCapabilityBadge(label = "Entrée = Envoyer", active = true, palette = palette)
+                    }
+                    if (platformProfile.useDesktopLayout) {
+                        PlatformCapabilityBadge(label = "Interface Bureau", active = true, palette = palette)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                Text("MODE D'AFFICHAGE", color = palette.textMuted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    PlatformLayoutOverride.entries.forEach { overrideMode ->
+                        val isSel = settings.platformLayoutOverride == overrideMode
+                        Surface(
+                            color = if (isSel) DiscordBlurple.copy(alpha = 0.2f) else palette.inputBg,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(
+                                width = if (isSel) 1.5.dp else 1.dp,
+                                color = if (isSel) DiscordBlurple else palette.border
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable {
+                                    onUpdateSettings { it.copy(platformLayoutOverride = overrideMode) }
+                                }
+                                .testTag("platform_override_${overrideMode.name}")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = when (overrideMode) {
+                                        PlatformLayoutOverride.AUTO -> Icons.Default.AutoAwesome
+                                        PlatformLayoutOverride.FORCE_DESKTOP -> Icons.Default.Computer
+                                        PlatformLayoutOverride.FORCE_MOBILE -> Icons.Default.Smartphone
+                                    },
+                                    contentDescription = overrideMode.label,
+                                    tint = if (isSel) DiscordBlurple else palette.textMuted,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(
+                                    text = when (overrideMode) {
+                                        PlatformLayoutOverride.AUTO -> "Auto"
+                                        PlatformLayoutOverride.FORCE_DESKTOP -> "PC"
+                                        PlatformLayoutOverride.FORCE_MOBILE -> "Mobile"
+                                    },
+                                    color = palette.textPrimary,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             // Theme Mode selector
@@ -262,6 +401,41 @@ fun AppSettingsDialog(
                     },
                     testTag = "setting_activity_toggle"
                 )
+                if (onOpenFriendPrivacy != null) {
+                    HorizontalDivider(color = palette.border, modifier = Modifier.padding(vertical = 6.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                onDismiss()
+                                onOpenFriendPrivacy()
+                            }
+                            .padding(vertical = 6.dp)
+                            .testTag("settings_open_friend_privacy_btn"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Security, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Demandes d'amis & confidentialité",
+                                    color = palette.textPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Actuel : $friendRequestPolicyLabel",
+                                    color = palette.textMuted,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.textMuted)
+                    }
+                }
             }
 
             // Cloud Sync Firebase
@@ -335,6 +509,50 @@ fun AppSettingsDialog(
                 }
             }
 
+            // Extensions & Plugins RAVEN
+            SettingsGroupCard(title = "EXTENSIONS & PLUGINS RAVEN", palette = palette) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Extension,
+                            contentDescription = null,
+                            tint = DiscordBlurple,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "Gestionnaire d'extensions",
+                                color = palette.textPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "$activePluginsCount plugin(s) actif(s) • Permissions & journaux isolés",
+                                color = palette.textMuted,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            onDismiss()
+                            onOpenPluginsManager()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("settings_open_plugins_btn")
+                    ) {
+                        Text("Ouvrir", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+            }
+
             // Account Summary
             SettingsGroupCard(title = "MON COMPTE", palette = palette) {
                 Row(
@@ -364,6 +582,50 @@ fun AppSettingsDialog(
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                     ) {
                         Text("Profil", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+                if (onOpenAccountSecurity != null) {
+                    HorizontalDivider(color = palette.border, modifier = Modifier.padding(vertical = 10.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                onDismiss()
+                                onOpenAccountSecurity()
+                            }
+                            .padding(vertical = 6.dp)
+                            .testTag("settings_open_security_btn"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Shield,
+                                contentDescription = null,
+                                tint = if (openSecurityAlertsCount > 0) DiscordRed else DiscordGreen,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Sécurité du compte & Sessions",
+                                    color = palette.textPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = if (openSecurityAlertsCount > 0) {
+                                        "$activeSessionsCount session(s) • $openSecurityAlertsCount alerte(s) ouverte(s)"
+                                    } else {
+                                        "$activeSessionsCount session(s) active(s) • Appareils, Journal & 2FA"
+                                    },
+                                    color = if (openSecurityAlertsCount > 0) DiscordRed else palette.textMuted,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.textMuted)
                     }
                 }
             }
@@ -425,6 +687,27 @@ private fun SettingsToggleRow(
             onCheckedChange = onCheckedChange,
             modifier = Modifier.testTag(testTag),
             colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = DiscordBlurple)
+        )
+    }
+}
+
+@Composable
+private fun PlatformCapabilityBadge(
+    label: String,
+    active: Boolean,
+    palette: RavenPalette
+) {
+    Surface(
+        color = if (active) DiscordBlurple.copy(alpha = 0.16f) else palette.inputBg,
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, if (active) DiscordBlurple.copy(alpha = 0.45f) else palette.border)
+    ) {
+        Text(
+            text = label,
+            color = if (active) DiscordBlurple else palette.textMuted,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
         )
     }
 }

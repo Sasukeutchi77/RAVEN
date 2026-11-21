@@ -17,6 +17,14 @@
         "level": { "type": "integer" },
         "clanTag": { "type": "string" },
         "clanBadgeIcon": { "type": "string" },
+        "tag": { "type": "string" },
+        "lastActiveAtMs": { "type": "integer" },
+        "lastActivityLabel": { "type": "string" },
+        "friendRequestPolicy": { "type": "string" },
+        "allowDmsFrom": { "type": "string" },
+        "showOnlineStatus": { "type": "boolean" },
+        "showLastActivity": { "type": "boolean" },
+        "notifyFriendRequests": { "type": "boolean" },
         "fcmToken": { "type": "string" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -24,17 +32,28 @@
     },
     "PublicProfile": {
       "title": "PublicProfile",
-      "description": "Public non-PII user summary for leaderboards and member lists.",
+      "description": "Public non-PII user summary for leaderboards, user search, and friend discovery.",
       "type": "object",
       "properties": {
         "userId": { "type": "string" },
         "name": { "type": "string" },
+        "tag": { "type": "string" },
+        "bio": { "type": "string" },
         "avatarUrl": { "type": "string" },
         "avatarColor": { "type": "integer" },
+        "status": { "type": "string" },
+        "customStatus": { "type": "string" },
         "xp": { "type": "integer" },
         "level": { "type": "integer" },
         "clanTag": { "type": "string" },
         "clanBadgeIcon": { "type": "string" },
+        "lastActiveAtMs": { "type": "integer" },
+        "lastActivityLabel": { "type": "string" },
+        "friendRequestPolicy": { "type": "string" },
+        "allowDmsFrom": { "type": "string" },
+        "showOnlineStatus": { "type": "boolean" },
+        "showLastActivity": { "type": "boolean" },
+        "isPublic": { "type": "boolean" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "name"]
@@ -715,6 +734,236 @@
         "createdAtMs": { "type": "integer" }
       },
       "required": ["id", "eventId", "actorId", "actionType", "summary"]
+    },
+    "UserPluginState": {
+      "title": "UserPluginState",
+      "description": "User-scoped persisted activation, granted permissions, configuration, and fault quarantine state for a RAVEN extension.",
+      "type": "object",
+      "properties": {
+        "pluginId": { "type": "string" },
+        "installedVersion": { "type": "string" },
+        "isEnabled": { "type": "boolean" },
+        "lifecycleState": { "type": "string" },
+        "grantedPermissions": { "type": "array", "items": { "type": "string" } },
+        "deniedPermissions": { "type": "array", "items": { "type": "string" } },
+        "configValues": { "type": "object" },
+        "consecutiveErrors": { "type": "integer" },
+        "lastErrorMessage": { "type": "string" },
+        "updatedAtMs": { "type": "integer" }
+      },
+      "required": ["pluginId", "installedVersion", "isEnabled", "lifecycleState", "grantedPermissions", "deniedPermissions", "configValues", "consecutiveErrors", "updatedAtMs"]
+    },
+    "PluginLogRecord": {
+      "title": "PluginLogRecord",
+      "description": "Immutable per-user audit/error/security log entry produced by a sandboxed RAVEN extension.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "pluginId": { "type": "string" },
+        "pluginName": { "type": "string" },
+        "level": { "type": "string" },
+        "action": { "type": "string" },
+        "message": { "type": "string" },
+        "timestampMs": { "type": "integer" },
+        "timestampLabel": { "type": "string" }
+      },
+      "required": ["id", "pluginId", "pluginName", "level", "action", "message", "timestampMs"]
+    },
+    "FriendRelationship": {
+      "title": "FriendRelationship",
+      "description": "Owner-isolated friend record stored under /users/{userId}/friends/{friendId}.",
+      "type": "object",
+      "properties": {
+        "friendUid": { "type": "string" },
+        "pairId": { "type": "string" },
+        "friendName": { "type": "string" },
+        "friendTag": { "type": "string" },
+        "avatarColor": { "type": "integer" },
+        "avatarUrl": { "type": "string" },
+        "status": { "type": "string" },
+        "customStatus": { "type": "string" },
+        "lastActiveAtMs": { "type": "integer" },
+        "lastActivityLabel": { "type": "string" },
+        "privateNote": { "type": "string" },
+        "addedAtMs": { "type": "integer" }
+      },
+      "required": ["friendUid", "pairId", "friendName"]
+    },
+    "BlockedUserRecord": {
+      "title": "BlockedUserRecord",
+      "description": "Owner-isolated blocked user entry stored under /users/{userId}/blocked_users/{blockedUid}.",
+      "type": "object",
+      "properties": {
+        "blockedUid": { "type": "string" },
+        "blockedByUid": { "type": "string" },
+        "name": { "type": "string" },
+        "tag": { "type": "string" },
+        "avatarColor": { "type": "integer" },
+        "avatarUrl": { "type": "string" },
+        "blockedAtMs": { "type": "integer" }
+      },
+      "required": ["blockedUid", "blockedByUid"]
+    },
+    "FriendRequestRecord": {
+      "title": "FriendRequestRecord",
+      "description": "Deterministic canonical pair friend request preventing duplicate relationships.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "pairId": { "type": "string" },
+        "fromUid": { "type": "string" },
+        "fromName": { "type": "string" },
+        "fromTag": { "type": "string" },
+        "fromAvatarColor": { "type": "integer" },
+        "fromAvatarUrl": { "type": "string" },
+        "toUid": { "type": "string" },
+        "toName": { "type": "string" },
+        "toTag": { "type": "string" },
+        "toAvatarColor": { "type": "integer" },
+        "toAvatarUrl": { "type": "string" },
+        "participantIds": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string" },
+        "sharedServerId": { "type": "string" },
+        "createdAtMs": { "type": "integer" },
+        "updatedAtMs": { "type": "integer" }
+      },
+      "required": ["id", "pairId", "fromUid", "toUid", "participantIds", "status"]
+    },
+    "SearchHistoryEntry": {
+      "title": "SearchHistoryEntry",
+      "description": "Strictly owner-isolated global search history record under /users/{userId}/search_history/{entryId}.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "query": { "type": "string" },
+        "selectedTypeName": { "type": "string" },
+        "authorFilter": { "type": "string" },
+        "timestampMs": { "type": "integer" }
+      },
+      "required": ["id", "userId", "query", "selectedTypeName", "timestampMs"]
+    },
+    "AccountSecurityProfile": {
+      "title": "AccountSecurityProfile",
+      "description": "Owner-only security policy, monotonic session epoch, salted PBKDF2 pin hash, and 2FA metadata.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "sessionEpoch": { "type": "integer" },
+        "globalSignOutAfterMs": { "type": "integer" },
+        "lastSensitiveVerifiedAtMs": { "type": "integer" },
+        "protectSuspiciousChanges": { "type": "boolean" },
+        "alertOnNewDevice": { "type": "boolean" },
+        "alertOnUnusualActivity": { "type": "boolean" },
+        "requireReauthForSensitiveActions": { "type": "boolean" },
+        "changeFreezeUntilMs": { "type": "integer" },
+        "cooldownUntilMs": { "type": "integer" },
+        "failedChallengeCount": { "type": "integer" },
+        "suspiciousAttemptCount": { "type": "integer" },
+        "pinHash": { "type": "string" },
+        "pinSalt": { "type": "string" },
+        "twoFactorReady": { "type": "boolean" },
+        "preferredTwoFactorMethod": { "type": "string" },
+        "enrolledFactorsMeta": { "type": "array", "items": { "type": "object" } },
+        "backupCodesRemainingCount": { "type": "integer" },
+        "backupCodeHashes": { "type": "array", "items": { "type": "string" } },
+        "updatedAtMs": { "type": "integer" }
+      },
+      "required": ["userId", "sessionEpoch", "updatedAtMs"]
+    },
+    "AccountSession": {
+      "title": "AccountSession",
+      "description": "Authenticated session record with monotonic epoch and revocation metadata.",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string" },
+        "userId": { "type": "string" },
+        "deviceIdHash": { "type": "string" },
+        "deviceName": { "type": "string" },
+        "platformLabel": { "type": "string" },
+        "appVersion": { "type": "string" },
+        "networkRegionLabel": { "type": "string" },
+        "status": { "type": "string" },
+        "sessionEpoch": { "type": "integer" },
+        "createdAtMs": { "type": "integer" },
+        "lastActivityMs": { "type": "integer" },
+        "expiresAtMs": { "type": "integer" },
+        "revokedAtMs": { "type": "integer" },
+        "revokedReason": { "type": "string" }
+      },
+      "required": ["sessionId", "userId", "deviceIdHash", "status", "sessionEpoch"]
+    },
+    "ConnectedDevice": {
+      "title": "ConnectedDevice",
+      "description": "App-scoped hashed device record with trust state (TRUSTED, UNTRUSTED, BLOCKED).",
+      "type": "object",
+      "properties": {
+        "deviceIdHash": { "type": "string" },
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "modelName": { "type": "string" },
+        "osVersion": { "type": "string" },
+        "trustState": { "type": "string" },
+        "firstSeenAtMs": { "type": "integer" },
+        "lastSeenAtMs": { "type": "integer" },
+        "lastRegionLabel": { "type": "string" },
+        "lastSessionId": { "type": "string" }
+      },
+      "required": ["deviceIdHash", "userId", "displayName", "trustState"]
+    },
+    "LoginHistoryEntry": {
+      "title": "LoginHistoryEntry",
+      "description": "Immutable chronological sign-in and anomaly record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "deviceIdHash": { "type": "string" },
+        "deviceName": { "type": "string" },
+        "authMethod": { "type": "string" },
+        "outcome": { "type": "string" },
+        "regionLabel": { "type": "string" },
+        "timestampMs": { "type": "integer" },
+        "anomalyReason": { "type": "string" }
+      },
+      "required": ["id", "userId", "deviceName", "outcome", "timestampMs"]
+    },
+    "SecurityAlert": {
+      "title": "SecurityAlert",
+      "description": "Account security alert generated on suspicious activity or new devices.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "severity": { "type": "string" },
+        "status": { "type": "string" },
+        "relatedSessionId": { "type": "string" },
+        "relatedDeviceIdHash": { "type": "string" },
+        "recommendedAction": { "type": "string" },
+        "createdAtMs": { "type": "integer" },
+        "resolvedAtMs": { "type": "integer" }
+      },
+      "required": ["id", "userId", "title", "severity", "status", "createdAtMs"]
+    },
+    "SecurityLogEntry": {
+      "title": "SecurityLogEntry",
+      "description": "Immutable audit journal of account security actions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "category": { "type": "string" },
+        "severity": { "type": "string" },
+        "action": { "type": "string" },
+        "summary": { "type": "string" },
+        "actorDeviceIdHash": { "type": "string" },
+        "timestampMs": { "type": "integer" },
+        "timestampLabel": { "type": "string" }
+      },
+      "required": ["id", "userId", "category", "severity", "action", "timestampMs"]
     }
   },
   "firestore": {
@@ -737,6 +986,14 @@
     "/users/{userId}/ai_usage/{quotaId}": {
       "schema": { "$ref": "#/entities/AiUsageQuota" },
       "description": "Daily usage quota and abuse-strike record for RAVEN AI."
+    },
+    "/users/{userId}/plugins/{pluginId}": {
+      "schema": { "$ref": "#/entities/UserPluginState" },
+      "description": "Owner-isolated extension activation state, least-privilege permissions, and config."
+    },
+    "/users/{userId}/plugin_logs/{logId}": {
+      "schema": { "$ref": "#/entities/PluginLogRecord" },
+      "description": "Owner-isolated immutable execution, error, and security audit logs for extensions."
     },
     "/public_profiles/{userId}": {
       "schema": { "$ref": "#/entities/PublicProfile" },
@@ -857,6 +1114,46 @@
     "/events/{eventId}/history/{entryId}": {
       "schema": { "$ref": "#/entities/EventHistoryEntry" },
       "description": "Immutable chronological modification, RSVP, waitlist promotion, and cancellation log."
+    },
+    "/users/{userId}/friends/{friendId}": {
+      "schema": { "$ref": "#/entities/FriendRelationship" },
+      "description": "Strictly owner-isolated friend list entries."
+    },
+    "/users/{userId}/blocked_users/{blockedUid}": {
+      "schema": { "$ref": "#/entities/BlockedUserRecord" },
+      "description": "Strictly owner-isolated blocked users list."
+    },
+    "/friend_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/FriendRequestRecord" },
+      "description": "Canonical-pair friend request workflow with anti-duplication and recipient privacy enforcement."
+    },
+    "/users/{userId}/search_history/{entryId}": {
+      "schema": { "$ref": "#/entities/SearchHistoryEntry" },
+      "description": "Strictly owner-isolated persistent global search history entries."
+    },
+    "/users/{userId}/security_profile/{profileId}": {
+      "schema": { "$ref": "#/entities/AccountSecurityProfile" },
+      "description": "Owner-only security policy, monotonic epoch, and hashed PIN/2FA recovery metadata."
+    },
+    "/users/{userId}/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/AccountSession" },
+      "description": "Owner-only active and revoked account sessions."
+    },
+    "/users/{userId}/devices/{deviceIdHash}": {
+      "schema": { "$ref": "#/entities/ConnectedDevice" },
+      "description": "Owner-only hashed device trust registry."
+    },
+    "/users/{userId}/login_history/{eventId}": {
+      "schema": { "$ref": "#/entities/LoginHistoryEntry" },
+      "description": "Owner-only immutable login history records."
+    },
+    "/users/{userId}/security_alerts/{alertId}": {
+      "schema": { "$ref": "#/entities/SecurityAlert" },
+      "description": "Owner-only unusual activity and device security alerts."
+    },
+    "/users/{userId}/security_logs/{logId}": {
+      "schema": { "$ref": "#/entities/SecurityLogEntry" },
+      "description": "Owner-only immutable security audit journal."
     }
   }
 }

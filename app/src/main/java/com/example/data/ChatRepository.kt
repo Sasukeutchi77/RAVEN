@@ -240,6 +240,13 @@ class ChatRepository(
     internal fun discoverMutableFlow(): MutableStateFlow<List<PublicServerListing>> = _discoverServers
     internal fun selectedServerMutableFlow(): MutableStateFlow<String> = _selectedServerId
     internal fun messagesMutableFlow(): MutableStateFlow<Map<String, List<Message>>> = _messages
+    internal fun directConversationsMutableFlow(): MutableStateFlow<List<DirectConversation>> = _directConversations
+    internal fun selectedDmIdMutableFlow(): MutableStateFlow<String?> = _selectedDmId
+    internal fun friendRequestsMutableFlow(): MutableStateFlow<List<FriendRequest>> = _friendRequests
+    internal fun blockedUsersMutableFlow(): MutableStateFlow<List<User>> = _blockedUsers
+    internal fun privateUserNotesMutableFlow(): MutableStateFlow<Map<String, String>> = _privateUserNotes
+    internal fun appSettingsMutableFlow(): MutableStateFlow<AppSettingsState> = _appSettings
+    internal var friendBridgeHook: FriendRepository? = null
     internal fun notifyCommunityEvent(
         title: String,
         body: String,
@@ -254,15 +261,16 @@ class ChatRepository(
     }
 
     internal fun sendStoryReplyDm(recipient: User, storyPreview: String, replyText: String) {
-        val existingConv = _directConversations.value.find { !it.isGroup && it.friend.id == recipient.id }
-        val targetConv = existingConv ?: DirectConversation(
-            id = "dm_${recipient.id}",
-            friend = recipient,
-            lastMessage = "",
-            lastMessageTime = "À l'instant"
-        ).also { created ->
-            _directConversations.value = listOf(created) + _directConversations.value
-        }
+        val bridgeConv = friendBridgeHook?.openOrCreateDirectConversation(recipient, bypassDmPolicy = true)
+        val targetConv = bridgeConv ?: _directConversations.value.find { !it.isGroup && it.friend.id == recipient.id }
+            ?: DirectConversation(
+                id = "dm_${recipient.id}",
+                friend = recipient,
+                lastMessage = "",
+                lastMessageTime = "À l'instant"
+            ).also { created ->
+                _directConversations.value = listOf(created) + _directConversations.value
+            }
         sendMessage(
             targetId = targetConv.id,
             text = "Réponse à votre Story (« $storyPreview ») : $replyText"
@@ -273,6 +281,10 @@ class ChatRepository(
     internal var aiCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
     internal var botMessageHandler: ((serverId: String, channelId: String, message: Message) -> Unit)? = null
     internal var botCommunityEventHandler: ((serverId: String, eventType: String, actorUid: String, actorName: String, detail: String) -> Unit)? = null
+    internal var pluginCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
+    internal var pluginMessageHandler: ((serverId: String, channelId: String, message: Message) -> Unit)? = null
+    internal var pluginEventHandler: ((RavenPluginEvent) -> Unit)? = null
+    internal fun repoScope(): CoroutineScope = scope
 
     internal fun postBotChannelMessage(
         targetId: String,
@@ -335,6 +347,33 @@ class ChatRepository(
                 Log.w("ChatRepo", "Bot Firestore message write failed", e)
             }
         }
+    }
+
+    internal fun postPluginChannelMessage(
+        targetId: String,
+        pluginId: String,
+        pluginName: String,
+        text: String
+    ) {
+        val currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val extSender = User(
+            id = "ext_$pluginId",
+            name = "$pluginName [Ext]",
+            tag = "#EXT",
+            avatarColor = 0xFF5865F2L,
+            role = UserRole.BOT,
+            status = UserStatus.ONLINE
+        )
+        val extMsg = Message(
+            id = "pmsg_${UUID.randomUUID().toString().take(8)}",
+            channelId = targetId,
+            sender = extSender,
+            text = text.take(1200),
+            timestamp = currentTime,
+            isSystemAnnouncement = false
+        )
+        val currentList = _messages.value[targetId] ?: emptyList()
+        _messages.value = _messages.value + (targetId to (currentList + extMsg))
     }
 
     internal fun postLocalAssistantFeedback(targetId: String, text: String) {
@@ -686,6 +725,13 @@ class ChatRepository(
         _selectedServerId.value = serverId
         val server = _servers.value.find { it.id == serverId }
         if (server != null && !server.isDmTab) {
+            pluginEventHandler?.invoke(
+                RavenPluginEvent.ServerSelected(
+                    serverId = server.id,
+                    serverName = server.name,
+                    timestampMs = System.currentTimeMillis()
+                )
+            )
             val firstText = server.channels.firstOrNull { it.type == ChannelType.TEXT }
                 ?: server.channels.firstOrNull()
             firstText?.let { selectChannel(it) }
@@ -699,6 +745,15 @@ class ChatRepository(
             _selectedChannelId.value = channel.id
             listenToChannelMessages(channel.id)
             listenToWhiteboard(channel.id)
+            pluginEventHandler?.invoke(
+                RavenPluginEvent.ChannelChanged(
+                    serverId = channel.serverId,
+                    channelId = channel.id,
+                    channelName = channel.name,
+                    channelType = channel.type.name,
+                    timestampMs = System.currentTimeMillis()
+                )
+            )
         }
     }
 
@@ -1156,12 +1211,14 @@ class ChatRepository(
         simulateBriefReplyTyping(targetId)
 
         // Sync with Firestore if available and authenticated
+        friendBridgeHook?.touchCurrentUserActivity()
         syncNewMessageToFirestore(newMessage, targetId)
 
-        // Dispatch message event to installed Raven Bots
+        // Dispatch message event to installed Raven Bots and active sandboxed extensions
         val ch = findChannelById(targetId)
         if (ch != null && newMessage.sender.role != UserRole.BOT) {
             botMessageHandler?.invoke(ch.serverId, targetId, newMessage)
+            pluginMessageHandler?.invoke(ch.serverId, targetId, newMessage)
         }
     }
 
@@ -1201,19 +1258,28 @@ class ChatRepository(
         scope.launch(Dispatchers.IO) {
             try {
                 if (targetChannel == null) {
-                    val participantIds = listOf(user.uid)
+                    val dmConv = _directConversations.value.find { it.id == targetId }
+                    val participantIds = when {
+                        dmConv == null -> listOf(user.uid)
+                        dmConv.isGroup -> (dmConv.groupMembers.map { it.id } + user.uid)
+                            .filter { it.isNotBlank() }.distinct().sorted()
+                        else -> listOf(user.uid, dmConv.friend.id)
+                            .filter { it.isNotBlank() }.distinct().sorted()
+                    }
                     payload["participantIds"] = participantIds
                     val dmDoc = db.collection("direct_conversations").document(targetId)
-                    Tasks.await(dmDoc.set(
-                        mapOf(
-                            "id" to targetId,
-                            "participantIds" to participantIds,
-                            "lastMessage" to newMessage.text.ifBlank { newMessage.attachmentName ?: "Média" },
-                            "lastMessageTime" to newMessage.timestamp,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        ),
-                        SetOptions.merge()
-                    ))
+                    val dmMeta = hashMapOf<String, Any>(
+                        "id" to targetId,
+                        "participantIds" to participantIds,
+                        "isGroup" to (dmConv?.isGroup == true),
+                        "lastMessage" to newMessage.text.ifBlank { newMessage.attachmentName ?: "Média" },
+                        "lastMessageTime" to newMessage.timestamp,
+                        "updatedAtMs" to System.currentTimeMillis(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    dmConv?.groupName?.takeIf { it.isNotBlank() }?.let { dmMeta["groupName"] = it }
+                    dmConv?.dmPairKey?.takeIf { it.isNotBlank() }?.let { dmMeta["dmPairKey"] = it }
+                    Tasks.await(dmDoc.set(dmMeta, SetOptions.merge()))
                     Tasks.await(dmDoc.collection("messages").document(newMessage.id).set(payload))
                 } else {
                     val (isPublic, memberIds) = ensureServerAndChannelInFirestore(db, targetChannel.serverId, targetChannel, user.uid)
@@ -1388,6 +1454,14 @@ class ChatRepository(
         )
         listenToWhiteboard(latestChannel.id)
         listenToJukebox(latestChannel.id)
+        pluginEventHandler?.invoke(
+            RavenPluginEvent.VoiceRoomJoined(
+                serverId = latestChannel.serverId,
+                channelId = latestChannel.id,
+                channelName = latestChannel.name,
+                timestampMs = System.currentTimeMillis()
+            )
+        )
         return true
     }
 
@@ -1451,6 +1525,13 @@ class ChatRepository(
         updateChannelParticipantsInServers(updatedChannel)
         webRtcVoiceManager?.leaveRoom(VoiceDisconnectReason.USER_LEFT)
         jukeboxAudioEngine?.pause()
+        pluginEventHandler?.invoke(
+            RavenPluginEvent.VoiceRoomLeft(
+                serverId = channel.serverId,
+                channelId = channel.id,
+                timestampMs = System.currentTimeMillis()
+            )
+        )
     }
 
     fun setVoiceChannelLocked(serverId: String, channelId: String, locked: Boolean) {
@@ -1625,8 +1706,11 @@ class ChatRepository(
     fun updateUserStatus(status: UserStatus, customStatus: String? = null) {
         _currentUser.value = _currentUser.value.copy(
             status = status,
-            customStatus = customStatus ?: _currentUser.value.customStatus
+            customStatus = customStatus ?: _currentUser.value.customStatus,
+            lastActiveAtMs = System.currentTimeMillis(),
+            lastActivityLabel = customStatus ?: _currentUser.value.lastActivityLabel.ifBlank { _currentUser.value.activity }
         )
+        friendBridgeHook?.touchCurrentUserActivity()
         saveProfileToFirestore()
     }
 
@@ -1646,6 +1730,7 @@ class ChatRepository(
         phone: String? = null
     ) {
         val curr = _currentUser.value
+        val resolvedActivity = activity ?: curr.activity
         _currentUser.value = curr.copy(
             name = name ?: curr.name,
             pronouns = pronouns ?: curr.pronouns,
@@ -1657,9 +1742,11 @@ class ChatRepository(
             customStatus = customStatus ?: curr.customStatus,
             customStatusEmoji = customStatusEmoji ?: curr.customStatusEmoji,
             status = status ?: curr.status,
-            activity = activity ?: curr.activity,
+            activity = resolvedActivity,
             email = email ?: curr.email,
-            phone = phone ?: curr.phone
+            phone = phone ?: curr.phone,
+            lastActiveAtMs = System.currentTimeMillis(),
+            lastActivityLabel = resolvedActivity
         )
         saveProfileToFirestore()
         advanceQuest("q_profile")
@@ -1849,9 +1936,11 @@ class ChatRepository(
             )
         }
 
+        val friendPrivacy = friendBridgeHook?.privacySettings?.value ?: FriendPrivacySettings()
         val data = hashMapOf<String, Any>(
             "userId" to authUser.uid,
             "name" to user.name,
+            "tag" to user.tag,
             "bio" to user.bio,
             "pronouns" to user.pronouns,
             "status" to user.status.name,
@@ -1860,6 +1949,13 @@ class ChatRepository(
             "avatarColor" to user.avatarColor,
             "bannerColor" to user.bannerColor,
             "activity" to user.activity,
+            "lastActiveAtMs" to user.lastActiveAtMs,
+            "lastActivityLabel" to user.lastActivityLabel.ifBlank { user.activity },
+            "friendRequestPolicy" to friendPrivacy.friendRequestPolicy.name,
+            "allowDmsFrom" to friendPrivacy.allowDmsFrom.name,
+            "showOnlineStatus" to friendPrivacy.showOnlineStatus,
+            "showLastActivity" to friendPrivacy.showLastActivity,
+            "notifyFriendRequests" to friendPrivacy.notifyFriendRequests,
             "orbsBalance" to user.orbsBalance,
             "xp" to user.xp,
             "level" to user.level,
@@ -1875,6 +1971,7 @@ class ChatRepository(
             "soundEffectsEnabled" to settings.soundEffectsEnabled,
             "voiceNoiseSuppression" to settings.voiceNoiseSuppression,
             "localNotificationsEnabled" to settings.localNotificationsEnabled,
+            "platformLayoutOverride" to settings.platformLayoutOverride.name,
             "dailyStreak" to _dailyStreak.value,
             "streakClaimedToday" to _streakClaimedToday.value,
             "privateUserNotes" to _privateUserNotes.value,
@@ -1891,11 +1988,21 @@ class ChatRepository(
         val publicProfile = hashMapOf<String, Any>(
             "userId" to authUser.uid,
             "name" to user.name,
+            "tag" to user.tag,
+            "bio" to user.bio.take(200),
             "avatarColor" to user.avatarColor,
             "xp" to user.xp,
             "level" to user.level,
             "clanTag" to (user.clanTag ?: "RVN"),
             "clanBadgeIcon" to user.clanBadgeIcon,
+            "friendRequestPolicy" to friendPrivacy.friendRequestPolicy.name,
+            "allowDmsFrom" to friendPrivacy.allowDmsFrom.name,
+            "showOnlineStatus" to friendPrivacy.showOnlineStatus,
+            "showLastActivity" to friendPrivacy.showLastActivity,
+            "status" to (if (friendPrivacy.showOnlineStatus) user.status.name else UserStatus.OFFLINE.name),
+            "customStatus" to (if (friendPrivacy.showOnlineStatus) user.customStatus.take(120) else ""),
+            "lastActiveAtMs" to (if (friendPrivacy.showLastActivity) user.lastActiveAtMs else 0L),
+            "lastActivityLabel" to (if (friendPrivacy.showLastActivity) user.lastActivityLabel.ifBlank { user.activity }.take(120) else ""),
             "isPublic" to true,
             "updatedAt" to FieldValue.serverTimestamp()
         )
@@ -2047,6 +2154,9 @@ class ChatRepository(
                         val soundOn = doc.getBoolean("soundEffectsEnabled") ?: _appSettings.value.soundEffectsEnabled
                         val noiseOn = doc.getBoolean("voiceNoiseSuppression") ?: _appSettings.value.voiceNoiseSuppression
                         val notifOn = doc.getBoolean("localNotificationsEnabled") ?: _appSettings.value.localNotificationsEnabled
+                        val layoutStr = doc.getString("platformLayoutOverride")
+                        val layoutOverride = PlatformLayoutOverride.entries.find { it.name == layoutStr }
+                            ?: _appSettings.value.platformLayoutOverride
                         _appSettings.value = _appSettings.value.copy(
                             themeMode = mode,
                             accentColorHex = accentHex,
@@ -2055,11 +2165,19 @@ class ChatRepository(
                             audioEqPreset = eqPreset,
                             soundEffectsEnabled = soundOn,
                             voiceNoiseSuppression = noiseOn,
-                            localNotificationsEnabled = notifOn
+                            localNotificationsEnabled = notifOn,
+                            platformLayoutOverride = layoutOverride
                         )
                         jukeboxAudioEngine?.applyEqPreset(eqPreset)
                         com.example.util.SoundFxHelper.isSoundEnabled = soundOn
                     }
+                    friendBridgeHook?.loadPrivacyFromUserDoc(
+                        reqPolicyStr = doc.getString("friendRequestPolicy"),
+                        dmPolicyStr = doc.getString("allowDmsFrom"),
+                        showOnline = doc.getBoolean("showOnlineStatus"),
+                        showActivity = doc.getBoolean("showLastActivity"),
+                        notifyRequests = doc.getBoolean("notifyFriendRequests")
+                    )
                     val rawFolders = doc.get("serverFolders") as? List<Map<String, Any?>>
                     if (rawFolders != null) {
                         _serverFolders.value = rawFolders.mapNotNull { map ->
@@ -2675,6 +2793,7 @@ class ChatRepository(
     }
 
     fun addFriend(tagOrName: String): Boolean {
+        friendBridgeHook?.let { return it.sendFriendRequestByInput(tagOrName) }
         if (tagOrName.isBlank()) return false
         val newFriend = User(
             id = "user_${UUID.randomUUID().toString().take(6)}",
@@ -2739,6 +2858,10 @@ class ChatRepository(
 
     // --- Friend Requests & Blocking ---
     fun acceptFriendRequest(requestId: String) {
+        friendBridgeHook?.let {
+            it.acceptFriendRequest(requestId)
+            return
+        }
         val req = _friendRequests.value.find { it.id == requestId } ?: return
         _friendRequests.value = _friendRequests.value.filterNot { it.id == requestId }
         val newDm = DirectConversation(
@@ -2759,10 +2882,18 @@ class ChatRepository(
     }
 
     fun declineOrCancelFriendRequest(requestId: String) {
+        friendBridgeHook?.let {
+            it.declineOrCancelFriendRequest(requestId)
+            return
+        }
         _friendRequests.value = _friendRequests.value.filterNot { it.id == requestId }
     }
 
     fun blockUser(user: User) {
+        friendBridgeHook?.let {
+            it.blockUser(user)
+            return
+        }
         if (_blockedUsers.value.none { it.id == user.id }) {
             _blockedUsers.value = _blockedUsers.value + user
         }
@@ -2773,6 +2904,10 @@ class ChatRepository(
     }
 
     fun unblockUser(userId: String) {
+        friendBridgeHook?.let {
+            it.unblockUser(userId)
+            return
+        }
         _blockedUsers.value = _blockedUsers.value.filterNot { it.id == userId }
     }
 
@@ -3008,6 +3143,7 @@ class ChatRepository(
                 _messages.value = _messages.value + (targetId to emptyList())
             }
             else -> return (aiCommandHandler?.invoke(targetId, trimmed) == true) ||
+                    (pluginCommandHandler?.invoke(targetId, trimmed) == true) ||
                     (botCommandHandler?.invoke(targetId, trimmed) == true)
         }
         return true

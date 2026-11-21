@@ -32,6 +32,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -50,6 +58,10 @@ import com.example.ui.viewmodel.PollViewModel
 import com.example.util.AudioPlayerHelper
 import com.example.util.AudioRecorderHelper
 import com.example.util.CloudinaryHelper
+import com.example.util.LocalRavenPlatform
+import com.example.util.desktopHoverHighlight
+import com.example.util.desktopHoverPointer
+import com.example.util.onSecondaryMouseClick
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -116,6 +128,7 @@ fun ChatView(
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
+    val platform = LocalRavenPlatform.current
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
@@ -937,6 +950,21 @@ fun ChatView(
                         Spacer(modifier = Modifier.width(8.dp))
 
                         // Text Field
+                        val dispatchChatInput = {
+                            if (canCompose && slowmodeRemainingSec == 0 && inputText.isNotBlank()) {
+                                val handledSlash = if (inputText.trim().startsWith("/")) {
+                                    onExecuteSlashCommand(inputText)
+                                } else false
+                                if (!handledSlash) {
+                                    onSendMessage(inputText, null, null, 0)
+                                }
+                                inputText = ""
+                                onDraftChange("")
+                                isEmojiBarOpen = false
+                                isAttachmentTrayOpen = false
+                            }
+                        }
+
                         OutlinedTextField(
                             value = inputText,
                             onValueChange = {
@@ -959,6 +987,21 @@ fun ChatView(
                             },
                             modifier = Modifier
                                 .weight(1f)
+                                .onPreviewKeyEvent { keyEvent ->
+                                    val isEnterKey = keyEvent.key == Key.Enter || keyEvent.key == Key.NumPadEnter
+                                    if (platform.supportsEnterToSend &&
+                                        isEnterKey &&
+                                        keyEvent.type == KeyEventType.KeyDown &&
+                                        !keyEvent.isShiftPressed &&
+                                        !keyEvent.isCtrlPressed &&
+                                        !keyEvent.isAltPressed
+                                    ) {
+                                        dispatchChatInput()
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
                                 .testTag("chat_message_input"),
                             shape = RoundedCornerShape(20.dp),
                             colors = OutlinedTextFieldDefaults.colors(
@@ -1027,20 +1070,29 @@ fun ChatView(
                                     isAttachmentTrayOpen = false
                                 },
                                 enabled = canCompose && slowmodeRemainingSec == 0,
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .background(if (canCompose && slowmodeRemainingSec == 0) DiscordBlurple else DiscordDarkInput)
-                                    .testTag("chat_send_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.Send,
-                                    contentDescription = "Envoyer",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clip(CircleShape)
+                                        .background(if (canCompose && slowmodeRemainingSec == 0) DiscordBlurple else DiscordDarkInput)
+                                        .desktopHoverPointer(platform.isPc)
+                                        .testTag("chat_send_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Send,
+                                        contentDescription = "Envoyer",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
+                    if (platform.supportsEnterToSend && canCompose) {
+                        Text(
+                            text = "Entrée pour envoyer • Maj+Entrée nouvelle ligne • Clic droit sur un message pour les options",
+                            color = palette.textMuted,
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
+                        )
                     }
                 }
             }
@@ -1481,6 +1533,7 @@ fun MessageItem(
                     .size(20.dp)
             )
         }
+        val desktopMode = LocalRavenPlatform.current
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1497,6 +1550,11 @@ fun MessageItem(
                         swipeOffsetX = 0f
                     }
                 )
+                .desktopHoverHighlight(
+                    shape = RoundedCornerShape(8.dp),
+                    enabled = desktopMode.isPc || desktopMode.hasMouseOrTrackpad
+                )
+                .onSecondaryMouseClick(enabled = true) { onLongClick() }
                 .clickable(onClick = onReplyClick)
                 .then(containerModifier)
                 .testTag("message_item_${message.id}")

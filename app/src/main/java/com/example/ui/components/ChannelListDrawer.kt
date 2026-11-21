@@ -54,6 +54,7 @@ fun ChannelListDrawer(
     onOpenBotsDashboard: () -> Unit = {},
     onOpenAiAssistant: () -> Unit = {},
     onOpenPollsHub: () -> Unit = {},
+    onOpenPluginsManager: () -> Unit = {},
     onOpenAdminDashboard: () -> Unit = {},
     onEditCommunity: () -> Unit = {},
     onLeaveCommunity: () -> Unit = {},
@@ -196,6 +197,15 @@ fun ChannelListDrawer(
                             onOpenPollsHub()
                         },
                         modifier = Modifier.testTag("drawer_menu_polls_hub")
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Extensions & Plugins", color = palette.textPrimary, fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(Icons.Default.Extension, contentDescription = null, tint = DiscordBlurple) },
+                        onClick = {
+                            isMenuOpen = false
+                            onOpenPluginsManager()
+                        },
+                        modifier = Modifier.testTag("drawer_plugins_btn")
                     )
                     if (canManageRoles) {
                         DropdownMenuItem(

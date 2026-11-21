@@ -1823,8 +1823,596 @@ test("RAVEN Events: server permissions, private invite isolation, atomic RSVP/wa
   );
 });
 
+// =========================================================================
+// TEST 14: RAVEN SANDBOXED EXTENSIONS / PLUGINS & AUDIT LOGS SECURITY RULES
+// =========================================================================
+test("14. Sandboxed plugins state and logs enforce owner isolation, least privilege, and anti-DCL", async () => {
+  const ALICE_UID = "alice_plug_uid";
+  const BOB_UID = "bob_plug_uid";
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "alice@example.com" }).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID, { email: "bob@example.com" }).firestore();
+  const now = Date.now();
 
+  const validPluginDoc = {
+    pluginId: "com.raven.ext.pomodoro",
+    installedVersion: "1.2.0",
+    isEnabled: true,
+    lifecycleState: "ACTIVE",
+    grantedPermissions: ["EXECUTE_SLASH_COMMAND", "SEND_NOTIFICATIONS"],
+    deniedPermissions: ["POST_CHANNEL_MESSAGE"],
+    configValues: {
+      focus_minutes: "25",
+      announce_in_channel: "false",
+      focus_theme: "Deep Work",
+    },
+    consecutiveErrors: 0,
+    lastErrorMessage: null,
+    updatedAtMs: now,
+  };
 
+  // 1. Alice can create/update/read her own valid plugin state
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("plugins").doc("com.raven.ext.pomodoro").set(validPluginDoc)
+  );
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("plugins").doc("com.raven.ext.pomodoro").get()
+  );
 
+  // 2. Cross-user isolation: Bob CANNOT read, write, or delete Alice's plugin state or logs
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("plugins").doc("com.raven.ext.pomodoro").get()
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("plugins").doc("com.raven.ext.pomodoro").update({
+      isEnabled: false,
+    })
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("plugins").doc("com.raven.ext.pomodoro").delete()
+  );
 
+  // 3. Reject undeclared/unknown permission or permission present in both granted & denied
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("plugins").doc("com.raven.ext.standup").set({
+      ...validPluginDoc,
+      pluginId: "com.raven.ext.standup",
+      grantedPermissions: ["ALL_USER_DATA_ROOT"],
+      deniedPermissions: [],
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("plugins").doc("com.raven.ext.standup").set({
+      ...validPluginDoc,
+      pluginId: "com.raven.ext.standup",
+      grantedPermissions: ["EXECUTE_SLASH_COMMAND"],
+      deniedPermissions: ["EXECUTE_SLASH_COMMAND"],
+    })
+  );
 
+  // 4. Reject inconsistent lifecycle (isEnabled=true while FAULTED or INCOMPATIBLE)
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("plugins").doc("com.raven.ext.spatial_audio_pro").set({
+      ...validPluginDoc,
+      pluginId: "com.raven.ext.spatial_audio_pro",
+      isEnabled: true,
+      lifecycleState: "INCOMPATIBLE",
+    })
+  );
+
+  // 5. Reject dynamic code loading (DCL) fields / keys
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("plugins").doc("com.raven.ext.standup").set({
+      ...validPluginDoc,
+      pluginId: "com.raven.ext.standup",
+      dexUrl: "https://evil.example.com/payload.dex",
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("plugins").doc("com.raven.ext.standup").set({
+      ...validPluginDoc,
+      pluginId: "com.raven.ext.standup",
+      configValues: { remoteScript: "eval(1)" },
+    })
+  );
+
+  // 6. Audit logs: Alice can create valid log, cannot forge DCL markers, cannot update existing log (immutable), Bob cannot read
+  const validLog = {
+    id: "plog_test_01",
+    pluginId: "com.raven.ext.pomodoro",
+    pluginName: "Focus & Pomodoro",
+    level: "SECURITY",
+    action: "PERMISSION_DENIED_POST_MESSAGE",
+    message: "Accès bloqué : permission POST_CHANNEL_MESSAGE requise.",
+    timestampMs: now,
+    timestampLabel: "12:00:00",
+  };
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("plugin_logs").doc("plog_test_01").set(validLog)
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("plugin_logs").doc("plog_test_01").update({
+      level: "INFO",
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("plugin_logs").doc("plog_dcl").set({
+      ...validLog,
+      id: "plog_dcl",
+      message: "load payload.dex",
+    })
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("plugin_logs").doc("plog_test_01").get()
+  );
+});
+
+// =========================================================================
+// Test 15: RAVEN Friends System (Owner-Only Friends/Blocks, Canonical Pair Anti-Duplication, Privacy Policies & DMs)
+// =========================================================================
+test("15. RAVEN Friends System enforces owner-only friend/block lists, anti-duplication, privacy policies & blocked DM denial", async () => {
+  const aliceCtx = testEnv.authenticatedContext(ALICE_UID, { email: "alice@test.com" });
+  const bobCtx = testEnv.authenticatedContext(BOB_UID, { email: "bob@test.com" });
+  const charlieCtx = testEnv.authenticatedContext(CHARLIE_UID, { email: "charlie@test.com" });
+
+  const aliceDb = aliceCtx.firestore();
+  const bobDb = bobCtx.firestore();
+  const charlieDb = charlieCtx.firestore();
+
+  const pairAB = ALICE_UID <= BOB_UID ? `${ALICE_UID}__${BOB_UID}` : `${BOB_UID}__${ALICE_UID}`;
+  const pairBC = BOB_UID <= CHARLIE_UID ? `${BOB_UID}__${CHARLIE_UID}` : `${CHARLIE_UID}__${BOB_UID}`;
+  const now = Date.now();
+
+  // Setup public profiles: Charlie forbids friend requests (NOBODY), Alice requires MUTUAL_SERVERS
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const adminDb = ctx.firestore();
+    await adminDb.collection("public_profiles").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      name: "Alice",
+      isPublic: true,
+      friendRequestPolicy: "MUTUAL_SERVERS",
+      allowDmsFrom: "FRIENDS_ONLY",
+      showOnlineStatus: true,
+      showLastActivity: true,
+    });
+    await adminDb.collection("public_profiles").doc(BOB_UID).set({
+      userId: BOB_UID,
+      name: "Bob",
+      isPublic: true,
+      friendRequestPolicy: "EVERYONE",
+      allowDmsFrom: "EVERYONE",
+    });
+    await adminDb.collection("public_profiles").doc(CHARLIE_UID).set({
+      userId: CHARLIE_UID,
+      name: "Charlie",
+      isPublic: true,
+      friendRequestPolicy: "NOBODY",
+      allowDmsFrom: "FRIENDS_ONLY",
+    });
+    await adminDb.collection("servers").doc("srv_shared_ab").set({
+      name: "Shared Guild",
+      ownerId: ALICE_UID,
+      memberIds: [ALICE_UID, BOB_UID],
+      isPublic: false,
+    });
+  });
+
+  const baseReqAB = {
+    id: pairAB,
+    pairId: pairAB,
+    fromUid: BOB_UID,
+    fromName: "Bob",
+    fromTag: "#2222",
+    toUid: ALICE_UID,
+    toName: "Alice",
+    toTag: "#1111",
+    participantIds: [ALICE_UID, BOB_UID].sort(),
+    status: "PENDING",
+    createdAtMs: now,
+    updatedAtMs: now,
+  };
+
+  // 1. Privacy policy NOBODY denies friend request to Charlie
+  await assertFails(
+    bobDb.collection("friend_requests").doc(pairBC).set({
+      ...baseReqAB,
+      id: pairBC,
+      pairId: pairBC,
+      toUid: CHARLIE_UID,
+      toName: "Charlie",
+      participantIds: [BOB_UID, CHARLIE_UID].sort(),
+    })
+  );
+
+  // 2. Privacy policy MUTUAL_SERVERS denies request without sharedServerId, allows with verified shared server
+  await assertFails(
+    bobDb.collection("friend_requests").doc(pairAB).set(baseReqAB)
+  );
+  await assertFails(
+    bobDb.collection("friend_requests").doc("non_canonical_id").set({
+      ...baseReqAB,
+      id: "non_canonical_id",
+      pairId: "non_canonical_id",
+      sharedServerId: "srv_shared_ab",
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("friend_requests").doc(pairAB).set({
+      ...baseReqAB,
+      sharedServerId: "srv_shared_ab",
+    })
+  );
+
+  // 3. Sender CANNOT accept their own request; recipient CANNOT cancel sender's pending request
+  await assertFails(
+    bobDb.collection("friend_requests").doc(pairAB).update({ status: "ACCEPTED" })
+  );
+  await assertFails(
+    aliceDb.collection("friend_requests").doc(pairAB).update({ status: "CANCELLED" })
+  );
+
+  // 4. Cross-user friend list mutation MUST fail (Bob cannot touch Alice's /friends; Charlie cannot read Alice's /friends)
+  const friendBobOnAlice = {
+    friendUid: BOB_UID,
+    pairId: pairAB,
+    friendName: "Bob",
+    friendTag: "#2222",
+    privateNote: "Top duo",
+    addedAtMs: now,
+  };
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("friends").doc(BOB_UID).set(friendBobOnAlice)
+  );
+  await assertFails(
+    charlieDb.collection("users").doc(ALICE_UID).collection("friends").get()
+  );
+
+  // 5. Alice accepts request and writes ONLY her own friend doc; Bob writes ONLY his own friend doc
+  await assertSucceeds(
+    aliceDb.collection("friend_requests").doc(pairAB).update({ status: "ACCEPTED", updatedAtMs: now + 10 })
+  );
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("friends").doc(BOB_UID).set(friendBobOnAlice)
+  );
+  await assertSucceeds(
+    bobDb.collection("users").doc(BOB_UID).collection("friends").doc(ALICE_UID).set({
+      friendUid: ALICE_UID,
+      pairId: pairAB,
+      friendName: "Alice",
+      friendTag: "#1111",
+      addedAtMs: now,
+    })
+  );
+
+  // 6. Coherent DM: Charlie (non-friend) denied by Alice's FRIENDS_ONLY; Bob (friend) allowed
+  const dmAB = `dm_${pairAB}`;
+  const pairAC = ALICE_UID <= CHARLIE_UID ? `${ALICE_UID}__${CHARLIE_UID}` : `${CHARLIE_UID}__${ALICE_UID}`;
+  await assertFails(
+    charlieDb.collection("direct_conversations").doc(`dm_${pairAC}`).set({
+      id: `dm_${pairAC}`,
+      participantIds: [ALICE_UID, CHARLIE_UID].sort(),
+      dmPairKey: pairAC,
+      isGroup: false,
+      lastMessage: "Spam",
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("direct_conversations").doc(dmAB).set({
+      id: dmAB,
+      participantIds: [ALICE_UID, BOB_UID].sort(),
+      dmPairKey: pairAB,
+      isGroup: false,
+      lastMessage: "Hello friend!",
+    })
+  );
+
+  // 7. Blocking: Alice blocks Bob -> deletes her friend doc, cancels request, Bob cannot read/edit blocked_users or message in DM
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("blocked_users").doc(BOB_UID).set({
+      blockedUid: BOB_UID,
+      blockedByUid: ALICE_UID,
+      name: "Bob",
+      blockedAtMs: now + 20,
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("friends").doc(BOB_UID).delete()
+  );
+  await assertSucceeds(
+    aliceDb.collection("friend_requests").doc(pairAB).update({ status: "CANCELLED", updatedAtMs: now + 25 })
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("blocked_users").doc(BOB_UID).get()
+  );
+  await assertFails(
+    bobDb.collection("direct_conversations").doc(dmAB).collection("messages").doc("msg_after_block").set({
+      senderId: BOB_UID,
+      senderName: "Bob",
+      text: "Blocked message",
+      participantIds: [ALICE_UID, BOB_UID].sort(),
+    })
+  );
+
+  // Blocked pair also cannot create a new friend request
+  await assertFails(
+    bobDb.collection("friend_requests").doc(pairAB).set({
+      ...baseReqAB,
+      sharedServerId: "srv_shared_ab",
+      status: "PENDING",
+    })
+  );
+});
+
+// =========================================================================
+// Test 16: RAVEN Global Search (Owner-Only Search History & Permission-Scoped Query Isolation)
+// =========================================================================
+test("16. RAVEN Global Search enforces owner-only search_history and prevents cross-user/private collection leaks", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "alice@test.com" }).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID, { email: "bob@test.com" }).firestore();
+  const now = Date.now();
+
+  // Seed public vs private resources across domains
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const adminDb = ctx.firestore();
+    await adminDb.collection("servers").doc("srv_pub_search").set({
+      name: "Public Nexus",
+      ownerId: ALICE_UID,
+      memberIds: [ALICE_UID],
+      isPublic: true,
+    });
+    await adminDb.collection("servers").doc("srv_priv_search").set({
+      name: "Vault Classified",
+      ownerId: ALICE_UID,
+      memberIds: [ALICE_UID],
+      isPublic: false,
+    });
+    await adminDb.collection("servers").doc("srv_priv_search").collection("channels").doc("ch_vault").set({
+      serverId: "srv_priv_search",
+      name: "secrets-room",
+      type: "TEXT",
+      isPublic: false,
+      memberIds: [ALICE_UID],
+    });
+    await adminDb.collection("bots").doc("bot_priv_search").set({
+      id: "bot_priv_search",
+      ownerUid: ALICE_UID,
+      name: "PrivateBot",
+      handle: "privbot",
+      isActive: true,
+      isPublicCatalog: false,
+    });
+    await adminDb.collection("bots").doc("bot_pub_search").set({
+      id: "bot_pub_search",
+      ownerUid: ALICE_UID,
+      name: "CatalogBot",
+      handle: "catalogbot",
+      isActive: true,
+      isPublicCatalog: true,
+    });
+  });
+
+  // 1. Alice can save and delete her own search_history entries
+  const validHistory = {
+    id: "sh_alice_1",
+    userId: ALICE_UID,
+    query: "Public Nexus",
+    selectedTypeName: "SERVER",
+    authorFilter: "",
+    timestampMs: now,
+  };
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("search_history").doc("sh_alice_1").set(validHistory)
+  );
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("search_history").get()
+  );
+
+  // 2. Invalid selectedTypeName or oversized query is rejected
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).collection("search_history").doc("sh_bad").set({
+      ...validHistory,
+      id: "sh_bad",
+      selectedTypeName: "ADMIN_DUMP",
+    })
+  );
+
+  // 3. Bob CANNOT read, list, create, or delete Alice's search history
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("search_history").doc("sh_alice_1").get()
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("search_history").get()
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("search_history").doc("sh_bob_inject").set({
+      ...validHistory,
+      id: "sh_bob_inject",
+      userId: ALICE_UID,
+    })
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("search_history").doc("sh_alice_1").delete()
+  );
+
+  // 4. Scoped catalog list queries succeed for Bob ONLY when filtered to public items, while unfiltered/private list queries fail
+  await assertSucceeds(
+    bobDb.collection("servers").where("isPublic", "==", true).get()
+  );
+  await assertFails(
+    bobDb.collection("servers").get()
+  );
+  await assertFails(
+    bobDb.collection("servers").doc("srv_priv_search").collection("channels").where("isPublic", "==", false).get()
+  );
+  await assertSucceeds(
+    bobDb.collection("bots").where("isPublicCatalog", "==", true).get()
+  );
+  await assertFails(
+    bobDb.collection("bots").get()
+  );
+
+  // 5. Alice can delete her own history entry
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("search_history").doc("sh_alice_1").delete()
+  );
+});
+
+// =========================================================================
+// Test 17: RAVEN Account Security (Owner Isolation, Monotonic Epoch, No Plaintext Secrets, Immutable Audit Trails)
+// =========================================================================
+test("17. RAVEN Account Security enforces owner isolation, rejects plaintext secrets, protects monotonic sessionEpoch, and keeps logs/history immutable", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID, { email: "alice_sec@test.com" }).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID, { email: "bob_sec@test.com" }).firestore();
+  const now = Date.now();
+
+  const aliceSecRef = aliceDb.collection("users").doc(ALICE_UID).collection("security_profile").doc("account");
+  const validProfile = {
+    userId: ALICE_UID,
+    sessionEpoch: 1,
+    globalSignOutAfterMs: 0,
+    lastSensitiveVerifiedAtMs: now,
+    protectSuspiciousChanges: true,
+    alertOnNewDevice: true,
+    alertOnUnusualActivity: true,
+    requireReauthForSensitiveActions: true,
+    changeFreezeUntilMs: 0,
+    cooldownUntilMs: 0,
+    failedChallengeCount: 0,
+    suspiciousAttemptCount: 0,
+    pinHash: "a".repeat(64),
+    pinSalt: "0123456789abcdef0123456789abcdef",
+    twoFactorReady: true,
+    preferredTwoFactorMethod: "AUTHENTICATOR_TOTP",
+    enrolledFactorsMeta: [{ factorId: "f_1", method: "AUTHENTICATOR_TOTP", label: "Auth App", isEnabled: true }],
+    backupCodesRemainingCount: 2,
+    backupCodeHashes: ["b".repeat(64), "c".repeat(64)],
+    updatedAtMs: now,
+  };
+
+  // 1. Plaintext secrets (rawPin, totpSecret, recoveryCodePlain, token) MUST be rejected
+  await assertFails(
+    aliceSecRef.set({
+      ...validProfile,
+      rawPin: "1234",
+    })
+  );
+  await assertFails(
+    aliceSecRef.set({
+      ...validProfile,
+      totpSecret: "JBSWY3DPEHPK3PXP",
+    })
+  );
+
+  // 2. Valid hashed security_profile succeeds; sessionEpoch increment succeeds; decrement & delete MUST fail
+  await assertSucceeds(aliceSecRef.set(validProfile));
+  await assertSucceeds(
+    aliceSecRef.update({
+      sessionEpoch: 2,
+      globalSignOutAfterMs: now + 500,
+      updatedAtMs: now + 500,
+    })
+  );
+  await assertFails(
+    aliceSecRef.update({
+      sessionEpoch: 1,
+      updatedAtMs: now + 600,
+    })
+  );
+  await assertFails(aliceSecRef.delete());
+
+  // 3. Alice manages sessions, devices, alerts, immutable login_history, and immutable security_logs
+  const sessRef = aliceDb.collection("users").doc(ALICE_UID).collection("sessions").doc("sess_a1");
+  await assertSucceeds(
+    sessRef.set({
+      sessionId: "sess_a1",
+      userId: ALICE_UID,
+      deviceIdHash: "devhash_abcdef1234",
+      deviceName: "Pixel 9 Pro",
+      platformLabel: "Android 15",
+      appVersion: "1.0",
+      networkRegionLabel: "Europe/Paris",
+      status: "ACTIVE",
+      sessionEpoch: 2,
+      createdAtMs: now,
+      lastActivityMs: now,
+      expiresAtMs: now + 86400000,
+    })
+  );
+  await assertSucceeds(
+    sessRef.update({
+      status: "REVOKED",
+      revokedAtMs: now + 100,
+      revokedReason: "Déconnexion globale",
+    })
+  );
+
+  const devRef = aliceDb.collection("users").doc(ALICE_UID).collection("devices").doc("devhash_abcdef1234");
+  await assertSucceeds(
+    devRef.set({
+      deviceIdHash: "devhash_abcdef1234",
+      userId: ALICE_UID,
+      displayName: "Pixel 9 Pro",
+      modelName: "Pixel 9 Pro",
+      osVersion: "Android 15",
+      trustState: "TRUSTED",
+      firstSeenAtMs: now,
+      lastSeenAtMs: now,
+      lastRegionLabel: "Europe/Paris",
+      lastSessionId: "sess_a1",
+    })
+  );
+
+  const lhRef = aliceDb.collection("users").doc(ALICE_UID).collection("login_history").doc("lh_1");
+  await assertSucceeds(
+    lhRef.set({
+      id: "lh_1",
+      userId: ALICE_UID,
+      sessionId: "sess_a1",
+      deviceIdHash: "devhash_abcdef1234",
+      deviceName: "Pixel 9 Pro",
+      authMethod: "GOOGLE_OIDC",
+      outcome: "SUCCESS",
+      regionLabel: "Europe/Paris",
+      timestampMs: now,
+    })
+  );
+  // Immutable login_history: even Alice CANNOT update or delete
+  await assertFails(lhRef.update({ outcome: "BLOCKED" }));
+  await assertFails(lhRef.delete());
+
+  const logRef = aliceDb.collection("users").doc(ALICE_UID).collection("security_logs").doc("slog_1");
+  await assertSucceeds(
+    logRef.set({
+      id: "slog_1",
+      userId: ALICE_UID,
+      category: "SESSION",
+      severity: "HIGH",
+      action: "GLOBAL_SIGN_OUT",
+      summary: "Déconnexion globale",
+      actorDeviceIdHash: "devhash_abcdef1234",
+      timestampMs: now,
+      timestampLabel: "10:00:00",
+    })
+  );
+  // Immutable security_logs: even Alice CANNOT update or delete
+  await assertFails(logRef.update({ summary: "Effacé" }));
+  await assertFails(logRef.delete());
+
+  // 4. Bob (cross-user attacker) CANNOT read, create, update, or delete any of Alice's security data
+  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("security_profile").doc("account").get());
+  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("sessions").get());
+  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("sessions").doc("sess_a1").delete());
+  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("devices").get());
+  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("login_history").get());
+  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("security_logs").get());
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("security_alerts").doc("sal_spoof").set({
+      id: "sal_spoof",
+      userId: ALICE_UID,
+      title: "Spoof",
+      description: "Attaque",
+      severity: "HIGH",
+      status: "OPEN",
+      createdAtMs: now,
+    })
+  );
+});

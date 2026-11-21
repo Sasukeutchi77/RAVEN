@@ -52,7 +52,9 @@ data class User(
     val customRoleId: String? = null,
     val clanTag: String? = "RVN",
     val clanBadgeIcon: String = "bolt",
-    val unlockedStickers: List<String> = listOf("stk_wave", "stk_gg", "stk_hype", "stk_heart")
+    val unlockedStickers: List<String> = listOf("stk_wave", "stk_gg", "stk_hype", "stk_heart"),
+    val lastActiveAtMs: Long = System.currentTimeMillis(),
+    val lastActivityLabel: String = ""
 )
 
 data class Reaction(
@@ -157,5 +159,7 @@ data class DirectConversation(
     val isGroup: Boolean = false,
     val groupName: String? = null,
     val groupMembers: List<User> = emptyList(),
-    val groupIconColor: Long = 0xFF5865F2
+    val groupIconColor: Long = 0xFF5865F2,
+    val participantIds: List<String> = emptyList(),
+    val dmPairKey: String? = null
 )

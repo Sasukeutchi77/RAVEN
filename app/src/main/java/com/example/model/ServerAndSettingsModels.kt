@@ -56,6 +56,12 @@ enum class AudioEqPreset(val label: String, val subtitle: String) {
     BASS_BOOST("Bass Boost", "Basses profondes Jukebox")
 }
 
+enum class PlatformLayoutOverride(val label: String) {
+    AUTO("Auto (Détection)"),
+    FORCE_DESKTOP("Mode PC / Bureau"),
+    FORCE_MOBILE("Mode Mobile")
+}
+
 data class AppSettingsState(
     val themeMode: AppThemeMode = AppThemeMode.DARK,
     val accentColorHex: Long = 0xFF5865F2,
@@ -67,7 +73,8 @@ data class AppSettingsState(
     val allowMemberDms: Boolean = true,
     val showActivityStatus: Boolean = true,
     val mentionNotifications: Boolean = true,
-    val localNotificationsEnabled: Boolean = true
+    val localNotificationsEnabled: Boolean = true,
+    val platformLayoutOverride: PlatformLayoutOverride = PlatformLayoutOverride.AUTO
 )
 
 enum class GlobalSearchFilter(val label: String) {
@@ -179,7 +186,12 @@ data class FriendRequest(
     val id: String,
     val user: User,
     val direction: FriendRequestDirection,
-    val timestamp: String
+    val timestamp: String,
+    val pairId: String = id,
+    val fromUid: String = "",
+    val toUid: String = "",
+    val sharedServerId: String? = null,
+    val createdAtMs: Long = System.currentTimeMillis()
 )
 
 data class SlashCommandOption(

@@ -146,6 +146,16 @@ service cloud.firestore {
              (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 160)) &&
              (!('bio' in data) || data.bio == null || (data.bio is string && data.bio.size() <= 500)) &&
              (!('pronouns' in data) || data.pronouns == null || (data.pronouns is string && data.pronouns.size() <= 40)) &&
+             (!('tag' in data) || data.tag == null || (data.tag is string && data.tag.size() <= 16)) &&
+             (!('status' in data) || data.status == null || (data.status is string && data.status in ['ONLINE', 'IDLE', 'DO_NOT_DISTURB', 'OFFLINE'])) &&
+             (!('customStatus' in data) || data.customStatus == null || (data.customStatus is string && data.customStatus.size() <= 160)) &&
+             (!('lastActiveAtMs' in data) || data.lastActiveAtMs is int) &&
+             (!('lastActivityLabel' in data) || data.lastActivityLabel == null || (data.lastActivityLabel is string && data.lastActivityLabel.size() <= 120)) &&
+             (!('friendRequestPolicy' in data) || (data.friendRequestPolicy is string && data.friendRequestPolicy in ['EVERYONE', 'MUTUAL_SERVERS', 'NOBODY'])) &&
+             (!('allowDmsFrom' in data) || (data.allowDmsFrom is string && data.allowDmsFrom in ['EVERYONE', 'FRIENDS_ONLY', 'MUTUAL_SERVERS'])) &&
+             (!('showOnlineStatus' in data) || data.showOnlineStatus is bool) &&
+             (!('showLastActivity' in data) || data.showLastActivity is bool) &&
+             (!('notifyFriendRequests' in data) || data.notifyFriendRequests is bool) &&
              (!('clanTag' in data) || data.clanTag == null || (data.clanTag is string && data.clanTag.size() <= 8)) &&
              (!('fcmToken' in data) || data.fcmToken == null || (data.fcmToken is string && data.fcmToken.size() <= 512)) &&
              (!('orbsBalance' in data) || data.orbsBalance is int) &&
@@ -156,8 +166,20 @@ service cloud.firestore {
     function isValidPublicProfile(data) {
       return data.userId is string && data.userId.size() <= 128 &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 64 &&
+             (!('tag' in data) || data.tag == null || (data.tag is string && data.tag.size() <= 16)) &&
+             (!('bio' in data) || data.bio == null || (data.bio is string && data.bio.size() <= 500)) &&
+             (!('status' in data) || data.status == null || (data.status is string && data.status in ['ONLINE', 'IDLE', 'DO_NOT_DISTURB', 'OFFLINE'])) &&
+             (!('customStatus' in data) || data.customStatus == null || (data.customStatus is string && data.customStatus.size() <= 160)) &&
              (!('clanTag' in data) || data.clanTag == null || (data.clanTag is string && data.clanTag.size() <= 8)) &&
+             (!('clanBadgeIcon' in data) || data.clanBadgeIcon == null || (data.clanBadgeIcon is string && data.clanBadgeIcon.size() <= 40)) &&
              (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 500)) &&
+             (!('avatarColor' in data) || data.avatarColor is int) &&
+             (!('lastActiveAtMs' in data) || data.lastActiveAtMs is int) &&
+             (!('lastActivityLabel' in data) || data.lastActivityLabel == null || (data.lastActivityLabel is string && data.lastActivityLabel.size() <= 120)) &&
+             (!('friendRequestPolicy' in data) || (data.friendRequestPolicy is string && data.friendRequestPolicy in ['EVERYONE', 'MUTUAL_SERVERS', 'NOBODY'])) &&
+             (!('allowDmsFrom' in data) || (data.allowDmsFrom is string && data.allowDmsFrom in ['EVERYONE', 'FRIENDS_ONLY', 'MUTUAL_SERVERS'])) &&
+             (!('showOnlineStatus' in data) || data.showOnlineStatus is bool) &&
+             (!('showLastActivity' in data) || data.showLastActivity is bool) &&
              (!('xp' in data) || data.xp is int) &&
              (!('level' in data) || data.level is int);
     }
@@ -408,8 +430,128 @@ service cloud.firestore {
              data.payload is string && data.payload.size() <= 16000;
     }
 
+    function canonicalPairId(uidA, uidB) {
+      return uidA <= uidB ? (uidA + '__' + uidB) : (uidB + '__' + uidA);
+    }
+
+    function isUserBlockedBy(targetUid, actorUid) {
+      return exists(/databases/$(database)/documents/users/$(targetUid)/blocked_users/$(actorUid));
+    }
+
+    function hasNoBlockBetween(uidA, uidB) {
+      return !isUserBlockedBy(uidA, uidB) && !isUserBlockedBy(uidB, uidA);
+    }
+
+    function areAlreadyFriends(uidA, uidB) {
+      return exists(/databases/$(database)/documents/users/$(uidA)/friends/$(uidB)) ||
+             exists(/databases/$(database)/documents/users/$(uidB)/friends/$(uidA));
+    }
+
+    function publicProfileExists(uid) {
+      return exists(/databases/$(database)/documents/public_profiles/$(uid));
+    }
+
+    function publicProfileDoc(uid) {
+      return get(/databases/$(database)/documents/public_profiles/$(uid));
+    }
+
+    function hasMutualServer(uidA, uidB, serverId) {
+      return serverId is string && isValidId(serverId) && serverExists(serverId) &&
+             (serverDoc(serverId).data.ownerId == uidA || uidA in serverDoc(serverId).data.memberIds) &&
+             (serverDoc(serverId).data.ownerId == uidB || uidB in serverDoc(serverId).data.memberIds);
+    }
+
+    function recipientAllowsFriendRequest(fromUid, toUid, data) {
+      return !publicProfileExists(toUid) ||
+             !('friendRequestPolicy' in publicProfileDoc(toUid).data) ||
+             publicProfileDoc(toUid).data.friendRequestPolicy == 'EVERYONE' ||
+             (publicProfileDoc(toUid).data.friendRequestPolicy == 'MUTUAL_SERVERS' &&
+              ('sharedServerId' in data) && data.sharedServerId != null &&
+              hasMutualServer(fromUid, toUid, data.sharedServerId));
+    }
+
+    function isValidFriendDoc(data, ownerUid, friendUid) {
+      return data.friendUid == friendUid &&
+             friendUid != ownerUid &&
+             isValidId(friendUid) &&
+             data.pairId == canonicalPairId(ownerUid, friendUid) &&
+             data.friendName is string && data.friendName.size() >= 1 && data.friendName.size() <= 64 &&
+             (!('friendTag' in data) || (data.friendTag is string && data.friendTag.size() <= 16)) &&
+             (!('avatarColor' in data) || data.avatarColor is int) &&
+             (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 500)) &&
+             (!('status' in data) || (data.status is string && data.status in ['ONLINE', 'IDLE', 'DO_NOT_DISTURB', 'OFFLINE'])) &&
+             (!('customStatus' in data) || (data.customStatus is string && data.customStatus.size() <= 160)) &&
+             (!('lastActiveAtMs' in data) || data.lastActiveAtMs is int) &&
+             (!('lastActivityLabel' in data) || (data.lastActivityLabel is string && data.lastActivityLabel.size() <= 120)) &&
+             (!('privateNote' in data) || (data.privateNote is string && data.privateNote.size() <= 400)) &&
+             (!('addedAtMs' in data) || data.addedAtMs is int);
+    }
+
+    function isValidBlockedDoc(data, ownerUid, blockedUid) {
+      return data.blockedUid == blockedUid &&
+             blockedUid != ownerUid &&
+             isValidId(blockedUid) &&
+             data.blockedByUid == ownerUid &&
+             (!('name' in data) || (data.name is string && data.name.size() <= 64)) &&
+             (!('tag' in data) || (data.tag is string && data.tag.size() <= 16)) &&
+             (!('avatarColor' in data) || data.avatarColor is int) &&
+             (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 500)) &&
+             (!('blockedAtMs' in data) || data.blockedAtMs is int);
+    }
+
+    function isValidFriendRequestDoc(data, requestId) {
+      return data.id == requestId &&
+             data.pairId == requestId &&
+             data.fromUid is string && isValidId(data.fromUid) &&
+             data.toUid is string && isValidId(data.toUid) &&
+             data.fromUid != data.toUid &&
+             requestId == canonicalPairId(data.fromUid, data.toUid) &&
+             data.participantIds is list &&
+             data.participantIds.size() == 2 &&
+             data.fromUid in data.participantIds &&
+             data.toUid in data.participantIds &&
+             data.status is string && data.status in ['PENDING', 'ACCEPTED', 'DECLINED', 'CANCELLED'] &&
+             data.fromName is string && data.fromName.size() >= 1 && data.fromName.size() <= 64 &&
+             data.toName is string && data.toName.size() >= 1 && data.toName.size() <= 64 &&
+             (!('fromTag' in data) || (data.fromTag is string && data.fromTag.size() <= 16)) &&
+             (!('toTag' in data) || (data.toTag is string && data.toTag.size() <= 16)) &&
+             (!('fromAvatarColor' in data) || data.fromAvatarColor is int) &&
+             (!('toAvatarColor' in data) || data.toAvatarColor is int) &&
+             (!('fromAvatarUrl' in data) || data.fromAvatarUrl == null || (data.fromAvatarUrl is string && data.fromAvatarUrl.size() <= 500)) &&
+             (!('toAvatarUrl' in data) || data.toAvatarUrl == null || (data.toAvatarUrl is string && data.toAvatarUrl.size() <= 500)) &&
+             (!('sharedServerId' in data) || data.sharedServerId == null || isValidId(data.sharedServerId)) &&
+             (!('createdAtMs' in data) || data.createdAtMs is int) &&
+             (!('updatedAtMs' in data) || data.updatedAtMs is int);
+    }
+
+    function recipientAllowsDmFrom(senderUid, targetUid) {
+      return targetUid == senderUid ||
+             !publicProfileExists(targetUid) ||
+             !('allowDmsFrom' in publicProfileDoc(targetUid).data) ||
+             publicProfileDoc(targetUid).data.allowDmsFrom != 'FRIENDS_ONLY' ||
+             areAlreadyFriends(senderUid, targetUid);
+    }
+
+    function twoPartyDmNoBlock(participants) {
+      return participants.size() != 2 || hasNoBlockBetween(participants[0], participants[1]);
+    }
+
+    function twoPartyDmCreateAllowed(participants) {
+      return participants.size() != 2 || (
+        hasNoBlockBetween(participants[0], participants[1]) &&
+        recipientAllowsDmFrom(request.auth.uid, participants[0]) &&
+        recipientAllowsDmFrom(request.auth.uid, participants[1])
+      );
+    }
+
     function isValidDirectConversation(data) {
       return data.participantIds is list && data.participantIds.size() >= 1 && data.participantIds.size() <= 25 &&
+             (!('id' in data) || isValidId(data.id)) &&
+             (!('dmPairKey' in data) || data.dmPairKey == null || isValidId(data.dmPairKey)) &&
+             (!('isGroup' in data) || data.isGroup is bool) &&
+             (!('groupName' in data) || data.groupName == null || (data.groupName is string && data.groupName.size() <= 80)) &&
+             (!('participantNames' in data) || data.participantNames is map) &&
+             (!('updatedAtMs' in data) || data.updatedAtMs is int) &&
              (!('lastMessage' in data) || data.lastMessage == null || (data.lastMessage is string && data.lastMessage.size() <= 500)) &&
              (!('lastMessageTime' in data) || data.lastMessageTime == null || (data.lastMessageTime is string && data.lastMessageTime.size() <= 40));
     }
@@ -764,6 +906,165 @@ service cloud.firestore {
              );
     }
 
+    function isValidPluginId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 64 &&
+             id.matches('^[a-z0-9][a-z0-9._\\-]{2,63}$');
+    }
+
+    function isValidSemVer(v) {
+      return v is string && v.size() >= 3 && v.size() <= 24 &&
+             v.matches('^[0-9]+\\.[0-9]+(\\.[0-9]+)?$');
+    }
+
+    function isValidPluginPermissionList(perms) {
+      return perms is list && perms.size() <= 8 &&
+             perms.hasOnly([
+               'READ_ACTIVE_USER_PUBLIC',
+               'READ_SERVER_METADATA',
+               'MANAGE_UI_WIDGET',
+               'LISTEN_APP_EVENTS',
+               'EXECUTE_SLASH_COMMAND',
+               'SEND_NOTIFICATIONS',
+               'READ_MESSAGES_SUMMARY',
+               'POST_CHANNEL_MESSAGE'
+             ]);
+    }
+
+    function isValidUserPluginState(data, pluginId) {
+      return isValidPluginId(pluginId) &&
+             data.pluginId == pluginId &&
+             isValidSemVer(data.installedVersion) &&
+             data.isEnabled is bool &&
+             data.lifecycleState in ['REGISTERED', 'INCOMPATIBLE', 'DISABLED', 'ACTIVE', 'FAULTED'] &&
+             !(data.isEnabled == true && data.lifecycleState in ['INCOMPATIBLE', 'FAULTED', 'DISABLED']) &&
+             isValidPluginPermissionList(data.grantedPermissions) &&
+             isValidPluginPermissionList(data.deniedPermissions) &&
+             data.grantedPermissions.toSet().intersection(data.deniedPermissions.toSet()).size() == 0 &&
+             data.configValues is map && data.configValues.size() <= 20 &&
+             !data.configValues.keys().hasAny(['dexUrl', 'jarUrl', 'soUrl', 'apkUrl', 'remoteScript', 'code']) &&
+             !('dexUrl' in data) && !('jarUrl' in data) && !('remoteCode' in data) && !('scriptUrl' in data) &&
+             data.consecutiveErrors is int && data.consecutiveErrors >= 0 && data.consecutiveErrors <= 10 &&
+             (!('lastErrorMessage' in data) || data.lastErrorMessage == null || (data.lastErrorMessage is string && data.lastErrorMessage.size() <= 400)) &&
+             data.updatedAtMs is int;
+    }
+
+    function isValidPluginLog(data, logId) {
+      return isValidId(logId) &&
+             data.id == logId &&
+             isValidPluginId(data.pluginId) &&
+             data.pluginName is string && data.pluginName.size() >= 1 && data.pluginName.size() <= 60 &&
+             data.level in ['INFO', 'WARN', 'ERROR', 'SECURITY'] &&
+             data.action is string && data.action.size() >= 1 && data.action.size() <= 64 &&
+             data.message is string && data.message.size() <= 500 &&
+             !data.message.matches('.*(\\.dex|\\.jar|\\.so|javascript:|eval\\().*') &&
+             data.timestampMs is int && data.timestampMs > 0 &&
+             (!('timestampLabel' in data) || (data.timestampLabel is string && data.timestampLabel.size() <= 32));
+    }
+
+    function isValidSearchHistoryEntry(data, userId, entryId) {
+      return isValidId(entryId) &&
+             data.id == entryId &&
+             data.userId == userId &&
+             data.query is string && data.query.size() >= 1 && data.query.size() <= 120 &&
+             data.selectedTypeName is string &&
+             data.selectedTypeName in ['ALL', 'USER', 'SERVER', 'COMMUNITY', 'CHANNEL', 'MESSAGE', 'CONVERSATION', 'EVENT', 'STORY', 'BOT', 'MARKETPLACE'] &&
+             (!('authorFilter' in data) || (data.authorFilter is string && data.authorFilter.size() <= 64)) &&
+             data.timestampMs is int && data.timestampMs > 0;
+    }
+
+    function hasNoPlaintextSecuritySecrets(data) {
+      return !data.keys().hasAny([
+        'rawPin', 'pin', 'password', 'passcode', 'token',
+        'secret', 'privateKey', 'totpSecret', 'recoveryCodePlain'
+      ]);
+    }
+
+    function isValidAccountSecurityProfile(data, userId, profileId) {
+      return profileId == 'account' &&
+             hasNoPlaintextSecuritySecrets(data) &&
+             data.userId == userId &&
+             data.sessionEpoch is int && data.sessionEpoch >= 1 &&
+             data.globalSignOutAfterMs is int && data.globalSignOutAfterMs >= 0 &&
+             data.lastSensitiveVerifiedAtMs is int && data.lastSensitiveVerifiedAtMs >= 0 &&
+             data.protectSuspiciousChanges is bool &&
+             data.alertOnNewDevice is bool &&
+             data.alertOnUnusualActivity is bool &&
+             data.requireReauthForSensitiveActions is bool &&
+             data.changeFreezeUntilMs is int && data.changeFreezeUntilMs >= 0 &&
+             data.cooldownUntilMs is int && data.cooldownUntilMs >= 0 &&
+             data.failedChallengeCount is int && data.failedChallengeCount >= 0 && data.failedChallengeCount <= 50 &&
+             data.suspiciousAttemptCount is int && data.suspiciousAttemptCount >= 0 && data.suspiciousAttemptCount <= 500 &&
+             (!('pinHash' in data) || data.pinHash == null || (data.pinHash is string && data.pinHash.size() == 64)) &&
+             (!('pinSalt' in data) || data.pinSalt == null || (data.pinSalt is string && data.pinSalt.size() >= 16 && data.pinSalt.size() <= 64)) &&
+             data.twoFactorReady is bool &&
+             data.preferredTwoFactorMethod in ['NONE', 'AUTHENTICATOR_TOTP', 'PASSKEY_WEBAUTHN', 'HARDWARE_KEY'] &&
+             data.enrolledFactorsMeta is list && data.enrolledFactorsMeta.size() <= 8 &&
+             data.backupCodesRemainingCount is int && data.backupCodesRemainingCount >= 0 && data.backupCodesRemainingCount <= 10 &&
+             data.backupCodeHashes is list && data.backupCodeHashes.size() <= 10 &&
+             data.updatedAtMs is int && data.updatedAtMs >= 0;
+    }
+
+    function isValidAccountSession(data, userId, sessionId) {
+      return isValidId(sessionId) &&
+             hasNoPlaintextSecuritySecrets(data) &&
+             data.sessionId == sessionId &&
+             data.userId == userId &&
+             data.deviceIdHash is string && data.deviceIdHash.size() >= 8 && data.deviceIdHash.size() <= 128 &&
+             data.deviceName is string && data.deviceName.size() >= 1 && data.deviceName.size() <= 64 &&
+             data.platformLabel is string && data.platformLabel.size() <= 32 &&
+             data.status in ['ACTIVE', 'REVOKED', 'EXPIRED'] &&
+             data.sessionEpoch is int && data.sessionEpoch >= 1 &&
+             data.createdAtMs is int && data.createdAtMs >= 0 &&
+             data.lastActivityMs is int && data.lastActivityMs >= 0 &&
+             data.expiresAtMs is int && data.expiresAtMs >= 0;
+    }
+
+    function isValidConnectedDevice(data, userId, deviceIdHash) {
+      return isValidId(deviceIdHash) &&
+             hasNoPlaintextSecuritySecrets(data) &&
+             data.deviceIdHash == deviceIdHash &&
+             data.userId == userId &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 64 &&
+             data.trustState in ['TRUSTED', 'UNTRUSTED', 'BLOCKED'] &&
+             data.firstSeenAtMs is int && data.firstSeenAtMs >= 0 &&
+             data.lastSeenAtMs is int && data.lastSeenAtMs >= 0;
+    }
+
+    function isValidLoginHistoryEntry(data, userId, eventId) {
+      return isValidId(eventId) &&
+             hasNoPlaintextSecuritySecrets(data) &&
+             data.id == eventId &&
+             data.userId == userId &&
+             data.deviceName is string && data.deviceName.size() >= 1 && data.deviceName.size() <= 64 &&
+             data.authMethod is string && data.authMethod.size() >= 1 && data.authMethod.size() <= 32 &&
+             data.outcome in ['SUCCESS', 'SUSPICIOUS_FLAGGED', 'CHALLENGE_REQUIRED', 'BLOCKED'] &&
+             data.timestampMs is int && data.timestampMs > 0;
+    }
+
+    function isValidSecurityAlert(data, userId, alertId) {
+      return isValidId(alertId) &&
+             hasNoPlaintextSecuritySecrets(data) &&
+             data.id == alertId &&
+             data.userId == userId &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+             data.description is string && data.description.size() <= 500 &&
+             data.severity in ['INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] &&
+             data.status in ['OPEN', 'CONFIRMED_SAFE', 'SECURED', 'DISMISSED'] &&
+             data.createdAtMs is int && data.createdAtMs > 0;
+    }
+
+    function isValidSecurityLogEntry(data, userId, logId) {
+      return isValidId(logId) &&
+             hasNoPlaintextSecuritySecrets(data) &&
+             data.id == logId &&
+             data.userId == userId &&
+             data.category in ['ALL', 'SESSION', 'DEVICE', 'ANOMALY', 'PROTECTION', 'TWO_FACTOR'] &&
+             data.severity in ['INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] &&
+             data.action is string && data.action.size() >= 1 && data.action.size() <= 64 &&
+             data.summary is string && data.summary.size() <= 500 &&
+             data.timestampMs is int && data.timestampMs > 0;
+    }
+
     // 1. Private User Profile (PII isolated to owner)
     match /users/{userId} {
       allow get, list: if isSignedIn() && request.auth.uid == userId;
@@ -804,6 +1105,95 @@ service cloud.firestore {
                          isValidAiUsageQuota(incoming(), userId) &&
                          incoming().userId == existing().userId &&
                          (incoming().dayKey != existing().dayKey || incoming().requestsToday >= existing().requestsToday);
+      }
+
+      // 1.2 User-Scoped Sandboxed Extensions & Audit Logs
+      match /plugins/{pluginId} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create, update: if isSignedIn() && request.auth.uid == userId &&
+                                 isValidUserPluginState(incoming(), pluginId);
+      }
+
+      match /plugin_logs/{logId} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && request.auth.uid == userId &&
+                         isValidPluginLog(incoming(), logId);
+        allow update: if false;
+      }
+
+      // 1.3 Strictly Owner-Only Friends & Blocked Users Lists
+      match /friends/{friendId} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create, update: if isSignedIn() && isValidId(friendId) && request.auth.uid == userId &&
+                                 isValidFriendDoc(incoming(), userId, friendId);
+      }
+
+      match /blocked_users/{blockedUid} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create, update: if isSignedIn() && isValidId(blockedUid) && request.auth.uid == userId &&
+                                 isValidBlockedDoc(incoming(), userId, blockedUid);
+      }
+
+      // 1.4 Strictly Owner-Only Global Search History
+      match /search_history/{entryId} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create, update: if isSignedIn() && request.auth.uid == userId &&
+                                 isValidSearchHistoryEntry(incoming(), userId, entryId);
+      }
+
+      // 1.5 Account Security Profile, Sessions, Devices, Alerts & Immutable Audit Trails
+      match /security_profile/{profileId} {
+        allow get, list: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && request.auth.uid == userId &&
+                         isValidAccountSecurityProfile(incoming(), userId, profileId);
+        allow update: if isSignedIn() && request.auth.uid == userId &&
+                         isValidAccountSecurityProfile(incoming(), userId, profileId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().sessionEpoch >= existing().sessionEpoch &&
+                         incoming().globalSignOutAfterMs >= existing().globalSignOutAfterMs;
+        allow delete: if false;
+      }
+
+      match /sessions/{sessionId} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && request.auth.uid == userId &&
+                         isValidAccountSession(incoming(), userId, sessionId);
+        allow update: if isSignedIn() && request.auth.uid == userId &&
+                         isValidAccountSession(incoming(), userId, sessionId) &&
+                         incoming().sessionId == existing().sessionId &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAtMs == existing().createdAtMs;
+      }
+
+      match /devices/{deviceIdHash} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create, update: if isSignedIn() && request.auth.uid == userId &&
+                                 isValidConnectedDevice(incoming(), userId, deviceIdHash);
+      }
+
+      match /login_history/{eventId} {
+        allow get, list: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && request.auth.uid == userId &&
+                         isValidLoginHistoryEntry(incoming(), userId, eventId);
+        allow update, delete: if false;
+      }
+
+      match /security_alerts/{alertId} {
+        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && request.auth.uid == userId &&
+                         isValidSecurityAlert(incoming(), userId, alertId);
+        allow update: if isSignedIn() && request.auth.uid == userId &&
+                         isValidSecurityAlert(incoming(), userId, alertId) &&
+                         incoming().id == existing().id &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAtMs == existing().createdAtMs;
+      }
+
+      match /security_logs/{logId} {
+        allow get, list: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && request.auth.uid == userId &&
+                         isValidSecurityLogEntry(incoming(), userId, logId);
+        allow update, delete: if false;
       }
     }
 
@@ -1082,14 +1472,61 @@ service cloud.firestore {
       }
     }
 
-    // 6. Direct Conversations
+    // 6. Direct Conversations & Canonical Friend Requests
+    match /friend_requests/{requestId} {
+      allow get: if isSignedIn() && isValidId(requestId) &&
+                    (resource == null || request.auth.uid in existing().participantIds);
+      allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
+      allow create: if isSignedIn() && isValidId(requestId) &&
+                       isValidFriendRequestDoc(incoming(), requestId) &&
+                       incoming().fromUid == request.auth.uid &&
+                       incoming().status == 'PENDING' &&
+                       hasNoBlockBetween(incoming().fromUid, incoming().toUid) &&
+                       !areAlreadyFriends(incoming().fromUid, incoming().toUid) &&
+                       recipientAllowsFriendRequest(incoming().fromUid, incoming().toUid, incoming());
+      allow update: if isSignedIn() && isValidId(requestId) &&
+                       isValidFriendRequestDoc(incoming(), requestId) &&
+                       request.auth.uid in existing().participantIds && (
+                         // 6a. Pending -> ACCEPTED / DECLINED (recipient only) or CANCELLED (sender only)
+                         (existing().status == 'PENDING' &&
+                          incoming().fromUid == existing().fromUid &&
+                          incoming().toUid == existing().toUid &&
+                          incoming().participantIds == existing().participantIds && (
+                            (existing().toUid == request.auth.uid &&
+                             incoming().status in ['ACCEPTED', 'DECLINED'] &&
+                             (incoming().status != 'ACCEPTED' || hasNoBlockBetween(existing().fromUid, existing().toUid))) ||
+                            (existing().fromUid == request.auth.uid && incoming().status == 'CANCELLED')
+                          )) ||
+                         // 6b. Accepted -> CANCELLED by either participant on unfriend or block
+                         (existing().status == 'ACCEPTED' &&
+                          incoming().status == 'CANCELLED' &&
+                          incoming().fromUid == existing().fromUid &&
+                          incoming().toUid == existing().toUid &&
+                          incoming().participantIds == existing().participantIds) ||
+                         // 6c. Re-sending friend request on canonical pairId after DECLINED / CANCELLED
+                         (existing().status in ['DECLINED', 'CANCELLED'] &&
+                          incoming().status == 'PENDING' &&
+                          incoming().fromUid == request.auth.uid &&
+                          incoming().toUid in existing().participantIds &&
+                          incoming().fromUid in existing().participantIds &&
+                          hasNoBlockBetween(incoming().fromUid, incoming().toUid) &&
+                          !areAlreadyFriends(incoming().fromUid, incoming().toUid) &&
+                          recipientAllowsFriendRequest(incoming().fromUid, incoming().toUid, incoming()))
+                       );
+      allow delete: if isSignedIn() && isValidId(requestId) &&
+                       request.auth.uid in existing().participantIds;
+    }
+
     match /direct_conversations/{conversationId} {
       allow get: if isSignedIn() && isValidId(conversationId) && (resource == null || request.auth.uid in existing().participantIds);
       allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
       allow create: if isSignedIn() && isValidId(conversationId) && isValidDirectConversation(incoming()) &&
-                       request.auth.uid in incoming().participantIds;
+                       request.auth.uid in incoming().participantIds &&
+                       twoPartyDmCreateAllowed(incoming().participantIds);
       allow update: if isSignedIn() && isValidId(conversationId) && isValidDirectConversation(incoming()) &&
-                       request.auth.uid in existing().participantIds && request.auth.uid in incoming().participantIds;
+                       request.auth.uid in existing().participantIds &&
+                       request.auth.uid in incoming().participantIds &&
+                       twoPartyDmNoBlock(incoming().participantIds);
 
       match /messages/{messageId} {
         allow get: if isSignedIn() && isValidId(messageId) &&
@@ -1097,7 +1534,8 @@ service cloud.firestore {
         allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
         allow create: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
                          incoming().senderId == request.auth.uid &&
-                         request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds;
+                         request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds &&
+                         twoPartyDmNoBlock(get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds);
         allow update: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
                          incoming().senderId == existing().senderId &&
                          request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds;
