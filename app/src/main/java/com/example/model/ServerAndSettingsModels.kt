@@ -74,7 +74,7 @@ data class AppSettingsState(
     val showActivityStatus: Boolean = true,
     val mentionNotifications: Boolean = true,
     val localNotificationsEnabled: Boolean = true,
-    val platformLayoutOverride: PlatformLayoutOverride = PlatformLayoutOverride.AUTO
+    val platformLayoutOverride: PlatformLayoutOverride = PlatformLayoutOverride.FORCE_DESKTOP
 )
 
 enum class GlobalSearchFilter(val label: String) {

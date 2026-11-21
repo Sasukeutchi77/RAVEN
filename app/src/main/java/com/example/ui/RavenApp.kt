@@ -13,7 +13,12 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,12 +38,15 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import coil.compose.AsyncImage
 import com.example.data.AccountSecurityRepository
 import com.example.data.AiAssistantRepository
 import com.example.data.BotRepository
@@ -63,6 +71,7 @@ import com.example.model.RolePermission
 import com.example.model.SearchEntityType
 import com.example.model.Server
 import com.example.model.UserRole
+import com.example.model.UserStatus
 import com.example.ui.components.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.AccountSecurityViewModel
@@ -81,6 +90,7 @@ import com.example.util.LocalRavenPlatform
 import com.example.util.NotificationHelper
 import com.example.util.PlatformEnvironmentDetector
 import com.example.util.RavenPlatformKind
+import com.example.util.desktopHoverHighlight
 import com.example.util.desktopHoverPointer
 import com.example.util.rememberRavenPlatformProfile
 import kotlinx.coroutines.delay
@@ -198,6 +208,7 @@ fun RavenApp(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     var isMemberListOpen by remember { mutableStateOf(false) }
     var isDesktopMemberDockVisible by remember { mutableStateOf(true) }
+    var isCompactPcSidebarOpen by remember { mutableStateOf(false) }
     var activePointerMode by remember { mutableStateOf(ActivePointerMode.TOUCH) }
     var activePlatformProfile by remember {
         mutableStateOf(
@@ -397,8 +408,13 @@ fun RavenApp(
     @Composable
     fun SidebarPanel(
         modifier: Modifier = Modifier,
-        closeDrawerAfterSelect: Boolean = true
+        closeDrawerAfterSelect: Boolean = true,
+        onDismissCompactSidebar: (() -> Unit)? = null
     ) {
+        val closeAfterNav: () -> Unit = {
+            if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+            onDismissCompactSidebar?.invoke()
+        }
         Row(modifier = modifier.fillMaxHeight()) {
             ServerRail(
                 servers = servers,
@@ -407,7 +423,7 @@ fun RavenApp(
                 onSelectServer = { serverId ->
                     isViewingCommunityHome = false
                     repository.selectServer(serverId)
-                    if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                    closeAfterNav()
                 },
                 onToggleFolder = { folderId -> repository.toggleServerFolderExpanded(folderId) },
                 onCreateFolderClick = { showCreateFolderDialog = true },
@@ -456,7 +472,7 @@ fun RavenApp(
                         } else {
                             repository.selectChannel(ch)
                         }
-                        if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                        closeAfterNav()
                     },
                     onCreateChannelClick = { category -> showCreateChannelCategory = category },
                     onInvitePeople = { showServerInviteDialog = true },
@@ -522,49 +538,281 @@ fun RavenApp(
                     modifier = Modifier.weight(1f)
                 )
             } else {
-                Box(
+                val sidebarPlatform = LocalRavenPlatform.current
+                Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
                         .background(palette.sidebarBg)
-                        .padding(16.dp)
                 ) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Text(
-                            text = "Messages Privés",
-                            color = palette.textPrimary,
-                            fontSize = 16.sp
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Glissez ou cliquez sur un contact pour continuer votre discussion.",
-                            color = palette.textMuted,
-                            fontSize = 13.sp
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        FilledTonalButton(
-                            onClick = {
-                                if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
-                                showGlobalSearchSheet = true
-                            },
-                            modifier = Modifier.fillMaxWidth()
+                    // Top "Recherche ou lance une conversation" pill button (matches real Discord)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Surface(
+                            color = palette.inputBg,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, palette.border),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(8.dp))
+                                .desktopHoverPointer(sidebarPlatform.isPc)
+                                .clickable {
+                                    if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                                    showGlobalSearchSheet = true
+                                }
+                                .testTag("sidebar_dm_search_btn")
                         ) {
-                            Text("Recherche globale", fontSize = 12.sp)
+                            Box(
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Text(
+                                    text = "Recherche ou lance une conversation",
+                                    color = palette.textMuted,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
-                        Spacer(modifier = Modifier.weight(1f))
-                        UserBottomBar(
-                            user = currentUser,
-                            isMuted = isUserMuted,
-                            isDeafened = isUserDeafened,
-                            onUserClick = { selectedUserProfile = currentUser },
-                            onOpenAppSettings = { showAppSettingsDialog = true },
-                            onToggleMute = {
-                                requestAudioPermission()
-                                repository.toggleMute()
-                            },
-                            onToggleDeafen = { repository.toggleDeafen() }
-                        )
                     }
+
+                    HorizontalDivider(color = palette.border, thickness = 1.dp)
+
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        item {
+                            val friendsSelected = selectedDmId.isNullOrBlank()
+                            DiscordSidebarNavRow(
+                                icon = Icons.Default.People,
+                                label = "Amis",
+                                selected = friendsSelected,
+                                onClick = {
+                                    repository.selectDm("")
+                                    closeAfterNav()
+                                },
+                                testTag = "sidebar_nav_friends"
+                            )
+                            DiscordSidebarNavRow(
+                                icon = Icons.Default.AutoAwesome,
+                                label = "Nitro · Orbs",
+                                selected = false,
+                                onClick = {
+                                    if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                                    showOrbsShopDialog = true
+                                },
+                                testTag = "sidebar_nav_nitro"
+                            )
+                            DiscordSidebarNavRow(
+                                icon = Icons.Default.Storefront,
+                                label = "Boutique",
+                                selected = false,
+                                onClick = {
+                                    if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                                    showOrbsShopDialog = true
+                                },
+                                testTag = "sidebar_nav_shop"
+                            )
+                            DiscordSidebarNavRow(
+                                icon = Icons.Default.EmojiEvents,
+                                label = "Quêtes",
+                                selected = false,
+                                onClick = {
+                                    if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                                    showOrbsShopDialog = true
+                                },
+                                testTag = "sidebar_nav_quests"
+                            )
+                        }
+
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 8.dp, end = 4.dp, top = 12.dp, bottom = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "Messages privés",
+                                    color = palette.textMuted,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                IconButton(
+                                    onClick = {
+                                        if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
+                                        showUserDirectorySheet = true
+                                    },
+                                    modifier = Modifier.size(22.dp).testTag("sidebar_new_dm_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = "Nouveau message privé",
+                                        tint = palette.textMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        items(directConversations, key = { "side_dm_${it.id}" }) { conv ->
+                            val isSelected = conv.id == selectedDmId
+                            val displayName = if (conv.isGroup) conv.groupName ?: "Groupe Privé" else conv.friend.name
+                            val isBot = !conv.isGroup && conv.friend.role == UserRole.BOT
+                            val subtitle = if (conv.isGroup) {
+                                "${conv.groupMembers.size + 1} membres"
+                            } else {
+                                conv.friend.customStatus.ifBlank { conv.lastMessage }
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) palette.inputBg else Color.Transparent)
+                                    .desktopHoverHighlight(
+                                        shape = RoundedCornerShape(8.dp),
+                                        enabled = sidebarPlatform.isPc || sidebarPlatform.hasMouseOrTrackpad
+                                    )
+                                    .desktopHoverPointer(sidebarPlatform.isPc)
+                                    .clickable {
+                                        repository.selectDm(conv.id)
+                                        closeAfterNav()
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    .testTag("sidebar_dm_${conv.id}"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (conv.isGroup) Color(conv.groupIconColor)
+                                                else Color(conv.friend.avatarColor)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (conv.isGroup) {
+                                            Icon(Icons.Default.Groups, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp))
+                                        } else if (!conv.friend.avatarUrl.isNullOrBlank()) {
+                                            AsyncImage(
+                                                model = conv.friend.avatarUrl,
+                                                contentDescription = displayName,
+                                                modifier = Modifier.fillMaxSize(),
+                                                contentScale = ContentScale.Crop
+                                            )
+                                        } else {
+                                            Text(
+                                                text = displayName.take(1).uppercase(),
+                                                color = Color.White,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                    if (!conv.isGroup) {
+                                        val dotColor = when (conv.friend.status) {
+                                            UserStatus.ONLINE -> DiscordGreen
+                                            UserStatus.IDLE -> DiscordAmber
+                                            UserStatus.DND -> DiscordRed
+                                            UserStatus.OFFLINE -> DiscordTextDark
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(11.dp)
+                                                .align(Alignment.BottomEnd)
+                                                .clip(CircleShape)
+                                                .background(palette.sidebarBg)
+                                                .padding(2.dp)
+                                                .clip(CircleShape)
+                                                .background(dotColor)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(10.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = displayName,
+                                            color = if (isSelected || conv.unreadCount > 0) palette.textPrimary else palette.textSecondary,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected || conv.unreadCount > 0) FontWeight.SemiBold else FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        if (isBot) {
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Surface(
+                                                color = DiscordBlurple,
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "BOT",
+                                                    color = Color.White,
+                                                    fontSize = 8.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    if (subtitle.isNotBlank()) {
+                                        Text(
+                                            text = subtitle,
+                                            color = palette.textMuted,
+                                            fontSize = 11.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+
+                                if (conv.unreadCount > 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .clip(CircleShape)
+                                            .background(DiscordRed),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = conv.unreadCount.toString(),
+                                            color = Color.White,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    UserBottomBar(
+                        user = currentUser,
+                        isMuted = isUserMuted,
+                        isDeafened = isUserDeafened,
+                        onUserClick = { selectedUserProfile = currentUser },
+                        onOpenAppSettings = { showAppSettingsDialog = true },
+                        onToggleMute = {
+                            requestAudioPermission()
+                            repository.toggleMute()
+                        },
+                        onToggleDeafen = { repository.toggleDeafen() }
+                    )
                 }
             }
         }
@@ -775,7 +1023,8 @@ fun RavenApp(
                                 onDeclineFriendRequest = { reqId -> friendViewModel.declineRequest(reqId) },
                                 onCancelFriendRequest = { reqId -> friendViewModel.cancelRequest(reqId) },
                                 onOpenUserSearchSheet = { showUserDirectorySheet = true },
-                                onOpenFriendPrivacy = { showFriendPrivacySheet = true }
+                                onOpenFriendPrivacy = { showFriendPrivacySheet = true },
+                                isDesktopSidebarDocked = currentPlatform.useDesktopLayout
                             )
                         }
 
@@ -1113,192 +1362,335 @@ fun RavenApp(
                         .background(palette.primaryBg)
                         .windowInsetsPadding(WindowInsets.safeDrawing)
                 ) {
-                    // Compact Desktop Environment Bar (PC / Tablet workspace controls & live platform badge)
-                    Surface(
-                        color = palette.primaryBg,
-                        border = BorderStroke(0.5.dp, palette.border),
+                    // Authentic Discord Desktop Top Window Bar (Back/Forward • Centered Title • Inbox/Security/Help)
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .height(34.dp)
+                            .background(palette.primaryBg)
+                            .padding(horizontal = 10.dp)
                             .testTag("desktop_environment_bar")
                     ) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 5.dp),
+                            modifier = Modifier.align(Alignment.CenterStart),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Surface(
-                                    color = if (platformProfile.isPc) DiscordBlurple.copy(alpha = 0.2f) else DiscordGreen.copy(alpha = 0.16f),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .desktopHoverPointer(platformProfile.isPc)
-                                        .clickable { showAppSettingsDialog = true }
-                                        .testTag("desktop_platform_chip")
+                            if (platformProfile.windowWidthDp < 680) {
+                                IconButton(
+                                    onClick = { isCompactPcSidebarOpen = !isCompactPcSidebarOpen },
+                                    modifier = Modifier.size(26.dp).desktopHoverPointer(platformProfile.isPc).testTag("desktop_toggle_sidebar_btn")
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = when (platformProfile.effectivePlatform) {
-                                                RavenPlatformKind.PC_DESKTOP -> Icons.Default.Computer
-                                                RavenPlatformKind.ANDROID_TABLET -> Icons.Default.TabletAndroid
-                                                RavenPlatformKind.ANDROID_MOBILE -> Icons.Default.PhoneAndroid
-                                            },
-                                            contentDescription = platformProfile.platformBadgeLabel,
-                                            tint = if (platformProfile.isPc) DiscordBlurple else DiscordGreen,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Text(
-                                            text = platformProfile.platformBadgeLabel,
-                                            color = palette.textPrimary,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                                if (platformProfile.hasHardwareKeyboard) {
                                     Icon(
-                                        imageVector = Icons.Default.Keyboard,
-                                        contentDescription = "Clavier physique détecté",
-                                        tint = palette.textMuted,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                                if (platformProfile.hasMouseOrTrackpad) {
-                                    Icon(
-                                        imageVector = Icons.Default.Mouse,
-                                        contentDescription = "Souris ou Trackpad détecté",
-                                        tint = palette.textMuted,
-                                        modifier = Modifier.size(14.dp)
+                                        imageVector = if (isCompactPcSidebarOpen) Icons.Default.MenuOpen else Icons.Default.Menu,
+                                        contentDescription = "Afficher les salons et MP",
+                                        tint = palette.textPrimary,
+                                        modifier = Modifier.size(17.dp)
                                     )
                                 }
                             }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            IconButton(
+                                onClick = {
+                                    when {
+                                        effectiveViewingVoiceRoom -> setViewingVoiceRoom(false)
+                                        isViewingCommunityHome -> isViewingCommunityHome = false
+                                        activeServer.isDmTab && !selectedDmId.isNullOrBlank() -> repository.selectDm("")
+                                        !activeServer.isDmTab -> repository.selectServer("dm_tab")
+                                    }
+                                },
+                                modifier = Modifier.size(26.dp).desktopHoverPointer(platformProfile.isPc)
                             ) {
-                                Surface(
-                                    color = palette.inputBg,
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .desktopHoverPointer(platformProfile.isPc)
-                                        .clickable { showGlobalSearchSheet = true }
-                                        .testTag("desktop_quick_search_btn")
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                    ) {
-                                        Icon(Icons.Default.Search, contentDescription = "Recherche globale", tint = palette.textSecondary, modifier = Modifier.size(13.dp))
-                                        Text(
-                                            text = if (platformProfile.supportsEnterToSend) "Rechercher (Ctrl+K)" else "Rechercher",
-                                            color = palette.textSecondary,
-                                            fontSize = 11.sp
-                                        )
-                                    }
-                                }
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Précédent",
+                                    tint = palette.textMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { },
+                                enabled = false,
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = "Suivant",
+                                    tint = palette.textMuted.copy(alpha = 0.45f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
 
-                                Surface(
-                                    color = if (securityUiState.openAlertsCount > 0) DiscordRed.copy(alpha = 0.2f) else palette.inputBg,
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .desktopHoverPointer(platformProfile.isPc)
-                                        .clickable { showAccountSecuritySheet = true }
-                                        .testTag("desktop_quick_security_btn")
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Shield,
-                                            contentDescription = "Sécurité du compte",
-                                            tint = if (securityUiState.openAlertsCount > 0) DiscordRed else DiscordGreen,
-                                            modifier = Modifier.size(13.dp)
-                                        )
-                                        if (securityUiState.openAlertsCount > 0) {
-                                            Text(
-                                                text = "${securityUiState.openAlertsCount}",
-                                                color = DiscordRed,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                }
+                        // Centered Context Indicator matching screenshot ("👥 Amis" / "#salon" / "@Ami")
+                        val topTitle = when {
+                            effectiveViewingVoiceRoom && connectedVoiceChannel != null -> connectedVoiceChannel!!.name
+                            activeServer.isDmTab -> {
+                                val dmConv = directConversations.find { it.id == selectedDmId }
+                                if (dmConv == null) "Amis"
+                                else if (dmConv.isGroup) dmConv.groupName ?: "Groupe"
+                                else dmConv.friend.name
+                            }
+                            isViewingCommunityHome -> activeServer.name
+                            else -> "# ${activeChannel.name}"
+                        }
+                        val topIcon = when {
+                            effectiveViewingVoiceRoom -> Icons.Default.VolumeUp
+                            activeServer.isDmTab && selectedDmId.isNullOrBlank() -> Icons.Default.People
+                            activeServer.isDmTab -> Icons.Default.AlternateEmail
+                            isViewingCommunityHome -> Icons.Default.Home
+                            else -> Icons.Default.Tag
+                        }
+                        Row(
+                            modifier = Modifier.align(Alignment.Center),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = topIcon,
+                                contentDescription = null,
+                                tint = palette.textSecondary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = topTitle,
+                                color = palette.textPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
 
-                                if (platformProfile.dockRightMemberPanel && canViewMemberList && !effectiveViewingVoiceRoom && !isViewingCommunityHome && !activeServer.isDmTab) {
-                                    Surface(
-                                        color = if (isDesktopMemberDockVisible) DiscordBlurple.copy(alpha = 0.22f) else palette.inputBg,
-                                        shape = RoundedCornerShape(8.dp),
+                        // Right minimalist icons (Inbox, Security Shield, Dock Members, Platform Settings)
+                        Row(
+                            modifier = Modifier.align(Alignment.CenterEnd),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            IconButton(
+                                onClick = { showGlobalSearchSheet = true },
+                                modifier = Modifier.size(28.dp).desktopHoverPointer(platformProfile.isPc).testTag("desktop_quick_search_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = "Recherche globale (Ctrl+K)",
+                                    tint = palette.textMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            Box {
+                                IconButton(
+                                    onClick = { showInboxSheet = true },
+                                    modifier = Modifier.size(28.dp).desktopHoverPointer(platformProfile.isPc)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Inbox,
+                                        contentDescription = "Boîte de réception",
+                                        tint = if (unreadNotificationsCount > 0) palette.textPrimary else palette.textMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                if (unreadNotificationsCount > 0) {
+                                    Box(
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .desktopHoverPointer(platformProfile.isPc)
-                                            .clickable { isDesktopMemberDockVisible = !isDesktopMemberDockVisible }
-                                            .testTag("desktop_toggle_member_dock_btn")
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Group,
-                                                contentDescription = "Panneau des membres",
-                                                tint = if (isDesktopMemberDockVisible) DiscordBlurple else palette.textSecondary,
-                                                modifier = Modifier.size(13.dp)
-                                            )
-                                            Text(
-                                                text = "Membres",
-                                                color = if (isDesktopMemberDockVisible) DiscordBlurple else palette.textSecondary,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
+                                            .size(7.dp)
+                                            .align(Alignment.TopEnd)
+                                            .padding(1.dp)
+                                            .clip(CircleShape)
+                                            .background(DiscordRed)
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { showAccountSecuritySheet = true },
+                                modifier = Modifier.size(28.dp).desktopHoverPointer(platformProfile.isPc).testTag("desktop_quick_security_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Shield,
+                                    contentDescription = "Sécurité du compte",
+                                    tint = if (securityUiState.openAlertsCount > 0) DiscordRed else palette.textMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            if (platformProfile.dockRightMemberPanel && canViewMemberList && !effectiveViewingVoiceRoom && !isViewingCommunityHome && !activeServer.isDmTab) {
+                                IconButton(
+                                    onClick = { isDesktopMemberDockVisible = !isDesktopMemberDockVisible },
+                                    modifier = Modifier.size(28.dp).desktopHoverPointer(platformProfile.isPc).testTag("desktop_toggle_member_dock_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Group,
+                                        contentDescription = "Panneau des membres",
+                                        tint = if (isDesktopMemberDockVisible) palette.textPrimary else palette.textMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                            Surface(
+                                color = palette.inputBg,
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(1.dp, palette.border),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .desktopHoverPointer(platformProfile.isPc)
+                                    .clickable {
+                                        repository.updateAppSettings {
+                                            it.copy(platformLayoutOverride = com.example.model.PlatformLayoutOverride.FORCE_MOBILE)
                                         }
                                     }
+                                    .testTag("desktop_quick_mode_toggle")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Computer,
+                                        contentDescription = "Mode PC actif (appuyer pour Mobile)",
+                                        tint = DiscordBlurple,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Text(
+                                        text = "PC",
+                                        color = palette.textPrimary,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
+                            }
+                            IconButton(
+                                onClick = { showAppSettingsDialog = true },
+                                modifier = Modifier.size(28.dp).desktopHoverPointer(platformProfile.isPc).testTag("desktop_platform_chip")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.HelpOutline,
+                                    contentDescription = platformProfile.platformBadgeLabel,
+                                    tint = palette.textMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
                     }
 
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    ) {
-                        SidebarPanel(
-                            modifier = Modifier.width(if (platformProfile.windowWidthDp >= 1200) 340.dp else 312.dp),
-                            closeDrawerAfterSelect = false
-                        )
-                        VerticalDivider(color = palette.border, thickness = 1.dp)
-                        MainContentPane(
-                            showDrawerButton = false,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (dockRightMembers) {
-                            VerticalDivider(color = palette.border, thickness = 1.dp)
-                            MemberListDrawer(
-                                members = activeServer.members,
-                                customRoles = activeServer.customRoles,
-                                onClose = { isDesktopMemberDockVisible = false },
-                                onMemberClick = { member -> selectedUserProfile = member },
-                                modifier = Modifier
-                                    .width(252.dp)
-                                    .testTag("desktop_docked_member_panel")
+                    if (platformProfile.windowWidthDp >= 680) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                        ) {
+                            SidebarPanel(
+                                modifier = Modifier.width(if (platformProfile.windowWidthDp >= 1200) 326.dp else 306.dp),
+                                closeDrawerAfterSelect = false
                             )
+
+                            // Rounded top-left Discord main workspace card matching official screenshot
+                            Surface(
+                                shape = RoundedCornerShape(topStart = 12.dp),
+                                color = palette.chatBg,
+                                border = BorderStroke(1.dp, palette.border),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            ) {
+                                Row(modifier = Modifier.fillMaxSize()) {
+                                    MainContentPane(
+                                        showDrawerButton = false,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (dockRightMembers) {
+                                        VerticalDivider(color = palette.border, thickness = 1.dp)
+                                        MemberListDrawer(
+                                            members = activeServer.members,
+                                            customRoles = activeServer.customRoles,
+                                            onClose = { isDesktopMemberDockVisible = false },
+                                            onMemberClick = { member -> selectedUserProfile = member },
+                                            modifier = Modifier
+                                                .width(248.dp)
+                                                .testTag("desktop_docked_member_panel")
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Narrow/portrait PC Mode: docked ServerRail + full-width rounded workspace + slide-over Discord channel/DM sidebar
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                        ) {
+                            Row(modifier = Modifier.fillMaxSize()) {
+                                ServerRail(
+                                    servers = servers,
+                                    selectedServerId = selectedServerId,
+                                    serverFolders = serverFolders,
+                                    onSelectServer = { serverId ->
+                                        isViewingCommunityHome = false
+                                        repository.selectServer(serverId)
+                                        isCompactPcSidebarOpen = true
+                                    },
+                                    onToggleFolder = { folderId -> repository.toggleServerFolderExpanded(folderId) },
+                                    onCreateFolderClick = { showCreateFolderDialog = true },
+                                    onCreateServerClick = { showCreateServerDialog = true },
+                                    onJoinServerClick = { showJoinServerDialog = true },
+                                    onExploreServersClick = { showExploreServersSheet = true },
+                                    onOpenOrbsShop = { showOrbsShopDialog = true },
+                                    onOpenBotsDashboard = { showBotDashboardSheet = true },
+                                    onOpenAiAssistant = { showAiAssistantSheet = true },
+                                    unseenStoriesCount = storyUiState.unseenGroups.count { !it.isCurrentUser },
+                                    onOpenStories = {
+                                        val targetGroup = storyUiState.unseenGroups.firstOrNull() ?: storyUiState.allGroups.firstOrNull()
+                                        if (targetGroup != null) {
+                                            viewingStoryAuthorId = targetGroup.authorId
+                                        } else {
+                                            showCreateStoryDialog = true
+                                        }
+                                    }
+                                )
+
+                                Surface(
+                                    shape = RoundedCornerShape(topStart = 12.dp),
+                                    color = palette.chatBg,
+                                    border = BorderStroke(1.dp, palette.border),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                ) {
+                                    MainContentPane(
+                                        showDrawerButton = false,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                            }
+
+                            if (isCompactPcSidebarOpen) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black.copy(alpha = 0.5f))
+                                        .clickable { isCompactPcSidebarOpen = false }
+                                )
+                            }
+
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = isCompactPcSidebarOpen,
+                                enter = slideInHorizontally(initialOffsetX = { -it }),
+                                exit = slideOutHorizontally(targetOffsetX = { -it })
+                            ) {
+                                Surface(
+                                    color = palette.primaryBg,
+                                    shadowElevation = 12.dp,
+                                    modifier = Modifier
+                                        .width((platformProfile.windowWidthDp - 44).coerceIn(260, 312).dp)
+                                        .fillMaxHeight()
+                                ) {
+                                    SidebarPanel(
+                                        modifier = Modifier.fillMaxSize(),
+                                        closeDrawerAfterSelect = false,
+                                        onDismissCompactSidebar = { isCompactPcSidebarOpen = false }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -2185,6 +2577,47 @@ fun RavenApp(
                     Text("Compris")
                 }
             }
+        )
+    }
+}
+
+@Composable
+private fun DiscordSidebarNavRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    val palette = ravenPalette()
+    val platform = LocalRavenPlatform.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) palette.inputBg else Color.Transparent)
+            .desktopHoverHighlight(
+                shape = RoundedCornerShape(8.dp),
+                enabled = platform.isPc || platform.hasMouseOrTrackpad
+            )
+            .desktopHoverPointer(platform.isPc)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (selected) palette.textPrimary else palette.textMuted,
+            modifier = Modifier.size(19.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = label,
+            color = if (selected) palette.textPrimary else palette.textMuted,
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
         )
     }
 }

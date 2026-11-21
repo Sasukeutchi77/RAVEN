@@ -40,8 +40,8 @@ fun MemberListDrawer(
     Surface(
         modifier = modifier
             .fillMaxHeight()
-            .width(260.dp),
-        color = palette.sidebarBg
+            .width(248.dp),
+        color = palette.chatBg
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Row(
@@ -52,9 +52,9 @@ fun MemberListDrawer(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Membres (${members.size})",
-                    color = palette.textPrimary,
-                    fontSize = 16.sp,
+                    text = "Membres — ${members.size}",
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
                 IconButton(
@@ -64,12 +64,12 @@ fun MemberListDrawer(
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Fermer",
-                        tint = palette.textSecondary
+                        tint = palette.textMuted
                     )
                 }
             }
 
-            HorizontalDivider(color = DiscordDarkBorder, thickness = 1.dp)
+            HorizontalDivider(color = palette.border, thickness = 1.dp)
 
             val admins = members.filter { it.role == UserRole.ADMIN }
             val mods = members.filter { it.role == UserRole.MODERATOR }
@@ -177,8 +177,11 @@ private fun MemberItemRow(
             }
             Box(
                 modifier = Modifier
-                    .size(10.dp)
+                    .size(12.dp)
                     .align(Alignment.BottomEnd)
+                    .clip(CircleShape)
+                    .background(palette.chatBg)
+                    .padding(2.dp)
                     .clip(CircleShape)
                     .background(
                         when (user.status) {

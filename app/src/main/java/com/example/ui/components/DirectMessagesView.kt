@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -107,6 +108,7 @@ fun DirectMessagesView(
     onOpenUserSearchSheet: () -> Unit = {},
     onOpenFriendPrivacy: () -> Unit = {},
     useSplitPane: Boolean = LocalRavenPlatform.current.useSplitPaneDm,
+    isDesktopSidebarDocked: Boolean = LocalRavenPlatform.current.useDesktopLayout,
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -194,7 +196,8 @@ fun DirectMessagesView(
             modifier = paneModifier.fillMaxSize(),
             containerColor = palette.chatBg,
             topBar = {
-                TopAppBar(
+                Column(modifier = Modifier.background(palette.chatBg)) {
+                    TopAppBar(
                     title = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -369,19 +372,21 @@ fun DirectMessagesView(
                                 Icon(
                                     imageVector = Icons.Default.Block,
                                     contentDescription = "Bloquer cet utilisateur",
-                                    tint = DiscordRed
+                                    tint = palette.textSecondary
                                 )
                             }
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = DiscordDarkSidebar)
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.chatBg)
                 )
+                    HorizontalDivider(color = palette.border, thickness = 1.dp)
+                }
             },
             bottomBar = {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(DiscordDarkChat)
+                        .background(palette.chatBg)
                 ) {
                     TypingIndicatorBar(typingUserNames = typingUsersByTarget[activeConversation.id] ?: emptyList())
                     if (isRecordingAudio) {
@@ -479,150 +484,150 @@ fun DirectMessagesView(
                             }
                         }
 
-                        Row(
+                        Surface(
+                            color = palette.inputBg,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, palette.border),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(horizontal = 16.dp, vertical = 10.dp)
                         ) {
-                            // Plus tray button
-                            Box(
+                            Row(
                                 modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .background(if (isAttachmentTrayOpen) DiscordBlurple else DiscordDarkInput)
-                                    .clickable { isAttachmentTrayOpen = !isAttachmentTrayOpen }
-                                    .testTag("dm_plus_tray_button"),
-                                contentAlignment = Alignment.Center
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = if (isAttachmentTrayOpen) Icons.Default.Close else Icons.Default.Add,
-                                    contentDescription = "Plus d'options",
-                                    tint = if (isAttachmentTrayOpen) Color.White else DiscordTextLight,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(6.dp))
-
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .background(DiscordDarkInput)
-                                    .clickable { showStickerPicker = true }
-                                    .testTag("dm_quick_sticker_button"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = "Envoyer un Sticker",
-                                    tint = DiscordAmber,
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            val dispatchDmSend = {
-                                if (dmInputText.isNotBlank()) {
-                                    onSendMessage(conv.id, dmInputText, null, null, 0)
-                                    dmInputText = ""
-                                }
-                            }
-
-                            OutlinedTextField(
-                                value = dmInputText,
-                                onValueChange = { dmInputText = it },
-                                placeholder = {
-                                    val destLabel = if (conv.isGroup) {
-                                        conv.groupName ?: "ce groupe"
-                                    } else {
-                                        "@${conv.friend.name}"
-                                    }
-                                    Text(
-                                        text = "Envoyer un message à $destLabel",
-                                        color = DiscordTextMuted,
-                                        fontSize = 13.sp
-                                    )
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .onPreviewKeyEvent { keyEvent ->
-                                        val isEnter = keyEvent.key == Key.Enter || keyEvent.key == Key.NumPadEnter
-                                        if (platform.supportsEnterToSend &&
-                                            isEnter &&
-                                            keyEvent.type == KeyEventType.KeyDown &&
-                                            !keyEvent.isShiftPressed &&
-                                            !keyEvent.isCtrlPressed &&
-                                            !keyEvent.isAltPressed
-                                        ) {
-                                            dispatchDmSend()
-                                            true
-                                        } else false
-                                    }
-                                    .testTag("dm_input_field"),
-                                shape = RoundedCornerShape(20.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedContainerColor = DiscordDarkInput,
-                                    unfocusedContainerColor = DiscordDarkInput,
-                                    focusedBorderColor = Color.Transparent,
-                                    unfocusedBorderColor = Color.Transparent,
-                                    focusedTextColor = DiscordTextWhite,
-                                    unfocusedTextColor = DiscordTextLight
-                                ),
-                                trailingIcon = {
-                                    IconButton(
-                                        onClick = { showDmInputEmojiPicker = true },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.SentimentSatisfied,
-                                            contentDescription = "Insérer un emoji",
-                                            tint = DiscordTextMuted,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                },
-                                maxLines = 3
-                            )
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            if (dmInputText.isBlank()) {
-                                IconButton(
-                                    onClick = {
-                                        val started = audioRecorder.startRecording()
-                                        if (started) isRecordingAudio = true
-                                    },
+                                // Plus tray button
+                                Box(
                                     modifier = Modifier
-                                        .size(38.dp)
+                                        .size(34.dp)
                                         .clip(CircleShape)
-                                        .background(DiscordDarkInput)
+                                        .background(if (isAttachmentTrayOpen) DiscordBlurple else Color.Transparent)
+                                        .clickable { isAttachmentTrayOpen = !isAttachmentTrayOpen }
+                                        .testTag("dm_plus_tray_button"),
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Mic,
-                                        contentDescription = "Enregistrer audio",
-                                        tint = DiscordTextLight,
+                                        imageVector = if (isAttachmentTrayOpen) Icons.Default.Close else Icons.Default.AddCircle,
+                                        contentDescription = "Plus d'options",
+                                        tint = if (isAttachmentTrayOpen) Color.White else palette.textSecondary,
+                                        modifier = Modifier.size(21.dp)
+                                    )
+                                }
+
+                                val dispatchDmSend = {
+                                    if (dmInputText.isNotBlank()) {
+                                        onSendMessage(conv.id, dmInputText, null, null, 0)
+                                        dmInputText = ""
+                                    }
+                                }
+
+                                OutlinedTextField(
+                                    value = dmInputText,
+                                    onValueChange = { dmInputText = it },
+                                    placeholder = {
+                                        val destLabel = if (conv.isGroup) {
+                                            conv.groupName ?: "ce groupe"
+                                        } else {
+                                            "@${conv.friend.name}"
+                                        }
+                                        Text(
+                                            text = "Envoyer un message à $destLabel",
+                                            color = palette.textMuted,
+                                            fontSize = 14.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .onPreviewKeyEvent { keyEvent ->
+                                            val isEnter = keyEvent.key == Key.Enter || keyEvent.key == Key.NumPadEnter
+                                            if (platform.supportsEnterToSend &&
+                                                isEnter &&
+                                                keyEvent.type == KeyEventType.KeyDown &&
+                                                !keyEvent.isShiftPressed &&
+                                                !keyEvent.isCtrlPressed &&
+                                                !keyEvent.isAltPressed
+                                            ) {
+                                                dispatchDmSend()
+                                                true
+                                            } else false
+                                        }
+                                        .testTag("dm_input_field"),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = Color.Transparent,
+                                        unfocusedContainerColor = Color.Transparent,
+                                        focusedBorderColor = Color.Transparent,
+                                        unfocusedBorderColor = Color.Transparent,
+                                        focusedTextColor = palette.textPrimary,
+                                        unfocusedTextColor = palette.textPrimary
+                                    ),
+                                    maxLines = 4
+                                )
+
+                                IconButton(
+                                    onClick = { showStickerPicker = true },
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .testTag("dm_quick_sticker_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = "Envoyer un Sticker",
+                                        tint = palette.textSecondary,
+                                        modifier = Modifier.size(19.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { showDmInputEmojiPicker = true },
+                                    modifier = Modifier.size(34.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SentimentSatisfied,
+                                        contentDescription = "Insérer un emoji",
+                                        tint = palette.textSecondary,
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
-                            } else {
-                                IconButton(
-                                    onClick = dispatchDmSend,
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(CircleShape)
-                                        .background(DiscordBlurple)
-                                        .desktopHoverPointer(platform.isPc)
-                                        .testTag("dm_send_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.Send,
-                                        contentDescription = "Envoyer",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(18.dp)
-                                    )
+
+                                Spacer(modifier = Modifier.width(4.dp))
+
+                                if (dmInputText.isBlank()) {
+                                    IconButton(
+                                        onClick = {
+                                            val started = audioRecorder.startRecording()
+                                            if (started) isRecordingAudio = true
+                                        },
+                                        modifier = Modifier.size(34.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Mic,
+                                            contentDescription = "Enregistrer audio",
+                                            tint = palette.textSecondary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                } else {
+                                    IconButton(
+                                        onClick = dispatchDmSend,
+                                        modifier = Modifier
+                                            .size(34.dp)
+                                            .clip(CircleShape)
+                                            .background(DiscordBlurple)
+                                            .desktopHoverPointer(platform.isPc)
+                                            .testTag("dm_send_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.Send,
+                                            contentDescription = "Envoyer",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(17.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -631,7 +636,7 @@ fun DirectMessagesView(
                                 text = "Entrée pour envoyer • Maj+Entrée nouvelle ligne",
                                 color = palette.textMuted,
                                 fontSize = 10.sp,
-                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
+                                modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 6.dp)
                             )
                         }
                     }
@@ -1056,27 +1061,27 @@ fun DirectMessagesView(
                                 else -> filter
                             }
                             Surface(
-                                shape = RoundedCornerShape(16.dp),
+                                shape = RoundedCornerShape(8.dp),
                                 color = when {
-                                    isAdd -> DiscordGreen.copy(alpha = 0.2f)
-                                    isSelected -> DiscordBlurple
-                                    else -> DiscordDarkInput
+                                    isAdd -> DiscordBlurple
+                                    isSelected -> palette.inputBg
+                                    else -> Color.Transparent
                                 },
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(16.dp))
+                                    .clip(RoundedCornerShape(8.dp))
                                     .clickable {
                                         if (isAdd) showAddFriendDialog = true else selectedFilter = filter
                                     }
                                     .testTag("dm_filter_$filter")
                             ) {
                                 Text(
-                                    text = displayLabel,
+                                    text = if (isAdd) "Ajouter" else displayLabel,
                                     color = when {
-                                        isAdd -> DiscordGreen
-                                        isSelected -> Color.White
-                                        else -> DiscordTextLight
+                                        isAdd -> Color.White
+                                        isSelected -> palette.textPrimary
+                                        else -> palette.textSecondary
                                     },
-                                    fontSize = 12.sp,
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                 )
@@ -1084,7 +1089,7 @@ fun DirectMessagesView(
                         }
                     }
 
-                    HorizontalDivider(color = DiscordDarkBorder, thickness = 1.dp)
+                    HorizontalDivider(color = palette.border, thickness = 1.dp)
                 }
             }
         ) { paddingValues ->
@@ -1489,63 +1494,671 @@ fun DirectMessagesView(
         }
     }
 
-    if (useSplitPane) {
+    @Composable
+    fun renderDesktopFriendsDashboard(paneModifier: Modifier) {
+        val filteredFriends = remember(friends, searchQuery) {
+            friends.filter { rel ->
+                searchQuery.isBlank() ||
+                    rel.user.name.contains(searchQuery, ignoreCase = true) ||
+                    "${rel.user.name}${rel.user.tag}".contains(searchQuery, ignoreCase = true) ||
+                    rel.privateNote.contains(searchQuery, ignoreCase = true)
+            }
+        }
+        val onlineFilteredFriends = remember(filteredFriends) {
+            filteredFriends.filter { it.user.status != UserStatus.OFFLINE }
+        }
+        val offlineFilteredFriends = remember(filteredFriends) {
+            filteredFriends.filter { it.user.status == UserStatus.OFFLINE }
+        }
+        val activeStories = storyUiState.allGroups
+        val incomingReqs = friendRequests.filter { it.direction == FriendRequestDirection.RECEIVED }
+        val outgoingReqs = friendRequests.filter { it.direction == FriendRequestDirection.SENT }
+
+        Column(
+            modifier = paneModifier
+                .fillMaxSize()
+                .background(palette.chatBg)
+        ) {
+            // Discord Desktop "Amis" Top Bar: Amis • En ligne | Tous | En attente | Bloqués | [Ajouter]
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                LazyRow(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.People,
+                                contentDescription = "Amis",
+                                tint = palette.textSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Amis",
+                                color = palette.textPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "  •  ",
+                                color = palette.textMuted,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+
+                    val desktopTabs = listOf("En ligne", "Tous", "En attente", "Bloqués")
+                    items(desktopTabs) { tab ->
+                        val isSelected = selectedFilter == tab || (tab == "Tous" && selectedFilter == "Amis")
+                        val countBadge = when (tab) {
+                            "En attente" -> friendRequests.size
+                            "Bloqués" -> blockedUsers.size
+                            else -> 0
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) palette.inputBg else Color.Transparent,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .desktopHoverHighlight(
+                                    shape = RoundedCornerShape(8.dp),
+                                    enabled = platform.isPc || platform.hasMouseOrTrackpad
+                                )
+                                .desktopHoverPointer(platform.isPc)
+                                .clickable { selectedFilter = tab }
+                                .testTag("dm_filter_$tab")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = tab,
+                                    color = if (isSelected) palette.textPrimary else palette.textSecondary,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium
+                                )
+                                if (countBadge > 0) {
+                                    Surface(
+                                        color = DiscordRed,
+                                        shape = CircleShape
+                                    ) {
+                                        Text(
+                                            text = countBadge.toString(),
+                                            color = Color.White,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = DiscordBlurple,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .desktopHoverPointer(platform.isPc)
+                                .clickable { showAddFriendDialog = true }
+                                .testTag("dm_filter_+ Ajouter")
+                        ) {
+                            Text(
+                                text = "Ajouter",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Right Discord toolbar icons: Create Group DM, Search Directory, Privacy, Inbox
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    IconButton(
+                        onClick = { showCreateGroupDialog = true },
+                        modifier = Modifier.size(34.dp).testTag("dm_create_group_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.GroupAdd,
+                            contentDescription = "Nouveau groupe privé",
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onOpenUserSearchSheet,
+                        modifier = Modifier.size(34.dp).testTag("dm_search_users_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PersonSearch,
+                            contentDescription = "Annuaire des utilisateurs",
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onOpenFriendPrivacy,
+                        modifier = Modifier.size(34.dp).testTag("dm_friend_privacy_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = "Confidentialité des amis",
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onOpenInbox,
+                        modifier = Modifier.size(34.dp).testTag("dm_inbox_button")
+                    ) {
+                        Box {
+                            Icon(
+                                imageVector = Icons.Default.Inbox,
+                                contentDescription = "Boîte de réception",
+                                tint = palette.textSecondary,
+                                modifier = Modifier.size(19.dp)
+                            )
+                            if (unreadNotificationsCount > 0) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .align(Alignment.TopEnd)
+                                        .clip(CircleShape)
+                                        .background(DiscordRed)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = palette.border, thickness = 1.dp)
+
+            // Split Desktop Workspace: Center Friends Canvas + Right "En ligne" Activity Panel
+            BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                val showActivityPane = maxWidth >= 660.dp
+                Row(modifier = Modifier.fillMaxSize()) {
+                    // Center Friends Canvas
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                    ) {
+                        val effectiveFilter = if (selectedFilter == "Amis") "Tous" else selectedFilter
+                        when (effectiveFilter) {
+                            "En ligne" -> {
+                                if (onlineFilteredFriends.isEmpty()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(32.dp)
+                                            .testTag("dm_desktop_empty_state"),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "Il n'y a aucun ami en ligne pour le moment. Reviens plus tard !",
+                                            color = palette.textMuted,
+                                            fontSize = 14.sp,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                } else {
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentPadding = PaddingValues(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        item {
+                                            OutlinedTextField(
+                                                value = searchQuery,
+                                                onValueChange = { searchQuery = it },
+                                                placeholder = { Text("Rechercher", color = palette.textMuted, fontSize = 13.sp) },
+                                                singleLine = true,
+                                                leadingIcon = {
+                                                    Icon(Icons.Default.Search, contentDescription = null, tint = palette.textMuted, modifier = Modifier.size(18.dp))
+                                                },
+                                                shape = RoundedCornerShape(8.dp),
+                                                colors = OutlinedTextFieldDefaults.colors(
+                                                    focusedContainerColor = palette.sidebarBg,
+                                                    unfocusedContainerColor = palette.sidebarBg,
+                                                    focusedBorderColor = palette.border,
+                                                    unfocusedBorderColor = palette.border,
+                                                    focusedTextColor = palette.textPrimary,
+                                                    unfocusedTextColor = palette.textPrimary
+                                                ),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(bottom = 10.dp)
+                                                    .testTag("dm_search_input")
+                                            )
+                                            Text(
+                                                text = "EN LIGNE — ${onlineFilteredFriends.size}",
+                                                color = palette.textMuted,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = 0.5.sp,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                        items(onlineFilteredFriends, key = { "desk_on_${it.friendUid}" }) { rel ->
+                                            FriendRelationshipCard(
+                                                relationship = rel,
+                                                onOpenDm = { u -> onOpenFriendDm(u) },
+                                                onStartCall = onStartCall,
+                                                onOpenProfile = onOpenUserProfile,
+                                                onRemoveFriend = onRemoveFriend,
+                                                onBlockUser = onBlockUser
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            "Tous" -> {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    item {
+                                        OutlinedTextField(
+                                            value = searchQuery,
+                                            onValueChange = { searchQuery = it },
+                                            placeholder = { Text("Rechercher", color = palette.textMuted, fontSize = 13.sp) },
+                                            singleLine = true,
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Search, contentDescription = null, tint = palette.textMuted, modifier = Modifier.size(18.dp))
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedContainerColor = palette.sidebarBg,
+                                                unfocusedContainerColor = palette.sidebarBg,
+                                                focusedBorderColor = palette.border,
+                                                unfocusedBorderColor = palette.border,
+                                                focusedTextColor = palette.textPrimary,
+                                                unfocusedTextColor = palette.textPrimary
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(bottom = 10.dp)
+                                                .testTag("dm_search_input")
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "TOUS LES AMIS — ${filteredFriends.size}",
+                                                color = palette.textMuted,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = 0.5.sp
+                                            )
+                                            TextButton(
+                                                onClick = onOpenUserSearchSheet,
+                                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                modifier = Modifier.testTag("friends_open_directory_btn")
+                                            ) {
+                                                Icon(Icons.Default.PersonSearch, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(15.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Annuaire", color = DiscordBlurple, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                            }
+                                        }
+                                    }
+                                    if (filteredFriends.isEmpty()) {
+                                        item {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 48.dp)
+                                                    .testTag("dm_desktop_empty_state"),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "Aucun ami trouvé. Cliquez sur Ajouter ou explorez l'annuaire !",
+                                                    color = palette.textMuted,
+                                                    fontSize = 14.sp,
+                                                    textAlign = TextAlign.Center
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        items(onlineFilteredFriends + offlineFilteredFriends, key = { "desk_all_${it.friendUid}" }) { rel ->
+                                            FriendRelationshipCard(
+                                                relationship = rel,
+                                                onOpenDm = { u -> onOpenFriendDm(u) },
+                                                onStartCall = onStartCall,
+                                                onOpenProfile = onOpenUserProfile,
+                                                onRemoveFriend = onRemoveFriend,
+                                                onBlockUser = onBlockUser
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            "En attente" -> {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    item {
+                                        Text(
+                                            text = "EN ATTENTE — ${friendRequests.size}",
+                                            color = palette.textMuted,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 0.5.sp,
+                                            modifier = Modifier.padding(bottom = 6.dp)
+                                        )
+                                    }
+                                    if (friendRequests.isEmpty()) {
+                                        item {
+                                            Box(
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "Il n'y a aucune demande d'ami en attente.",
+                                                    color = palette.textMuted,
+                                                    fontSize = 14.sp,
+                                                    textAlign = TextAlign.Center
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        items(incomingReqs, key = { "desk_in_${it.id}" }) { req ->
+                                            Surface(
+                                                color = palette.cardBg,
+                                                shape = RoundedCornerShape(10.dp),
+                                                border = BorderStroke(1.dp, palette.border),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { onOpenUserProfile(req.user) }
+                                                    .testTag("friend_request_${req.id}")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(12.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                                        Box(
+                                                            modifier = Modifier.size(36.dp).clip(CircleShape).background(Color(req.user.avatarColor)),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(req.user.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold)
+                                                        }
+                                                        Spacer(modifier = Modifier.width(10.dp))
+                                                        Column {
+                                                            Text("${req.user.name}${req.user.tag}", color = palette.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                                            Text("Demande d'ami reçue • ${req.timestamp}", color = DiscordGreen, fontSize = 11.sp)
+                                                        }
+                                                    }
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                        IconButton(
+                                                            onClick = { onAcceptFriendRequest(req.id) },
+                                                            modifier = Modifier.size(34.dp).clip(CircleShape).background(palette.inputBg).testTag("accept_friend_req_${req.id}")
+                                                        ) {
+                                                            Icon(Icons.Default.Check, contentDescription = "Accepter", tint = DiscordGreen, modifier = Modifier.size(18.dp))
+                                                        }
+                                                        IconButton(
+                                                            onClick = { (onDeclineFriendRequest ?: onDeclineOrCancelFriendRequest)(req.id) },
+                                                            modifier = Modifier.size(34.dp).clip(CircleShape).background(palette.inputBg).testTag("decline_friend_req_${req.id}")
+                                                        ) {
+                                                            Icon(Icons.Default.Close, contentDescription = "Refuser", tint = DiscordRed, modifier = Modifier.size(18.dp))
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        items(outgoingReqs, key = { "desk_out_${it.id}" }) { req ->
+                                            Surface(
+                                                color = palette.cardBg,
+                                                shape = RoundedCornerShape(10.dp),
+                                                border = BorderStroke(1.dp, palette.border),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { onOpenUserProfile(req.user) }
+                                                    .testTag("friend_request_${req.id}")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(12.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                                        Box(
+                                                            modifier = Modifier.size(36.dp).clip(CircleShape).background(Color(req.user.avatarColor)),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(req.user.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold)
+                                                        }
+                                                        Spacer(modifier = Modifier.width(10.dp))
+                                                        Column {
+                                                            Text("${req.user.name}${req.user.tag}", color = palette.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                                            Text("Demande d'ami envoyée • ${req.timestamp}", color = palette.textMuted, fontSize = 11.sp)
+                                                        }
+                                                    }
+                                                    OutlinedButton(
+                                                        onClick = { (onCancelFriendRequest ?: onDeclineOrCancelFriendRequest)(req.id) },
+                                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                        modifier = Modifier.testTag("cancel_friend_req_${req.id}")
+                                                    ) {
+                                                        Text("Annuler", color = DiscordRed, fontSize = 12.sp)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            "Bloqués" -> {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    item {
+                                        Text(
+                                            text = "BLOQUÉS — ${blockedUsers.size}",
+                                            color = palette.textMuted,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 0.5.sp,
+                                            modifier = Modifier.padding(bottom = 6.dp)
+                                        )
+                                    }
+                                    if (blockedUsers.isEmpty()) {
+                                        item {
+                                            Box(
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "Vous n'avez bloqué aucun utilisateur.",
+                                                    color = palette.textMuted,
+                                                    fontSize = 14.sp,
+                                                    textAlign = TextAlign.Center
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        items(blockedUsers, key = { "desk_blk_${it.id}" }) { blocked ->
+                                            Surface(
+                                                color = palette.cardBg,
+                                                shape = RoundedCornerShape(10.dp),
+                                                border = BorderStroke(1.dp, palette.border),
+                                                modifier = Modifier.fillMaxWidth().testTag("blocked_user_${blocked.id}")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(12.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Box(
+                                                            modifier = Modifier.size(36.dp).clip(CircleShape).background(Color(blocked.avatarColor)),
+                                                            contentAlignment = Alignment.Center
+                                                        ) {
+                                                            Text(blocked.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold)
+                                                        }
+                                                        Spacer(modifier = Modifier.width(10.dp))
+                                                        Text("${blocked.name}${blocked.tag}", color = palette.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                                    }
+                                                    TextButton(
+                                                        onClick = { onUnblockUser(blocked.id) },
+                                                        modifier = Modifier.testTag("unblock_user_${blocked.id}")
+                                                    ) {
+                                                        Text("Débloquer", color = DiscordBlurple, fontWeight = FontWeight.Bold)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (showActivityPane) {
+                        VerticalDivider(color = palette.border, thickness = 1.dp)
+
+                        // Right Discord "En ligne" (Active Now) Panel
+                        Column(
+                            modifier = Modifier
+                                .width(308.dp)
+                                .fillMaxHeight()
+                                .background(palette.chatBg)
+                                .padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            Text(
+                                text = "En ligne",
+                                color = palette.textPrimary,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            val activeFriendsWithStatus = onlineFilteredFriends.filter {
+                                it.user.customStatus.isNotBlank() || it.user.lastActivityLabel.isNotBlank()
+                            }
+
+                            if (activeStories.isNotEmpty()) {
+                                StoriesStrip(
+                                    currentUser = currentUser,
+                                    uiState = storyUiState,
+                                    onCreateStoryClick = onCreateStoryClick,
+                                    onOpenAuthorGroup = onOpenStoryGroup,
+                                    onOpenModerationSheet = onOpenStoryModeration
+                                )
+                            }
+
+                            if (activeFriendsWithStatus.isNotEmpty()) {
+                                activeFriendsWithStatus.take(4).forEach { rel ->
+                                    Surface(
+                                        color = palette.cardBg,
+                                        shape = RoundedCornerShape(12.dp),
+                                        border = BorderStroke(1.dp, palette.border),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { onOpenFriendDm(rel.user) }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.size(34.dp).clip(CircleShape).background(Color(rel.user.avatarColor)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(rel.user.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold)
+                                            }
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(rel.user.name, color = palette.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                                Text(
+                                                    text = rel.user.customStatus.ifBlank { rel.user.lastActivityLabel },
+                                                    color = palette.textMuted,
+                                                    fontSize = 11.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                Surface(
+                                    color = palette.cardBg,
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, palette.border),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 22.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "Tout est calme... pour le moment.",
+                                            color = palette.textPrimary,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        Text(
+                                            text = "Quand un ami commencera une activité, comme jouer à un jeu ou passer du temps sur le chat vocal, ce sera affiché ici !",
+                                            color = palette.textMuted,
+                                            fontSize = 12.sp,
+                                            lineHeight = 16.sp,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (isDesktopSidebarDocked) {
+        if (activeConversation != null) {
+            renderConversationPane(activeConversation, modifier, showBackNav = false)
+        } else {
+            renderDesktopFriendsDashboard(modifier)
+        }
+    } else if (useSplitPane) {
         Row(modifier = modifier.fillMaxSize()) {
             renderDirectoryPane(Modifier.width(320.dp))
             VerticalDivider(color = palette.border, thickness = 1.dp)
             if (activeConversation != null) {
                 renderConversationPane(activeConversation, Modifier.weight(1f), showBackNav = false)
             } else {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .background(palette.chatBg)
-                        .testTag("dm_desktop_empty_state"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.padding(32.dp)
-                    ) {
-                        Surface(
-                            color = DiscordBlurple.copy(alpha = 0.16f),
-                            shape = CircleShape,
-                            modifier = Modifier.size(64.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(Icons.Default.Forum, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(30.dp))
-                            }
-                        }
-                        Text(
-                            text = "Espace Messages Privés PC",
-                            color = palette.textPrimary,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Sélectionnez un ami ou une conversation à gauche pour discuter sans quitter votre liste.",
-                            color = palette.textMuted,
-                            fontSize = 13.sp
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilledTonalButton(onClick = onOpenUserSearchSheet) {
-                                Icon(Icons.Default.PersonSearch, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Annuaire", fontSize = 12.sp)
-                            }
-                            Button(
-                                onClick = { showCreateGroupDialog = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
-                            ) {
-                                Icon(Icons.Default.GroupAdd, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Nouveau groupe", color = Color.White, fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
+                renderDesktopFriendsDashboard(Modifier.weight(1f))
             }
         }
     } else {

@@ -30,6 +30,9 @@ import coil.compose.AsyncImage
 import com.example.data.CommunityPermissions
 import com.example.model.*
 import com.example.ui.theme.*
+import com.example.util.LocalRavenPlatform
+import com.example.util.desktopHoverHighlight
+import com.example.util.desktopHoverPointer
 
 @Composable
 fun ChannelListDrawer(
@@ -309,7 +312,7 @@ fun ChannelListDrawer(
                 }
             }
 
-            HorizontalDivider(color = DiscordDarkBorder, thickness = 1.dp)
+            HorizontalDivider(color = palette.border, thickness = 1.dp)
 
             // Quick Pills: Events & Global Search
             Row(
@@ -575,20 +578,26 @@ fun ChannelRow(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    val palette = ravenPalette()
+    val platform = LocalRavenPlatform.current
     val isVoice = channel.type == ChannelType.VOICE
     val isStage = channel.type == ChannelType.STAGE
-    val isAnnouncement = channel.type == ChannelType.ANNOUNCEMENT
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 1.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(if (isSelected) DiscordDarkInput else Color.Transparent)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (isSelected) palette.inputBg else Color.Transparent)
+                .desktopHoverHighlight(
+                    shape = RoundedCornerShape(8.dp),
+                    enabled = platform.isPc || platform.hasMouseOrTrackpad
+                )
+                .desktopHoverPointer(platform.isPc)
                 .clickable(onClick = onClick)
                 .testTag("channel_${channel.id}")
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 8.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -597,8 +606,8 @@ fun ChannelRow(
                 tint = when {
                     channel.isLocked -> DiscordRed
                     isStage -> DiscordGreen
-                    isSelected -> DiscordTextWhite
-                    else -> DiscordTextMuted
+                    isSelected -> palette.textPrimary
+                    else -> palette.textMuted
                 },
                 modifier = Modifier.size(18.dp)
             )
@@ -607,9 +616,9 @@ fun ChannelRow(
 
             Text(
                 text = channel.name,
-                color = if (isSelected) DiscordTextWhite else DiscordTextLight,
+                color = if (isSelected) palette.textPrimary else palette.textSecondary,
                 fontSize = 14.sp,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
@@ -730,151 +739,133 @@ fun UserBottomBar(
     onToggleDeafen: () -> Unit
 ) {
     val palette = ravenPalette()
-    Surface(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(58.dp),
-        color = palette.cardBg
+            .padding(horizontal = 8.dp, vertical = 6.dp)
     ) {
-        Row(
+        Surface(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .fillMaxWidth()
+                .height(54.dp),
+            shape = RoundedCornerShape(12.dp),
+            color = palette.cardBg,
+            border = BorderStroke(1.dp, palette.border)
         ) {
-            // User Avatar + Info
             Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable(onClick = onUserClick)
-                    .padding(4.dp),
+                    .fillMaxSize()
+                    .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(Color(user.avatarColor)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (!user.avatarUrl.isNullOrBlank()) {
-                            AsyncImage(
-                                model = user.avatarUrl,
-                                contentDescription = "Avatar",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
-                            Text(
-                                text = user.name.take(1),
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                // User Avatar + Info
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onUserClick)
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(Color(user.avatarColor)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (!user.avatarUrl.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = user.avatarUrl,
+                                    contentDescription = "Avatar",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Text(
+                                    text = user.name.take(1).uppercase(),
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
+
+                        val statusColor = when (user.status) {
+                            UserStatus.ONLINE -> DiscordGreen
+                            UserStatus.IDLE -> DiscordAmber
+                            UserStatus.DND -> DiscordRed
+                            UserStatus.OFFLINE -> DiscordTextDark
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .align(Alignment.BottomEnd)
+                                .clip(CircleShape)
+                                .background(palette.cardBg)
+                                .padding(2.dp)
+                                .clip(CircleShape)
+                                .background(statusColor)
+                        )
                     }
 
-                    val statusColor = when (user.status) {
-                        UserStatus.ONLINE -> DiscordGreen
-                        UserStatus.IDLE -> DiscordAmber
-                        UserStatus.DND -> DiscordRed
-                        UserStatus.OFFLINE -> DiscordTextDark
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .align(Alignment.BottomEnd)
-                            .clip(CircleShape)
-                            .background(statusColor)
-                    )
-                }
+                    Spacer(modifier = Modifier.width(8.dp))
 
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column {
                         Text(
                             text = user.name,
                             color = palette.textPrimary,
                             fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
+                            overflow = TextOverflow.Ellipsis
                         )
-                        if (!user.clanTag.isNullOrBlank()) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Surface(
-                                color = palette.accent.copy(alpha = 0.2f),
-                                shape = RoundedCornerShape(4.dp)
-                            ) {
-                                Text(
-                                    text = user.clanTag,
-                                    color = palette.accent,
-                                    fontSize = 8.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Surface(
-                            color = palette.accent.copy(alpha = 0.2f),
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(
-                                text = "Niv.${user.level}",
-                                color = palette.accent,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                            )
-                        }
+                        Text(
+                            text = user.customStatus.ifBlank { user.status.label },
+                            color = palette.textMuted,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                    Text(
-                        text = "${user.xp}/${user.level * 100} XP",
-                        color = palette.textMuted,
-                        fontSize = 10.sp
+                }
+
+                IconButton(
+                    onClick = onToggleMute,
+                    modifier = Modifier.size(30.dp).testTag("bottom_mute_button")
+                ) {
+                    Icon(
+                        imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                        contentDescription = if (isMuted) "Réactiver micro" else "Couper micro",
+                        tint = if (isMuted) DiscordRed else palette.textSecondary,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
-            }
 
-            IconButton(
-                onClick = onToggleMute,
-                modifier = Modifier.size(32.dp).testTag("bottom_mute_button")
-            ) {
-                Icon(
-                    imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                    contentDescription = if (isMuted) "Réactiver micro" else "Couper micro",
-                    tint = if (isMuted) DiscordRed else palette.textMuted,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
+                IconButton(
+                    onClick = onToggleDeafen,
+                    modifier = Modifier.size(30.dp).testTag("bottom_deafen_button")
+                ) {
+                    Icon(
+                        imageVector = if (isDeafened) Icons.Default.HeadsetOff else Icons.Default.Headset,
+                        contentDescription = if (isDeafened) "Réactiver casque" else "Couper son",
+                        tint = if (isDeafened) DiscordRed else palette.textSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
 
-            IconButton(
-                onClick = onToggleDeafen,
-                modifier = Modifier.size(32.dp).testTag("bottom_deafen_button")
-            ) {
-                Icon(
-                    imageVector = if (isDeafened) Icons.Default.HeadsetOff else Icons.Default.Headset,
-                    contentDescription = if (isDeafened) "Réactiver casque" else "Couper son",
-                    tint = if (isDeafened) DiscordRed else palette.textMuted,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onOpenAppSettings,
-                modifier = Modifier.size(32.dp).testTag("bottom_settings_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Paramètres de l'application",
-                    tint = palette.textMuted,
-                    modifier = Modifier.size(18.dp)
-                )
+                IconButton(
+                    onClick = onOpenAppSettings,
+                    modifier = Modifier.size(30.dp).testTag("bottom_settings_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Paramètres de l'application",
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
     }

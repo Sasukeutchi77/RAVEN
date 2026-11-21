@@ -63,16 +63,16 @@ fun ServerRail(
 
     Surface(
         modifier = modifier
-            .width(72.dp)
+            .width(68.dp)
             .fillMaxHeight(),
         color = palette.primaryBg
     ) {
         LazyColumn(
             horizontalAlignment = Alignment.CenterHorizontally,
-            contentPadding = PaddingValues(vertical = 12.dp),
+            contentPadding = PaddingValues(vertical = 8.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            // Direct Messages item at top
+            // Direct Messages / Home item at top
             item {
                 val isDmActive = selectedServerId == "dm_tab"
                 ServerRailItem(
@@ -82,26 +82,26 @@ fun ServerRail(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(48.dp)
-                            .clip(if (isDmActive) RoundedCornerShape(16.dp) else CircleShape)
-                            .background(if (isDmActive) DiscordBlurple else DiscordDarkInput),
+                            .size(44.dp)
+                            .clip(if (isDmActive) RoundedCornerShape(14.dp) else CircleShape)
+                            .background(if (isDmActive) DiscordBlurple else palette.inputBg),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.ChatBubble,
                             contentDescription = "Messages Privés",
                             tint = Color.White,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(21.dp)
                         )
                     }
                 }
 
                 HorizontalDivider(
                     modifier = Modifier
-                        .padding(vertical = 8.dp)
-                        .width(32.dp),
-                    thickness = 2.dp,
-                    color = DiscordDarkBorder
+                        .padding(vertical = 6.dp)
+                        .width(30.dp),
+                    thickness = 1.5.dp,
+                    color = palette.border
                 )
             }
 
@@ -201,12 +201,12 @@ fun ServerRail(
                 Spacer(modifier = Modifier.height(6.dp))
             }
 
-            // Add server & Folder & Join buttons
+            // Add server & Discover & tools in sleek Discord circular buttons
             item {
                 Spacer(modifier = Modifier.height(4.dp))
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .background(palette.inputBg)
                         .clickable { onCreateServerClick() }
@@ -216,16 +216,36 @@ fun ServerRail(
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = "Ajouter un serveur",
-                        tint = DiscordGreen,
-                        modifier = Modifier.size(26.dp)
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Explore public servers catalog
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(palette.inputBg)
+                        .clickable { onExploreServersClick() }
+                        .testTag("explore_servers_button"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Explore,
+                        contentDescription = "Découvrir les serveurs publics",
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .background(palette.inputBg)
                         .clickable { onCreateFolderClick() }
@@ -235,37 +255,17 @@ fun ServerRail(
                     Icon(
                         imageVector = Icons.Default.CreateNewFolder,
                         contentDescription = "Créer un dossier de serveurs",
-                        tint = DiscordBlurple,
-                        modifier = Modifier.size(22.dp)
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(19.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Explore public servers catalog
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(palette.accent.copy(alpha = 0.2f))
-                        .clickable { onExploreServersClick() }
-                        .testTag("explore_servers_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Explore,
-                        contentDescription = "Découvrir les serveurs publics",
-                        tint = palette.accent,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Join server by invite code
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .background(palette.inputBg)
                         .clickable { onJoinServerClick() }
@@ -275,20 +275,25 @@ fun ServerRail(
                     Icon(
                         imageVector = Icons.Default.GroupAdd,
                         contentDescription = "Rejoindre par code d'invitation",
-                        tint = DiscordGreen,
-                        modifier = Modifier.size(20.dp)
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(19.dp)
                     )
                 }
-            }
 
-            // Orbs Shop button
-            item {
-                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(
+                    modifier = Modifier
+                        .padding(vertical = 8.dp)
+                        .width(28.dp),
+                    thickness = 1.dp,
+                    color = palette.border
+                )
+
+                // Orbs Shop button
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
-                        .background(Brush.linearGradient(listOf(Color(0xFF5865F2), Color(0xFFEB459E))))
+                        .background(palette.inputBg)
                         .clickable { onOpenOrbsShop() }
                         .testTag("server_rail_orbs_shop"),
                     contentAlignment = Alignment.Center
@@ -296,16 +301,16 @@ fun ServerRail(
                     Icon(
                         imageVector = Icons.Default.AutoAwesome,
                         contentDescription = "Boutique & Quêtes Orbs",
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(19.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
                         .background(palette.inputBg)
                         .clickable { onOpenBotsDashboard() }
@@ -315,18 +320,18 @@ fun ServerRail(
                     Icon(
                         imageVector = Icons.Default.SmartToy,
                         contentDescription = "Bots & Automations RAVEN",
-                        tint = DiscordBlurple,
-                        modifier = Modifier.size(22.dp)
+                        tint = palette.textSecondary,
+                        modifier = Modifier.size(19.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .clip(CircleShape)
-                        .background(Brush.linearGradient(listOf(Color(0xFF7C3AED), Color(0xFF2563EB))))
+                        .background(palette.inputBg)
                         .clickable { onOpenAiAssistant() }
                         .testTag("server_rail_ai_assistant"),
                     contentAlignment = Alignment.Center
@@ -334,38 +339,38 @@ fun ServerRail(
                     Icon(
                         imageVector = Icons.Default.AutoAwesome,
                         contentDescription = "Assistant RAVEN AI",
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
+                        tint = DiscordBlurple,
+                        modifier = Modifier.size(19.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .testTag("server_rail_stories_button"),
                     contentAlignment = Alignment.Center
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(44.dp)
                             .clip(CircleShape)
-                            .background(Brush.linearGradient(listOf(Color(0xFFF97316), Color(0xFFEB459E))))
+                            .background(palette.inputBg)
                             .clickable { onOpenStories() },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.AutoStories,
                             contentDescription = "Stories RAVEN",
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
+                            tint = palette.textSecondary,
+                            modifier = Modifier.size(19.dp)
                         )
                     }
                     if (unseenStoriesCount > 0) {
                         Box(
                             modifier = Modifier
-                                .size(18.dp)
+                                .size(17.dp)
                                 .align(Alignment.TopEnd)
                                 .clip(CircleShape)
                                 .background(DiscordRed),
@@ -374,7 +379,7 @@ fun ServerRail(
                             Text(
                                 text = unseenStoriesCount.toString(),
                                 color = Color.White,
-                                fontSize = 10.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -401,8 +406,8 @@ private fun ServerRailIconButton(
         val bgCol = if (isSelected) DiscordBlurple else Color(if (themeAccent != 0xFF5865F2L) themeAccent else server.iconBgColor)
         Box(
             modifier = Modifier
-                .size(46.dp)
-                .clip(if (isSelected) RoundedCornerShape(16.dp) else CircleShape)
+                .size(44.dp)
+                .clip(if (isSelected) RoundedCornerShape(14.dp) else CircleShape)
                 .background(bgCol),
             contentAlignment = Alignment.Center
         ) {
@@ -419,17 +424,17 @@ private fun ServerRailIconButton(
                     imageVector = resolveCatalogIconVector(presetKey),
                     contentDescription = server.name,
                     tint = Color.White,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             } else {
                 val iconKeys = listOf("game", "code", "rocket", "star", "shield", "bolt", "headset")
                 if (iconKeys.contains(server.iconText.lowercase())) {
-                    AppStatusIcon(iconKey = server.iconText, size = 22.dp, tint = Color.White)
+                    AppStatusIcon(iconKey = server.iconText, size = 20.dp, tint = Color.White)
                 } else {
                     Text(
                         text = server.iconText,
                         color = Color.White,
-                        fontSize = if (server.iconText.length > 2) 14.sp else 17.sp,
+                        fontSize = if (server.iconText.length > 2) 13.sp else 16.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }

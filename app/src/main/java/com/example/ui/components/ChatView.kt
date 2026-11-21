@@ -258,7 +258,7 @@ fun ChatView(
         modifier = modifier.fillMaxSize(),
         containerColor = palette.chatBg,
         topBar = {
-            Column(modifier = Modifier.background(palette.sidebarBg)) {
+            Column(modifier = Modifier.background(palette.chatBg)) {
                 TopAppBar(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -403,7 +403,7 @@ fun ChatView(
                             Icon(
                                 imageVector = Icons.Default.Poll,
                                 contentDescription = "Sondages avancés",
-                                tint = Color(0xFFEB459E)
+                                tint = palette.textSecondary
                             )
                         }
 
@@ -414,7 +414,7 @@ fun ChatView(
                             Icon(
                                 imageVector = Icons.Default.AutoAwesome,
                                 contentDescription = "Ouvrir RAVEN AI",
-                                tint = Color(0xFFA855F7)
+                                tint = palette.textSecondary
                             )
                         }
 
@@ -429,7 +429,7 @@ fun ChatView(
                             )
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.sidebarBg)
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.chatBg)
                 )
 
                 // Search field bar
@@ -512,14 +512,14 @@ fun ChatView(
                     }
                 }
 
-                HorizontalDivider(color = DiscordDarkBorder, thickness = 1.dp)
+                HorizontalDivider(color = palette.border, thickness = 1.dp)
             }
         },
         bottomBar = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(DiscordDarkChat)
+                    .background(palette.chatBg)
             ) {
                 TypingIndicatorBar(typingUserNames = typingUsers)
 
@@ -900,164 +900,44 @@ fun ChatView(
                     }
                 }
 
-                // Input bar
+                // Input bar — Discord unified rounded composer box
                 if (!isRecordingAudio) {
                     val canCompose = !channel.isReadOnly
-                    Row(
+                    Surface(
+                        color = if (canCompose) palette.inputBg else palette.inputBg.copy(alpha = 0.55f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, palette.border),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
                     ) {
-                        // Discord "+" Tray button
-                        Box(
+                        Row(
                             modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(if (isAttachmentTrayOpen) DiscordBlurple else DiscordDarkInput)
-                                .clickable(enabled = canCompose) { isAttachmentTrayOpen = !isAttachmentTrayOpen }
-                                .testTag("chat_plus_tray_button"),
-                            contentAlignment = Alignment.Center
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = if (isAttachmentTrayOpen) Icons.Default.Close else Icons.Default.Add,
-                                contentDescription = "Plus d'actions",
-                                tint = if (isAttachmentTrayOpen) Color.White else DiscordTextLight,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(6.dp))
-
-                        // Stickers quick button
-                        Box(
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(DiscordDarkInput)
-                                .clickable(enabled = canCompose) { showStickerPicker = true }
-                                .testTag("chat_quick_sticker_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.AutoAwesome,
-                                contentDescription = "Envoyer un Sticker",
-                                tint = DiscordAmber,
-                                modifier = Modifier.size(19.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        // Text Field
-                        val dispatchChatInput = {
-                            if (canCompose && slowmodeRemainingSec == 0 && inputText.isNotBlank()) {
-                                val handledSlash = if (inputText.trim().startsWith("/")) {
-                                    onExecuteSlashCommand(inputText)
-                                } else false
-                                if (!handledSlash) {
-                                    onSendMessage(inputText, null, null, 0)
-                                }
-                                inputText = ""
-                                onDraftChange("")
-                                isEmojiBarOpen = false
-                                isAttachmentTrayOpen = false
-                            }
-                        }
-
-                        OutlinedTextField(
-                            value = inputText,
-                            onValueChange = {
-                                inputText = it
-                                onDraftChange(it)
-                                if (it.isNotBlank()) onTyping()
-                                if (sendBlockedReason != null) onDismissBlockedReason()
-                            },
-                            enabled = canCompose,
-                            placeholder = {
-                                Text(
-                                    text = when {
-                                        channel.isReadOnly -> "Salon en lecture seule"
-                                        slowmodeRemainingSec > 0 -> "Slowmode (${slowmodeRemainingSec}s)..."
-                                        else -> "Envoyer dans #${channel.name}"
-                                    },
-                                    color = DiscordTextMuted,
-                                    fontSize = 14.sp
-                                )
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .onPreviewKeyEvent { keyEvent ->
-                                    val isEnterKey = keyEvent.key == Key.Enter || keyEvent.key == Key.NumPadEnter
-                                    if (platform.supportsEnterToSend &&
-                                        isEnterKey &&
-                                        keyEvent.type == KeyEventType.KeyDown &&
-                                        !keyEvent.isShiftPressed &&
-                                        !keyEvent.isCtrlPressed &&
-                                        !keyEvent.isAltPressed
-                                    ) {
-                                        dispatchChatInput()
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                                .testTag("chat_message_input"),
-                            shape = RoundedCornerShape(20.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = DiscordDarkInput,
-                                unfocusedContainerColor = DiscordDarkInput,
-                                disabledContainerColor = DiscordDarkInput.copy(alpha = 0.5f),
-                                focusedBorderColor = Color.Transparent,
-                                unfocusedBorderColor = Color.Transparent,
-                                disabledBorderColor = Color.Transparent,
-                                focusedTextColor = DiscordTextWhite,
-                                unfocusedTextColor = DiscordTextLight
-                            ),
-                            trailingIcon = {
-                                IconButton(
-                                    onClick = { isEmojiBarOpen = !isEmojiBarOpen },
-                                    enabled = canCompose,
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.SentimentSatisfied,
-                                        contentDescription = "Emoji",
-                                        tint = if (isEmojiBarOpen) DiscordBlurple else DiscordTextMuted,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            },
-                            maxLines = 4
-                        )
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        if (inputText.isBlank()) {
-                            // Mic button to record voice note
-                            IconButton(
-                                onClick = {
-                                    val started = audioRecorder.startRecording()
-                                    if (started) isRecordingAudio = true
-                                },
-                                enabled = canCompose && slowmodeRemainingSec == 0,
+                            // Discord "+" Tray button
+                            Box(
                                 modifier = Modifier
-                                    .size(38.dp)
+                                    .size(34.dp)
                                     .clip(CircleShape)
-                                    .background(DiscordDarkInput)
-                                    .testTag("chat_voice_record_button")
+                                    .background(if (isAttachmentTrayOpen) DiscordBlurple else Color.Transparent)
+                                    .clickable(enabled = canCompose) { isAttachmentTrayOpen = !isAttachmentTrayOpen }
+                                    .testTag("chat_plus_tray_button"),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Mic,
-                                    contentDescription = "Enregistrer une note vocale",
-                                    tint = DiscordTextLight,
-                                    modifier = Modifier.size(20.dp)
+                                    imageVector = if (isAttachmentTrayOpen) Icons.Default.Close else Icons.Default.AddCircle,
+                                    contentDescription = "Plus d'actions",
+                                    tint = if (isAttachmentTrayOpen) Color.White else palette.textSecondary,
+                                    modifier = Modifier.size(21.dp)
                                 )
                             }
-                        } else {
-                            // Send text / slash command button
-                            IconButton(
-                                onClick = {
+
+                            // Text Field
+                            val dispatchChatInput = {
+                                if (canCompose && slowmodeRemainingSec == 0 && inputText.isNotBlank()) {
                                     val handledSlash = if (inputText.trim().startsWith("/")) {
                                         onExecuteSlashCommand(inputText)
                                     } else false
@@ -1068,12 +948,123 @@ fun ChatView(
                                     onDraftChange("")
                                     isEmojiBarOpen = false
                                     isAttachmentTrayOpen = false
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = inputText,
+                                onValueChange = {
+                                    inputText = it
+                                    onDraftChange(it)
+                                    if (it.isNotBlank()) onTyping()
+                                    if (sendBlockedReason != null) onDismissBlockedReason()
                                 },
-                                enabled = canCompose && slowmodeRemainingSec == 0,
+                                enabled = canCompose,
+                                placeholder = {
+                                    Text(
+                                        text = when {
+                                            channel.isReadOnly -> "Salon en lecture seule"
+                                            slowmodeRemainingSec > 0 -> "Slowmode (${slowmodeRemainingSec}s)..."
+                                            else -> "Envoyer un message dans #${channel.name}"
+                                        },
+                                        color = palette.textMuted,
+                                        fontSize = 14.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .onPreviewKeyEvent { keyEvent ->
+                                        val isEnterKey = keyEvent.key == Key.Enter || keyEvent.key == Key.NumPadEnter
+                                        if (platform.supportsEnterToSend &&
+                                            isEnterKey &&
+                                            keyEvent.type == KeyEventType.KeyDown &&
+                                            !keyEvent.isShiftPressed &&
+                                            !keyEvent.isCtrlPressed &&
+                                            !keyEvent.isAltPressed
+                                        ) {
+                                            dispatchChatInput()
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                    .testTag("chat_message_input"),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    disabledContainerColor = Color.Transparent,
+                                    focusedBorderColor = Color.Transparent,
+                                    unfocusedBorderColor = Color.Transparent,
+                                    disabledBorderColor = Color.Transparent,
+                                    focusedTextColor = palette.textPrimary,
+                                    unfocusedTextColor = palette.textPrimary
+                                ),
+                                maxLines = 4
+                            )
+
+                            // Stickers quick button
+                            IconButton(
+                                onClick = { showStickerPicker = true },
+                                enabled = canCompose,
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .testTag("chat_quick_sticker_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = "Envoyer un Sticker",
+                                    tint = palette.textSecondary,
+                                    modifier = Modifier.size(19.dp)
+                                )
+                            }
+
+                            // Emoji button
+                            IconButton(
+                                onClick = { isEmojiBarOpen = !isEmojiBarOpen },
+                                enabled = canCompose,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SentimentSatisfied,
+                                    contentDescription = "Emoji",
+                                    tint = if (isEmojiBarOpen) DiscordBlurple else palette.textSecondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(4.dp))
+
+                            if (inputText.isBlank()) {
+                                // Mic button to record voice note
+                                IconButton(
+                                    onClick = {
+                                        val started = audioRecorder.startRecording()
+                                        if (started) isRecordingAudio = true
+                                    },
+                                    enabled = canCompose && slowmodeRemainingSec == 0,
                                     modifier = Modifier
-                                        .size(38.dp)
+                                        .size(34.dp)
+                                        .testTag("chat_voice_record_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Mic,
+                                        contentDescription = "Enregistrer une note vocale",
+                                        tint = palette.textSecondary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            } else {
+                                // Send text / slash command button
+                                IconButton(
+                                    onClick = dispatchChatInput,
+                                    enabled = canCompose && slowmodeRemainingSec == 0,
+                                    modifier = Modifier
+                                        .size(34.dp)
                                         .clip(CircleShape)
-                                        .background(if (canCompose && slowmodeRemainingSec == 0) DiscordBlurple else DiscordDarkInput)
+                                        .background(if (canCompose && slowmodeRemainingSec == 0) DiscordBlurple else palette.inputBg)
                                         .desktopHoverPointer(platform.isPc)
                                         .testTag("chat_send_button")
                                 ) {
@@ -1081,17 +1072,18 @@ fun ChatView(
                                         imageVector = Icons.AutoMirrored.Filled.Send,
                                         contentDescription = "Envoyer",
                                         tint = Color.White,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier.size(17.dp)
                                     )
                                 }
                             }
                         }
+                    }
                     if (platform.supportsEnterToSend && canCompose) {
                         Text(
                             text = "Entrée pour envoyer • Maj+Entrée nouvelle ligne • Clic droit sur un message pour les options",
                             color = palette.textMuted,
                             fontSize = 10.sp,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
+                            modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 6.dp)
                         )
                     }
                 }
