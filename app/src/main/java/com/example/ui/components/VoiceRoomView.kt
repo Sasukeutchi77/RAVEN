@@ -669,7 +669,7 @@ fun VoiceParticipantCard(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            if (hasHardwareVideo && activeTrack != null && eglContext != null) {
+            if (activeTrack != null && eglContext != null && (isCameraOn || isRemoteScreenSharing)) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     AndroidView(
                         factory = { ctx ->

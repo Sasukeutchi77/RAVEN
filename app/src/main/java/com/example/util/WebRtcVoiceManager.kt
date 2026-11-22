@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -458,7 +459,24 @@ class WebRtcVoiceManager(
     fun setSpeakerphoneEnabled(enabled: Boolean) {
         isSpeakerphoneOnState = enabled
         try {
-            audioManager?.isSpeakerphoneOn = enabled
+            val manager = audioManager
+            if (manager != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (enabled) {
+                        val speaker = manager.availableCommunicationDevices.firstOrNull {
+                            it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                        }
+                        if (speaker != null) {
+                            manager.setCommunicationDevice(speaker)
+                        }
+                    } else {
+                        manager.clearCommunicationDevice()
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    manager.isSpeakerphoneOn = enabled
+                }
+            }
         } catch (_: Throwable) {
         }
         _sessionState.value = _sessionState.value.copy(isSpeakerphoneOn = enabled)

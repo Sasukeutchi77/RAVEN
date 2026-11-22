@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import android.app.Activity
+import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
@@ -27,7 +28,6 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
-import com.example.R
 import com.example.model.ConnectedDevice
 import com.example.model.PendingSensitiveConfirmation
 import com.example.ui.theme.*
@@ -39,6 +39,12 @@ import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+
+internal fun resolveDefaultWebClientId(context: Context): String? {
+    val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+    if (resId == 0) return null
+    return runCatching { context.getString(resId) }.getOrNull()?.takeIf { it.isNotBlank() }
+}
 
 @Composable
 fun SensitiveActionConfirmationDialog(
@@ -55,8 +61,10 @@ fun SensitiveActionConfirmationDialog(
     val palette = ravenPalette()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val googleWebClientId = remember(context) { resolveDefaultWebClientId(context) }
     var pinInput by remember(pending) { mutableStateOf("") }
     var isReauthLoading by remember(pending) { mutableStateOf(false) }
+    var localReauthError by remember(pending) { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -99,8 +107,9 @@ fun SensitiveActionConfirmationDialog(
                         )
                     }
                 }
-                if (!errorMessage.isNullOrBlank()) {
-                    Text(errorMessage, color = DiscordRed, fontSize = 12.sp)
+                val displayedError = localReauthError ?: errorMessage
+                if (!displayedError.isNullOrBlank()) {
+                    Text(displayedError, color = DiscordRed, fontSize = 12.sp)
                 }
 
                 if (hasSecurityPinConfigured) {
@@ -130,11 +139,16 @@ fun SensitiveActionConfirmationDialog(
                 if (isFirebaseSignedIn) {
                     OutlinedButton(
                         onClick = {
+                            val clientId = googleWebClientId
+                            if (clientId == null) {
+                                localReauthError = "Ré-authentification Google indisponible : configuration Firebase (google-services.json) manquante."
+                                return@OutlinedButton
+                            }
+                            localReauthError = null
                             isReauthLoading = true
                             scope.launch {
                                 try {
                                     val cm = CredentialManager.create(context)
-                                    val clientId = context.getString(R.string.default_web_client_id)
                                     val opt = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
                                     val req = GetCredentialRequest.Builder().addCredentialOption(opt).build()
                                     val activity = context as? Activity
@@ -168,7 +182,7 @@ fun SensitiveActionConfirmationDialog(
                                 }
                             }
                         },
-                        enabled = !isReauthLoading,
+                        enabled = !isReauthLoading && googleWebClientId != null,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("sensitive_confirm_google_btn")
@@ -181,6 +195,13 @@ fun SensitiveActionConfirmationDialog(
                             Spacer(modifier = Modifier.width(8.dp))
                         }
                         Text("Ré-authentifier avec Google")
+                    }
+                    if (googleWebClientId == null) {
+                        Text(
+                            text = "Ré-authentification Google désactivée : configuration Firebase (google-services.json) absente.",
+                            color = palette.textMuted,
+                            fontSize = 11.sp
+                        )
                     }
                 }
 

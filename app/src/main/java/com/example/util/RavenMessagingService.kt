@@ -12,6 +12,7 @@ import com.google.firebase.messaging.RemoteMessage
 
 class RavenMessagingService : FirebaseMessagingService() {
 
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onNewToken(token: String) {
         super.onNewToken(token)
         try {

@@ -33,7 +33,6 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import coil.compose.AsyncImage
-import com.example.R
 import com.example.model.User
 import com.example.model.UserRole
 import com.example.model.UserStatus
@@ -100,10 +99,12 @@ fun UserProfileDialog(
     var showCloudinaryDialog by remember { mutableStateOf(false) }
     var showStatusPicker by remember { mutableStateOf(false) }
 
+    val googleWebClientId = remember(context) { resolveDefaultWebClientId(context) }
     var authUser by remember {
         mutableStateOf(try { Firebase.auth.currentUser } catch (e: Exception) { null })
     }
     var isAuthLoading by remember { mutableStateOf(false) }
+    var authStatusMessage by remember { mutableStateOf<String?>(null) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -778,10 +779,15 @@ fun UserProfileDialog(
                             if (authUser == null) {
                                 Button(
                                     onClick = {
+                                        val clientId = googleWebClientId
+                                        if (clientId == null) {
+                                            authStatusMessage = "Connexion Google indisponible : configuration Firebase (google-services.json) absente."
+                                            return@Button
+                                        }
+                                        authStatusMessage = null
                                         isAuthLoading = true
                                         coroutineScope.launch {
                                             try {
-                                                val clientId = context.getString(R.string.default_web_client_id)
                                                 val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
                                                 val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
                                                 val result = credentialManager.getCredential(context as Activity, request)
@@ -797,12 +803,13 @@ fun UserProfileDialog(
                                                 Log.w("Auth", "User cancelled Google sign in", e)
                                             } catch (e: Exception) {
                                                 Log.e("Auth", "Sign in error", e)
+                                                authStatusMessage = "Échec de connexion Google : ${e.localizedMessage ?: "erreur inconnue"}"
                                             } finally {
                                                 isAuthLoading = false
                                             }
                                         }
                                     },
-                                    enabled = !isAuthLoading,
+                                    enabled = !isAuthLoading && googleWebClientId != null,
                                     colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                                     modifier = Modifier.height(34.dp)
@@ -824,6 +831,21 @@ fun UserProfileDialog(
                                     Text("Déconnexion", color = DiscordRed, fontSize = 12.sp)
                                 }
                             }
+                        }
+                        if (authUser == null && googleWebClientId == null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Connexion Google désactivée : fichier google-services.json (OAuth Web) absent.",
+                                color = DiscordTextMuted,
+                                fontSize = 11.sp
+                            )
+                        } else if (!authStatusMessage.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = authStatusMessage.orEmpty(),
+                                color = DiscordRed,
+                                fontSize = 11.sp
+                            )
                         }
                     }
                 }
