@@ -147,7 +147,11 @@ data class Server(
         "Aucun spam, lien suspect ou auto-promotion abusive.",
         "Utilisez les salons adaptés à chaque sujet."
     ),
-    val customization: ServerCustomizationSettings = ServerCustomizationSettings()
+    val customization: ServerCustomizationSettings = ServerCustomizationSettings(),
+    val isClosed: Boolean = false,
+    val closedByUid: String? = null,
+    val closedByName: String? = null,
+    val closedAtMs: Long? = null
 )
 
 data class DirectConversation(

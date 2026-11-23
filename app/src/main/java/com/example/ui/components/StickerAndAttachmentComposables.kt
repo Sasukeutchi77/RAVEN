@@ -348,7 +348,7 @@ fun SlashCommandMenu(
     val palette = ravenPalette()
     val matching = remember(query, extraBotCommands) {
         val cmdPrefix = query.substringBefore(" ").lowercase()
-        (SlashCommandCatalog.commands + AiSlashCommandCatalog.commands + extraBotCommands)
+        (SlashCommandCatalog.commands + extraBotCommands)
             .distinctBy { it.command.lowercase() }
             .filter {
                 it.command.lowercase().startsWith(cmdPrefix) || cmdPrefix == "/"

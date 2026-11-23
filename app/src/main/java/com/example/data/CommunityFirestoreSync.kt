@@ -25,9 +25,12 @@ internal object CommunityFirestoreSync {
         val themeMap = hashMapOf<String, Any>(
             "accentColorHex" to theme.accentColorHex,
             "secondaryColorHex" to theme.secondaryColorHex,
-            "surfaceStyle" to theme.surfaceStyle.name
+            "surfaceStyle" to theme.surfaceStyle.name,
+            "backgroundOpacity" to theme.backgroundOpacity.toDouble()
         ).apply {
             theme.iconPresetKey?.takeIf { it.isNotBlank() }?.let { put("iconPresetKey", it) }
+            theme.backgroundThemeId?.takeIf { it.isNotBlank() }?.let { put("backgroundThemeId", it) }
+            theme.backgroundImageUrl?.takeIf { it.isNotBlank() }?.let { put("backgroundImageUrl", it) }
         }
 
         val welcomeMap = hashMapOf<String, Any>(
@@ -79,6 +82,7 @@ internal object CommunityFirestoreSync {
             "boostLevel" to srv.boostLevel,
             "isPublic" to srv.isPublic,
             "isVerified" to srv.isVerified,
+            "isClosed" to srv.isClosed,
             "categoryTag" to srv.categoryTag,
             "description" to srv.description,
             "rulesGuidelines" to srv.rulesGuidelines,
@@ -119,6 +123,9 @@ internal object CommunityFirestoreSync {
             srv.customBannerColorHex?.let { put("customBannerColorHex", it) }
             srv.imageUrl?.takeIf { it.isNotBlank() }?.let { put("imageUrl", it) }
             srv.bannerUrl?.takeIf { it.isNotBlank() }?.let { put("bannerUrl", it) }
+            srv.closedByUid?.takeIf { it.isNotBlank() }?.let { put("closedByUid", it) }
+            srv.closedByName?.takeIf { it.isNotBlank() }?.let { put("closedByName", it) }
+            srv.closedAtMs?.let { put("closedAtMs", it) }
         }
     }
 
@@ -242,6 +249,10 @@ internal object CommunityFirestoreSync {
         val uniqueHandle = doc.getString("uniqueHandle") ?: ""
         val isPublic = doc.getBoolean("isPublic") ?: false
         val isVerified = doc.getBoolean("isVerified") ?: false
+        val isClosed = doc.getBoolean("isClosed") ?: false
+        val closedByUid = doc.getString("closedByUid")
+        val closedByName = doc.getString("closedByName")
+        val closedAtMs = doc.getLong("closedAtMs")
         val categoryTag = doc.getString("categoryTag") ?: "Communauté"
         val description = doc.getString("description") ?: "Communauté Raven"
         val rulesGuidelines = doc.getString("rulesGuidelines") ?: "Respect, entraide et bienveillance."
@@ -301,7 +312,10 @@ internal object CommunityFirestoreSync {
             surfaceStyle = (themeRaw?.get("surfaceStyle") as? String)?.let { key ->
                 ServerThemeSurfaceStyle.entries.find { it.name == key }
             } ?: ServerThemeSurfaceStyle.DARK_SLATE,
-            iconPresetKey = themeRaw?.get("iconPresetKey") as? String
+            iconPresetKey = themeRaw?.get("iconPresetKey") as? String,
+            backgroundThemeId = (themeRaw?.get("backgroundThemeId") as? String)?.takeIf { it.isNotBlank() },
+            backgroundImageUrl = (themeRaw?.get("backgroundImageUrl") as? String)?.takeIf { it.isNotBlank() },
+            backgroundOpacity = ((themeRaw?.get("backgroundOpacity") as? Number)?.toFloat() ?: 0.50f).coerceIn(0.15f, 0.90f)
         )
 
         val welcomeRaw = doc.get("welcomeConfig") as? Map<String, Any?>
@@ -368,6 +382,10 @@ internal object CommunityFirestoreSync {
             boostLevel = boostLevel,
             isPublic = isPublic,
             isVerified = isVerified,
+            isClosed = isClosed,
+            closedByUid = closedByUid,
+            closedByName = closedByName,
+            closedAtMs = closedAtMs,
             categoryTag = categoryTag,
             description = description,
             rulesGuidelines = rulesGuidelines,

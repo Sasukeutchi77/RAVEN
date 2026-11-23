@@ -63,7 +63,10 @@ class ServerCustomizationRepository(
         accentColorHex: Long,
         secondaryColorHex: Long,
         surfaceStyle: ServerThemeSurfaceStyle,
-        categoryTag: String
+        categoryTag: String,
+        backgroundThemeId: String? = null,
+        backgroundImageUrl: String? = null,
+        backgroundOpacity: Float = 0.50f
     ): Result<Server> {
         val srv = chatRepo.servers.value.find { it.id == serverId }
             ?: return Result.failure(IllegalArgumentException("Serveur introuvable."))
@@ -84,7 +87,10 @@ class ServerCustomizationRepository(
             accentColorHex = accentColorHex,
             secondaryColorHex = secondaryColorHex,
             surfaceStyle = surfaceStyle,
-            iconPresetKey = iconPresetKey?.trim()?.ifBlank { null }
+            iconPresetKey = iconPresetKey?.trim()?.ifBlank { null },
+            backgroundThemeId = backgroundThemeId?.trim()?.ifBlank { null },
+            backgroundImageUrl = backgroundImageUrl?.trim()?.ifBlank { null },
+            backgroundOpacity = backgroundOpacity.coerceIn(0.15f, 0.90f)
         )
         val updated = srv.copy(
             name = cleanName,

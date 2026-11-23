@@ -61,8 +61,56 @@ data class ServerThemeConfig(
     val accentColorHex: Long = 0xFF5865F2L,
     val secondaryColorHex: Long = 0xFFEB459EL,
     val surfaceStyle: ServerThemeSurfaceStyle = ServerThemeSurfaceStyle.DARK_SLATE,
-    val iconPresetKey: String? = null
-)
+    val iconPresetKey: String? = null,
+    val backgroundThemeId: String? = null,
+    val backgroundImageUrl: String? = null,
+    val backgroundOpacity: Float = 0.50f
+) {
+    fun toChatBackgroundTheme(): ChatBackgroundTheme? {
+        val safeOpacity = backgroundOpacity.coerceIn(0.15f, 0.90f)
+        if (!backgroundImageUrl.isNullOrBlank()) {
+            return ChatBackgroundTheme(
+                id = "server_custom_image",
+                name = "Fond du serveur",
+                primaryColor = accentColorHex,
+                secondaryColor = secondaryColorHex,
+                imageUrl = backgroundImageUrl,
+                opacity = safeOpacity
+            )
+        }
+        val themeId = backgroundThemeId?.takeIf { it.isNotBlank() && it != "default" }
+        if (themeId != null) {
+            val preset = ShopCatalog.initialChatThemes.find { it.id == themeId }
+            if (preset != null) {
+                return preset.copy(opacity = safeOpacity)
+            }
+        }
+        if (surfaceStyle != ServerThemeSurfaceStyle.DARK_SLATE) {
+            return ChatBackgroundTheme(
+                id = "server_surface_${surfaceStyle.name.lowercase()}",
+                name = surfaceStyle.label,
+                primaryColor = surfaceStyle.previewBgHex,
+                secondaryColor = accentColorHex,
+                opacity = safeOpacity
+            )
+        }
+        return null
+    }
+}
+
+fun serverBackgroundTargetKey(serverId: String): String = "server_$serverId"
+
+fun resolveServerBackgroundTheme(
+    server: Server,
+    channelId: String? = null,
+    userBackgrounds: Map<String, ChatBackgroundTheme> = emptyMap()
+): ChatBackgroundTheme? {
+    if (!channelId.isNullOrBlank()) {
+        userBackgrounds[channelId]?.let { return it }
+    }
+    userBackgrounds[serverBackgroundTargetKey(server.id)]?.let { return it }
+    return server.customization.theme.toChatBackgroundTheme()
+}
 
 data class ServerWelcomeConfig(
     val welcomeEnabled: Boolean = true,

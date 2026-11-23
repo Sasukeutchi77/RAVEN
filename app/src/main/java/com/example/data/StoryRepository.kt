@@ -537,8 +537,8 @@ class StoryRepository(
         val story = _stories.value.find { it.id == storyId }
             ?: return Result.failure(NoSuchElementException("Story introuvable."))
         val uid = currentUid()
-        if (story.authorId != uid && !isCurrentUserModerator()) {
-            return Result.failure(SecurityException("Seul l'auteur ou un modérateur peut consulter la liste des vues."))
+        if (story.authorId != uid) {
+            return Result.failure(SecurityException("Seul l'auteur de la story peut voir qui l'a consultée."))
         }
 
         val db = chatRepo.firestoreDb()
@@ -572,6 +572,76 @@ class StoryRepository(
             }
         }
         return Result.success(story.viewers.sortedByDescending { it.viewedAtMs })
+    }
+
+    suspend fun toggleStoryLike(storyId: String): Result<StoryItem> {
+        val story = _stories.value.find { it.id == storyId }
+            ?: return Result.failure(NoSuchElementException("Story introuvable."))
+        val now = nowProvider()
+        if (story.isExpired(now)) {
+            cleanupExpiredStories()
+            return Result.failure(IllegalStateException("Cette story a expiré."))
+        }
+        val uid = currentUid()
+        if (story.authorId == uid) {
+            return Result.failure(SecurityException("Vous ne pouvez pas liker votre propre story."))
+        }
+        if (!story.canBeViewedBy(uid, blockedAuthorIds(), isCurrentUserModerator())) {
+            return Result.failure(SecurityException("Accès refusé à cette story."))
+        }
+
+        val alreadyLiked = story.hasBeenLikedBy(uid)
+        val nextLikedIds = if (alreadyLiked) {
+            story.likedByIds.filterNot { it == uid }
+        } else {
+            (story.likedByIds + uid).distinct()
+        }
+        val nextLikesCount = if (alreadyLiked) {
+            (story.likesCount - 1).coerceAtLeast(nextLikedIds.size)
+        } else {
+            maxOf(story.likesCount + 1, nextLikedIds.size)
+        }
+        val updatedStory = story.copy(
+            likedByIds = nextLikedIds,
+            likesCount = nextLikesCount
+        )
+
+        val db = chatRepo.firestoreDb()
+        val authUser = chatRepo.authInstance()?.currentUser
+        if (db != null && authUser != null && !storyId.startsWith("story_demo_")) {
+            val cloudResult = withContext(Dispatchers.IO) {
+                try {
+                    val cloudLikedIds = if (alreadyLiked) {
+                        story.likedByIds.filterNot { it == authUser.uid }
+                    } else {
+                        (story.likedByIds + authUser.uid).distinct()
+                    }
+                    StoryFirestoreSync.toggleLikeBlocking(
+                        db = db,
+                        storyId = storyId,
+                        nextLikedByIds = cloudLikedIds,
+                        nextLikesCount = if (alreadyLiked) {
+                            (story.likesCount - 1).coerceAtLeast(0)
+                        } else {
+                            story.likesCount + 1
+                        }
+                    )
+                    Result.success(Unit)
+                } catch (e: Exception) {
+                    FirestoreErrorHandler.handleFirestoreError(e, OperationType.UPDATE, "stories/$storyId")
+                    Result.failure(e)
+                }
+            }
+            if (cloudResult.isFailure) {
+                return Result.failure(cloudResult.exceptionOrNull()!!)
+            }
+        }
+
+        synchronized(cloudStoriesMap) {
+            cloudStoriesMap[storyId] = updatedStory
+        }
+        _stories.value = _stories.value.map { if (it.id == storyId) updatedStory else it }
+        return Result.success(updatedStory)
     }
 
     suspend fun deleteStory(storyId: String): Result<Unit> {

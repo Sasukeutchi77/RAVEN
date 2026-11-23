@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import coil.compose.AsyncImage
 import com.example.data.CommunityPermissions
 import com.example.model.*
@@ -31,12 +32,14 @@ import com.example.ui.theme.*
 import com.example.ui.viewmodel.EventViewModel
 import com.example.ui.viewmodel.PollViewModel
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CommunityHomeView(
     server: Server,
     currentUser: User,
     unreadNotificationsCount: Int,
     showDrawerButton: Boolean,
+    applyTopInsets: Boolean = showDrawerButton,
     onToggleDrawer: () -> Unit,
     onOpenChannel: (Channel) -> Unit,
     onEditCommunity: () -> Unit,
@@ -45,6 +48,8 @@ fun CommunityHomeView(
     onOpenCategories: () -> Unit,
     onOpenNotifications: () -> Unit,
     onOpenAdminDashboard: () -> Unit = {},
+    onToggleServerClosed: (Boolean) -> Unit = {},
+    onAssignMemberRole: (uid: String, role: UserRole, customRoleId: String?) -> Unit = { _, _, _ -> },
     onLeaveCommunity: () -> Unit,
     onPublishAnnouncement: (title: String, content: String, isPinned: Boolean) -> Unit,
     onDeleteAnnouncement: (announcementId: String) -> Unit,
@@ -60,14 +65,19 @@ fun CommunityHomeView(
     onRequestNotificationPermission: () -> Unit = {},
     onJoinVoiceChannel: (Channel) -> Unit = {},
     onOpenEventsHub: () -> Unit = {},
+    serverBackground: ChatBackgroundTheme? = null,
+    onOpenServerBackground: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
+    val cardSurfaceColor = if (serverBackground != null) palette.cardBg.copy(alpha = 0.86f) else palette.cardBg
+    val headerSurfaceColor = if (serverBackground != null) palette.sidebarBg.copy(alpha = 0.88f) else palette.sidebarBg
     var selectedTab by remember { mutableIntStateOf(0) }
     var showAnnouncementDialog by remember { mutableStateOf(false) }
     var showEventDialog by remember { mutableStateOf(false) }
 
     val isOwner = CommunityPermissions.isOwner(server, currentUser.id)
+    val canToggleClosed = CommunityPermissions.canToggleServerClosed(server, currentUser.id)
     val canManageCommunity = CommunityPermissions.hasPermission(server, currentUser.id, RolePermission.MANAGE_COMMUNITY)
     val canManageRoles = CommunityPermissions.hasPermission(server, currentUser.id, RolePermission.MANAGE_ROLES)
     val canManageChannels = CommunityPermissions.hasPermission(server, currentUser.id, RolePermission.MANAGE_CHANNELS)
@@ -79,15 +89,51 @@ fun CommunityHomeView(
     val onlineCount = remember(server.members) { CommunityPermissions.onlineMembersCount(server) }
     val accentColor = Color(server.customBannerColorHex ?: server.iconBgColor)
 
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(palette.chatBg)
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
             .testTag("community_home_view")
     ) {
+        serverBackground?.let { bg ->
+            if (!bg.imageUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = bg.imageUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color(bg.primaryColor),
+                                    Color(bg.secondaryColor ?: bg.primaryColor)
+                                )
+                            )
+                        )
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = (0.78f - bg.opacity * 0.62f).coerceIn(0.16f, 0.78f)))
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (applyTopInsets) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                    else Modifier
+                )
+        ) {
         // Top App Header
-        Surface(color = palette.sidebarBg, shadowElevation = 2.dp) {
+        Surface(color = headerSurfaceColor, shadowElevation = 2.dp) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -117,6 +163,13 @@ fun CommunityHomeView(
                     if (server.uniqueHandle.isNotBlank()) {
                         Text("@${server.uniqueHandle}", color = accentColor, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
+                }
+                IconButton(onClick = onOpenServerBackground, modifier = Modifier.size(48.dp).testTag("community_home_background_btn")) {
+                    Icon(
+                        imageVector = Icons.Default.Wallpaper,
+                        contentDescription = "Fond & thème du serveur",
+                        tint = if (serverBackground != null) accentColor else palette.textSecondary
+                    )
                 }
                 IconButton(onClick = onOpenNotifications, modifier = Modifier.size(48.dp).testTag("community_home_notif_btn")) {
                     BadgedBox(badge = { if (unreadNotificationsCount > 0) Badge { Text("$unreadNotificationsCount") } }) {
@@ -152,22 +205,36 @@ fun CommunityHomeView(
             }
         }
 
-        // Scrollable Tabs
+        // Scrollable Tabs with crisp contrast for both selected and unselected items
         ScrollableTabRow(
             selectedTabIndex = selectedTab,
-            containerColor = palette.sidebarBg,
+            containerColor = headerSurfaceColor,
             contentColor = accentColor,
-            edgePadding = 12.dp
+            edgePadding = 12.dp,
+            indicator = { tabPositions ->
+                if (selectedTab < tabPositions.size) {
+                    TabRowDefaults.SecondaryIndicator(
+                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTab]),
+                        color = accentColor
+                    )
+                }
+            },
+            divider = { HorizontalDivider(color = palette.border) }
         ) {
             listOf("Accueil", "Annonces", "Événements", "Membres", "Salons", "Sondages").forEachIndexed { idx, label ->
                 Tab(
                     selected = selectedTab == idx,
                     onClick = { selectedTab = idx },
+                    selectedContentColor = accentColor,
+                    unselectedContentColor = palette.textSecondary,
                     text = {
                         Text(
                             text = label,
+                            color = if (selectedTab == idx) accentColor else palette.textSecondary,
                             fontSize = 12.sp,
-                            fontWeight = if (selectedTab == idx) FontWeight.Bold else FontWeight.Medium
+                            fontWeight = if (selectedTab == idx) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     },
                     modifier = Modifier.testTag("community_tab_$idx")
@@ -369,48 +436,78 @@ fun CommunityHomeView(
             if (selectedTab == 0) {
                 item {
                     Surface(
-                        color = palette.cardBg,
+                        color = cardSurfaceColor,
                         shape = RoundedCornerShape(16.dp),
                         border = BorderStroke(1.dp, palette.border)
                     ) {
                         Column {
-                            Box(modifier = Modifier.fillMaxWidth().height(136.dp)) {
+                            Box(modifier = Modifier.fillMaxWidth().heightIn(min = 148.dp)) {
                                 if (!server.bannerUrl.isNullOrBlank()) {
                                     AsyncImage(
                                         model = server.bannerUrl,
                                         contentDescription = "Bannière de ${server.name}",
                                         contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
+                                        modifier = Modifier.matchParentSize()
                                     )
                                 } else {
                                     Box(
-                                        modifier = Modifier.fillMaxSize().background(
+                                        modifier = Modifier.matchParentSize().background(
                                             Brush.linearGradient(listOf(accentColor, accentColor.copy(alpha = 0.45f), palette.sidebarBg))
                                         )
                                     )
                                 }
-                                Surface(
-                                    color = Color.Black.copy(alpha = 0.55f),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.align(Alignment.TopEnd).padding(10.dp)
+                                Row(
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(10.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    if (server.isClosed) {
+                                        Surface(
+                                            color = DiscordRed.copy(alpha = 0.9f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Lock,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(
+                                                    text = "Fermé (Admins)",
+                                                    color = Color.White,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Surface(
+                                        color = Color.Black.copy(alpha = 0.55f),
+                                        shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        Icon(
-                                            imageVector = if (server.isPublic) Icons.Default.Public else Icons.Default.Lock,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(13.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = if (server.isPublic) "Publique" else "Privée",
-                                            color = Color.White,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (server.isPublic) Icons.Default.Public else Icons.Default.Lock,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = if (server.isPublic) "Publique" else "Privée",
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
                                     }
                                 }
 
@@ -423,7 +520,7 @@ fun CommunityHomeView(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Box(
-                                        modifier = Modifier.size(52.dp).clip(RoundedCornerShape(14.dp)).background(accentColor),
+                                        modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(accentColor),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         if (!server.imageUrl.isNullOrBlank()) {
@@ -440,7 +537,15 @@ fun CommunityHomeView(
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(server.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                                            Text(
+                                                text = server.name,
+                                                color = Color.White,
+                                                fontSize = 17.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false)
+                                            )
                                             if (server.isVerified) {
                                                 Spacer(modifier = Modifier.width(4.dp))
                                                 Icon(Icons.Default.Verified, contentDescription = "Vérifiée", tint = Color(0xFF00D4AA), modifier = Modifier.size(16.dp))
@@ -449,7 +554,9 @@ fun CommunityHomeView(
                                         Text(
                                             text = "${server.categoryTag} • ${if (server.uniqueHandle.isNotBlank()) "@${server.uniqueHandle}" else server.inviteCode}",
                                             color = Color.White.copy(alpha = 0.85f),
-                                            fontSize = 12.sp
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
                                 }
@@ -459,55 +566,114 @@ fun CommunityHomeView(
                                 Text(server.homeWelcomeMessage, color = palette.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                                 Text(server.description, color = palette.textSecondary, fontSize = 13.sp)
 
-                                // Live stats strip
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (server.isClosed) {
+                                    Surface(
+                                        color = DiscordRed.copy(alpha = 0.14f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        border = BorderStroke(1.dp, DiscordRed.copy(alpha = 0.35f)),
+                                        modifier = Modifier.fillMaxWidth().testTag("home_closed_server_banner")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(Icons.Default.Lock, contentDescription = null, tint = DiscordRed, modifier = Modifier.size(18.dp))
+                                            Text(
+                                                text = "Serveur fermé : seuls le créateur et les administrateurs peuvent écrire.",
+                                                color = palette.textPrimary,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Live stats strip (wrapping cleanly without squishing labels)
+                                FlowRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
                                     CommunityStatPill(
                                         dotColor = DiscordGreen,
-                                        label = "$onlineCount en ligne",
-                                        modifier = Modifier.weight(1f)
+                                        label = "$onlineCount en ligne"
                                     )
                                     CommunityStatPill(
                                         dotColor = accentColor,
-                                        label = "${server.members.size} membres",
-                                        modifier = Modifier.weight(1f)
+                                        label = "${server.members.size} membres"
                                     )
                                     CommunityStatPill(
                                         dotColor = DiscordAmber,
-                                        label = "${server.channels.size} salons",
-                                        modifier = Modifier.weight(1f)
+                                        label = "${server.channels.size} salons"
                                     )
                                 }
 
-                                // Staff quick tools row
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    if (canManageInvites) {
-                                        FilledTonalButton(
-                                            onClick = onOpenInvites,
-                                            modifier = Modifier.weight(1f).testTag("home_manage_invites_btn")
-                                        ) {
-                                            Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Invitations", fontSize = 11.sp)
+                                // Staff quick tools FlowRow (prevents vertical 1-letter wrapping on narrow phones)
+                                if (canManageInvites || canManageRoles || canManageChannels || canToggleClosed) {
+                                    FlowRow(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        if (canManageInvites) {
+                                            FilledTonalButton(
+                                                onClick = onOpenInvites,
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                                modifier = Modifier.defaultMinSize(minHeight = 44.dp).testTag("home_manage_invites_btn")
+                                            ) {
+                                                Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Invitations", fontSize = 12.sp, maxLines = 1, softWrap = false)
+                                            }
                                         }
-                                    }
-                                    if (canManageRoles) {
-                                        FilledTonalButton(
-                                            onClick = onOpenRolesMatrix,
-                                            modifier = Modifier.weight(1f).testTag("home_manage_roles_btn")
-                                        ) {
-                                            Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Rôles", fontSize = 11.sp)
+                                        if (canManageRoles) {
+                                            FilledTonalButton(
+                                                onClick = onOpenRolesMatrix,
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                                modifier = Modifier.defaultMinSize(minHeight = 44.dp).testTag("home_manage_roles_btn")
+                                            ) {
+                                                Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Rôles", fontSize = 12.sp, maxLines = 1, softWrap = false)
+                                            }
                                         }
-                                    }
-                                    if (canManageChannels) {
-                                        FilledTonalButton(
-                                            onClick = onOpenCategories,
-                                            modifier = Modifier.weight(1f).testTag("home_manage_channels_btn")
-                                        ) {
-                                            Icon(Icons.Default.Category, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Salons", fontSize = 11.sp)
+                                        if (canManageChannels) {
+                                            FilledTonalButton(
+                                                onClick = onOpenCategories,
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                                modifier = Modifier.defaultMinSize(minHeight = 44.dp).testTag("home_manage_channels_btn")
+                                            ) {
+                                                Icon(Icons.Default.Category, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Salons", fontSize = 12.sp, maxLines = 1, softWrap = false)
+                                            }
+                                        }
+                                        if (canToggleClosed) {
+                                            FilledTonalButton(
+                                                onClick = { onToggleServerClosed(!server.isClosed) },
+                                                colors = ButtonDefaults.filledTonalButtonColors(
+                                                    containerColor = if (server.isClosed) DiscordGreen.copy(alpha = 0.2f) else DiscordRed.copy(alpha = 0.16f),
+                                                    contentColor = if (server.isClosed) DiscordGreen else DiscordRed
+                                                ),
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                                modifier = Modifier.defaultMinSize(minHeight = 44.dp).testTag("home_toggle_server_closed_btn")
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (server.isClosed) Icons.Default.LockOpen else Icons.Default.Lock,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = if (server.isClosed) "Ouvrir le serveur" else "Fermer le serveur",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    softWrap = false
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -518,7 +684,7 @@ fun CommunityHomeView(
 
                 // General info & Rules card
                 item {
-                    Surface(color = palette.cardBg, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, palette.border)) {
+                    Surface(color = cardSurfaceColor, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, palette.border)) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                 Icon(Icons.Default.Gavel, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(18.dp))
@@ -555,7 +721,7 @@ fun CommunityHomeView(
                     item {
                         val latest = server.announcements.first()
                         Surface(
-                            color = palette.cardBg,
+                            color = cardSurfaceColor,
                             shape = RoundedCornerShape(14.dp),
                             border = BorderStroke(1.dp, accentColor.copy(alpha = 0.5f)),
                             modifier = Modifier.clickable { selectedTab = 1 }
@@ -591,7 +757,7 @@ fun CommunityHomeView(
                     }
                 } else {
                     items(server.announcements, key = { it.id }) { ann ->
-                        Surface(color = palette.cardBg, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, palette.border)) {
+                        Surface(color = cardSurfaceColor, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, palette.border)) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -643,7 +809,7 @@ fun CommunityHomeView(
                 } else {
                     items(server.events, key = { it.id }) { evt ->
                         val isGoing = currentUser.id in evt.interestedUserIds
-                        Surface(color = palette.cardBg, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, palette.border)) {
+                        Surface(color = cardSurfaceColor, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, palette.border)) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(evt.title, color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                                 Text(evt.description, color = palette.textSecondary, fontSize = 13.sp)
@@ -704,58 +870,130 @@ fun CommunityHomeView(
                         UserStatus.OFFLINE -> DiscordTextDark
                     }
                     Surface(
-                        color = palette.cardBg,
+                        color = cardSurfaceColor,
                         shape = RoundedCornerShape(12.dp),
                         border = BorderStroke(1.dp, palette.border),
                         modifier = Modifier.clickable { onMemberClick(member) }
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box {
-                                Box(
-                                    modifier = Modifier.size(38.dp).clip(CircleShape).background(Color(member.avatarColor)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(member.name.take(1), color = Color.White, fontWeight = FontWeight.Bold)
-                                }
-                                Box(
-                                    modifier = Modifier.size(11.dp).align(Alignment.BottomEnd).clip(CircleShape).background(statusColor)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(member.name, color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    val roleLabel = when {
-                                        isTargetOwner -> "Créateur"
-                                        member.customRoleId != null -> server.customRoles.find { it.id == member.customRoleId }?.name ?: role.title
-                                        else -> role.title
+                        Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box {
+                                    Box(
+                                        modifier = Modifier.size(38.dp).clip(CircleShape).background(Color(member.avatarColor)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(member.name.take(1), color = Color.White, fontWeight = FontWeight.Bold)
                                     }
-                                    Surface(color = accentColor.copy(alpha = 0.16f), shape = RoundedCornerShape(4.dp)) {
+                                    Box(
+                                        modifier = Modifier.size(11.dp).align(Alignment.BottomEnd).clip(CircleShape).background(statusColor)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
-                                            text = roleLabel,
-                                            color = accentColor,
-                                            fontSize = 10.sp,
+                                            text = member.name,
+                                            color = palette.textPrimary,
                                             fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            fontSize = 14.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
                                         )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        val roleLabel = when {
+                                            isTargetOwner -> "Créateur"
+                                            member.customRoleId != null -> server.customRoles.find { it.id == member.customRoleId }?.name ?: role.title
+                                            else -> role.title
+                                        }
+                                        Surface(
+                                            color = (if (isTargetOwner || role == UserRole.ADMIN) DiscordRed else accentColor).copy(alpha = 0.16f),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = roleLabel,
+                                                color = if (isTargetOwner || role == UserRole.ADMIN) DiscordRed else accentColor,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
                                     }
+                                    Text(
+                                        text = "${member.status.label}${if (member.isTimedOut) " • TIMEOUT" else ""}",
+                                        color = if (member.isTimedOut) DiscordRed else palette.textMuted,
+                                        fontSize = 11.sp
+                                    )
                                 }
-                                Text(
-                                    text = "${member.status.label}${if (member.isTimedOut) " • TIMEOUT" else ""}",
-                                    color = if (member.isTimedOut) DiscordRed else palette.textMuted,
-                                    fontSize = 11.sp
-                                )
                             }
-                            if (canModerate && !isTargetOwner && member.id != currentUser.id) {
-                                IconButton(onClick = { onTimeoutMember(member.id) }) {
-                                    Icon(Icons.Default.TimerOff, contentDescription = "Timeout", tint = DiscordAmber, modifier = Modifier.size(18.dp))
-                                }
-                                IconButton(onClick = { onKickMember(member.id) }) {
-                                    Icon(Icons.Default.PersonRemove, contentDescription = "Expulser", tint = DiscordRed, modifier = Modifier.size(18.dp))
+
+                            val showAdminToggle = isOwner && !isTargetOwner && member.id != currentUser.id
+                            val showModActions = canModerate && !isTargetOwner && member.id != currentUser.id && (role != UserRole.ADMIN || isOwner)
+                            if (showAdminToggle || showModActions) {
+                                FlowRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    if (showAdminToggle) {
+                                        val isCurrentlyAdmin = role == UserRole.ADMIN
+                                        FilledTonalButton(
+                                            onClick = {
+                                                onAssignMemberRole(
+                                                    member.id,
+                                                    if (isCurrentlyAdmin) UserRole.MEMBER else UserRole.ADMIN,
+                                                    null
+                                                )
+                                            },
+                                            colors = ButtonDefaults.filledTonalButtonColors(
+                                                containerColor = if (isCurrentlyAdmin) DiscordRed.copy(alpha = 0.15f) else accentColor.copy(alpha = 0.16f),
+                                                contentColor = if (isCurrentlyAdmin) DiscordRed else accentColor
+                                            ),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                            modifier = Modifier.defaultMinSize(minHeight = 40.dp).testTag("member_admin_toggle_${member.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isCurrentlyAdmin) Icons.Default.RemoveModerator else Icons.Default.AdminPanelSettings,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = if (isCurrentlyAdmin) "Retirer Admin" else "Nommer Admin",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
+                                    }
+                                    if (showModActions) {
+                                        OutlinedButton(
+                                            onClick = { onTimeoutMember(member.id) },
+                                            border = BorderStroke(1.dp, DiscordAmber),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                            modifier = Modifier.defaultMinSize(minHeight = 40.dp)
+                                        ) {
+                                            Icon(Icons.Default.TimerOff, contentDescription = "Timeout", tint = DiscordAmber, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(if (member.isTimedOut) "Lever Timeout" else "Timeout", color = DiscordAmber, fontSize = 11.sp, maxLines = 1, softWrap = false)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { onKickMember(member.id) },
+                                            border = BorderStroke(1.dp, DiscordRed),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                            modifier = Modifier.defaultMinSize(minHeight = 40.dp)
+                                        ) {
+                                            Icon(Icons.Default.PersonRemove, contentDescription = "Expulser", tint = DiscordRed, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Expulser", color = DiscordRed, fontSize = 11.sp, maxLines = 1, softWrap = false)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -792,7 +1030,7 @@ fun CommunityHomeView(
                     }
                     items(chList, key = { "home_ch_${it.id}" }) { ch ->
                         Surface(
-                            color = palette.cardBg,
+                            color = cardSurfaceColor,
                             shape = RoundedCornerShape(10.dp),
                             border = BorderStroke(1.dp, palette.border),
                             modifier = Modifier.clickable { onOpenChannel(ch) }
@@ -827,6 +1065,7 @@ fun CommunityHomeView(
                     }
                 }
             }
+        }
         }
         }
     }
@@ -906,13 +1145,20 @@ private fun CommunityStatPill(dotColor: Color, label: String, modifier: Modifier
         modifier = modifier
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
             Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(dotColor))
             Spacer(modifier = Modifier.width(6.dp))
-            Text(label, color = palette.textPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                text = label,
+                color = palette.textPrimary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                softWrap = false
+            )
         }
     }
 }

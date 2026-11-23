@@ -54,7 +54,10 @@ fun ServerAdminDashboardSheet(
         accentHex: Long,
         secondaryHex: Long,
         surfaceStyle: ServerThemeSurfaceStyle,
-        categoryTag: String
+        categoryTag: String,
+        backgroundThemeId: String?,
+        backgroundImageUrl: String?,
+        backgroundOpacity: Float
     ) -> Unit,
     onUpsertCategory: (categoryId: String?, name: String, isPrivate: Boolean, allowedRoleIds: List<String>) -> Unit,
     onMoveCategoryOrder: (categoryId: String, delta: Int) -> Unit,
@@ -84,6 +87,7 @@ fun ServerAdminDashboardSheet(
     onUpdateRulesAndVerification: (List<String>, String, Boolean, ServerVerificationLevel) -> Unit,
     onUpdateModerationConfig: (ServerModerationConfig) -> Unit,
     onUpdatePrivacyConfig: (Boolean, ServerPrivacyConfig) -> Unit,
+    onToggleServerClosed: (Boolean) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val palette = ravenPalette()
@@ -227,7 +231,8 @@ fun ServerAdminDashboardSheet(
                         isStrictAdmin = isStrictAdmin,
                         onSaveRulesAndVerification = onUpdateRulesAndVerification,
                         onSaveModeration = onUpdateModerationConfig,
-                        onSavePrivacy = onUpdatePrivacyConfig
+                        onSavePrivacy = onUpdatePrivacyConfig,
+                        onToggleServerClosed = onToggleServerClosed
                     )
                 }
             }
@@ -250,7 +255,10 @@ private fun AdminIdentityAndThemeTab(
         accentHex: Long,
         secondaryHex: Long,
         surfaceStyle: ServerThemeSurfaceStyle,
-        categoryTag: String
+        categoryTag: String,
+        backgroundThemeId: String?,
+        backgroundImageUrl: String?,
+        backgroundOpacity: Float
     ) -> Unit
 ) {
     val palette = ravenPalette()
@@ -269,6 +277,9 @@ private fun AdminIdentityAndThemeTab(
     var secondaryColorHex by remember(server.id) { mutableLongStateOf(theme.secondaryColorHex) }
     var surfaceStyle by remember(server.id) { mutableStateOf(theme.surfaceStyle) }
     var categoryTagInput by remember(server.id) { mutableStateOf(server.categoryTag) }
+    var backgroundThemeId by remember(server.id) { mutableStateOf(theme.backgroundThemeId) }
+    var backgroundImageUrl by remember(server.id) { mutableStateOf(theme.backgroundImageUrl.orEmpty()) }
+    var backgroundOpacity by remember(server.id) { mutableFloatStateOf(theme.backgroundOpacity.coerceIn(0.15f, 0.90f)) }
     var isUploading by remember { mutableStateOf(false) }
 
     val iconPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -287,6 +298,19 @@ private fun AdminIdentityAndThemeTab(
                 isUploading = true
                 val uploaded = CloudinaryHelper.uploadImage(context, uri)
                 if (uploaded.isNotBlank()) bannerUrlInput = uploaded
+                isUploading = false
+            }
+        }
+    }
+    val backgroundPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                isUploading = true
+                val persisted = CloudinaryHelper.persistImage(context, uri, subDir = "backgrounds")
+                if (persisted.isNotBlank()) {
+                    backgroundImageUrl = persisted
+                    backgroundThemeId = null
+                }
                 isUploading = false
             }
         }
@@ -459,6 +483,102 @@ private fun AdminIdentityAndThemeTab(
                             }
                         }
 
+                        Text("Fond officiel du serveur (Thèmes ou Galerie) :", color = palette.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            item {
+                                FilterChip(
+                                    selected = backgroundThemeId == null && backgroundImageUrl.isBlank(),
+                                    onClick = {
+                                        if (canEdit) {
+                                            backgroundThemeId = null
+                                            backgroundImageUrl = ""
+                                        }
+                                    },
+                                    label = { Text("Aucun", fontSize = 11.sp) }
+                                )
+                            }
+                            items(ShopCatalog.initialChatThemes.filter { it.id != "default" }, key = { "srv_bg_${it.id}" }) { preset ->
+                                val isSel = backgroundThemeId == preset.id && backgroundImageUrl.isBlank()
+                                Box(
+                                    modifier = Modifier
+                                        .width(92.dp)
+                                        .height(48.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Brush.linearGradient(listOf(Color(preset.primaryColor), Color(preset.secondaryColor ?: preset.primaryColor))))
+                                        .border(if (isSel) 2.dp else 1.dp, if (isSel) Color.White else palette.border, RoundedCornerShape(10.dp))
+                                        .clickable(enabled = canEdit) {
+                                            backgroundThemeId = preset.id
+                                            backgroundImageUrl = ""
+                                        }
+                                        .padding(6.dp)
+                                ) {
+                                    Text(
+                                        text = preset.name,
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.align(Alignment.BottomStart)
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            FilledTonalButton(
+                                onClick = { backgroundPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                                enabled = canEdit && !isUploading,
+                                modifier = Modifier.weight(1f).testTag("admin_pick_server_bg_btn")
+                            ) {
+                                Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (backgroundImageUrl.isNotBlank()) "Changer image de fond" else "Image depuis galerie", fontSize = 12.sp)
+                            }
+                            if (backgroundImageUrl.isNotBlank()) {
+                                OutlinedButton(
+                                    onClick = { backgroundImageUrl = "" },
+                                    enabled = canEdit
+                                ) {
+                                    Icon(Icons.Default.DeleteOutline, contentDescription = "Retirer fond", tint = DiscordRed, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+
+                        if (backgroundImageUrl.isNotBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(74.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .border(1.dp, palette.border, RoundedCornerShape(10.dp))
+                            ) {
+                                AsyncImage(
+                                    model = backgroundImageUrl,
+                                    contentDescription = "Aperçu fond serveur",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+
+                        if (!backgroundThemeId.isNullOrBlank() || backgroundImageUrl.isNotBlank()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Visibilité du fond", color = palette.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("${(backgroundOpacity * 100).toInt()}%", color = palette.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Slider(
+                                value = backgroundOpacity,
+                                onValueChange = { if (canEdit) backgroundOpacity = it },
+                                valueRange = 0.15f..0.90f,
+                                enabled = canEdit
+                            )
+                        }
+
                         Button(
                             onClick = {
                                 onSave(
@@ -472,7 +592,10 @@ private fun AdminIdentityAndThemeTab(
                                     accentColorHex,
                                     secondaryColorHex,
                                     surfaceStyle,
-                                    categoryTagInput
+                                    categoryTagInput,
+                                    backgroundThemeId,
+                                    backgroundImageUrl.ifBlank { null },
+                                    backgroundOpacity
                                 )
                             },
                             enabled = canEdit && nameInput.isNotBlank() && !isUploading,

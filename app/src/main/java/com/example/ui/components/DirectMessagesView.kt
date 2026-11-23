@@ -673,7 +673,7 @@ fun DirectMessagesView(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 1f - (theme.opacity * 0.45f)))
+                            .background(Color.Black.copy(alpha = (0.78f - theme.opacity * 0.62f).coerceIn(0.16f, 0.78f)))
                     )
                 }
 

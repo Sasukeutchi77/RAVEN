@@ -42,6 +42,12 @@ service cloud.firestore {
       );
     }
 
+    function isServerClosed(serverId) {
+      return serverExists(serverId) &&
+             ('isClosed' in serverDoc(serverId).data) &&
+             serverDoc(serverId).data.isClosed == true;
+    }
+
     function isCommunityMod(serverId) {
       return serverExists(serverId) &&
              ('moderatorIds' in serverDoc(serverId).data && request.auth.uid in serverDoc(serverId).data.moderatorIds);
@@ -193,45 +199,6 @@ service cloud.firestore {
              (!('isRead' in data) || data.isRead is bool);
     }
 
-    function isValidAiConversation(data, userId, conversationId) {
-      return data.id == conversationId &&
-             isValidId(conversationId) &&
-             data.userId == userId &&
-             data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
-             data.mode is string && data.mode in ['PERSONAL', 'SERVER'] &&
-             (!('serverId' in data) || data.serverId == null || isValidId(data.serverId)) &&
-             (!('serverName' in data) || data.serverName == null || (data.serverName is string && data.serverName.size() <= 80)) &&
-             (!('channelId' in data) || data.channelId == null || isValidId(data.channelId)) &&
-             (!('channelName' in data) || data.channelName == null || (data.channelName is string && data.channelName.size() <= 80)) &&
-             (!('modelName' in data) || (data.modelName is string && data.modelName.size() <= 64)) &&
-             (!('lastMessagePreview' in data) || (data.lastMessagePreview is string && data.lastMessagePreview.size() <= 300)) &&
-             (!('messageCount' in data) || (data.messageCount is int && data.messageCount >= 0 && data.messageCount <= 1000)) &&
-             (!('createdAtMs' in data) || data.createdAtMs is int) &&
-             (!('updatedAtMs' in data) || data.updatedAtMs is int);
-    }
-
-    function isValidAiChatMessage(data, userId, conversationId, messageId) {
-      return data.id == messageId &&
-             isValidId(messageId) &&
-             data.conversationId == conversationId &&
-             data.userId == userId &&
-             data.role is string && data.role in ['USER', 'ASSISTANT', 'SYSTEM_CONTEXT'] &&
-             data.content is string && data.content.size() >= 1 && data.content.size() <= 16000 &&
-             (!('taskCategory' in data) || (data.taskCategory is string && data.taskCategory.size() <= 48)) &&
-             (!('timestampLabel' in data) || (data.timestampLabel is string && data.timestampLabel.size() <= 24)) &&
-             (!('createdAtMs' in data) || data.createdAtMs is int);
-    }
-
-    function isValidAiUsageQuota(data, userId) {
-      return data.userId == userId &&
-             data.dayKey is string && data.dayKey.size() >= 8 && data.dayKey.size() <= 16 &&
-             data.requestsToday is int && data.requestsToday >= 0 && data.requestsToday <= 100 &&
-             data.dailyLimit is int && data.dailyLimit >= 1 && data.dailyLimit <= 40 &&
-             (!('abuseStrikes' in data) || (data.abuseStrikes is int && data.abuseStrikes >= 0 && data.abuseStrikes <= 50)) &&
-             (!('blockedUntilMs' in data) || data.blockedUntilMs is int) &&
-             (!('estimatedCharsToday' in data) || (data.estimatedCharsToday is int && data.estimatedCharsToday >= 0 && data.estimatedCharsToday <= 250000));
-    }
-
     function isValidCommunityHandle(data) {
       return data.handle is string && data.handle.size() >= 2 && data.handle.size() <= 40 &&
              data.serverId is string && isValidId(data.serverId) &&
@@ -275,6 +242,10 @@ service cloud.firestore {
              (!('adminIds' in data) || (data.adminIds is list && data.adminIds.size() <= 50)) &&
              (!('moderatorIds' in data) || (data.moderatorIds is list && data.moderatorIds.size() <= 100)) &&
              (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('isClosed' in data) || data.isClosed is bool) &&
+             (!('closedByUid' in data) || data.closedByUid == null || (data.closedByUid is string && data.closedByUid.size() <= 128)) &&
+             (!('closedByName' in data) || data.closedByName == null || (data.closedByName is string && data.closedByName.size() <= 64)) &&
+             (!('closedAtMs' in data) || data.closedAtMs == null || data.closedAtMs is int) &&
              (!('boostCount' in data) || data.boostCount is int) &&
              (!('boostLevel' in data) || data.boostLevel is int);
     }
@@ -612,6 +583,8 @@ service cloud.firestore {
              (!('allowedViewerIds' in data) || (data.allowedViewerIds is list && data.allowedViewerIds.size() <= 200)) &&
              (!('moderatorIds' in data) || (data.moderatorIds is list && data.moderatorIds.size() <= 100)) &&
              (!('viewerIds' in data) || (data.viewerIds is list && data.viewerIds.size() <= 500)) &&
+             (!('likedByIds' in data) || (data.likedByIds is list && data.likedByIds.size() <= 1000)) &&
+             (!('likesCount' in data) || (data.likesCount is int && data.likesCount >= 0)) &&
              (!('moderationServerId' in data) || data.moderationServerId == null || isValidId(data.moderationServerId)) &&
              (!('moderationReason' in data) || data.moderationReason == null || (data.moderationReason is string && data.moderationReason.size() <= 240)) &&
              (!('moderatedByUid' in data) || data.moderatedByUid == null || (data.moderatedByUid is string && data.moderatedByUid.size() <= 128));
@@ -1078,35 +1051,6 @@ service cloud.firestore {
                                  incoming().userId == request.auth.uid && isValidNotification(incoming());
       }
 
-      // 1.1 Private RAVEN AI Conversation History & Server-Enforced Usage Quota
-      match /ai_conversations/{conversationId} {
-        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
-        allow create: if isSignedIn() && isValidId(conversationId) && request.auth.uid == userId &&
-                         isValidAiConversation(incoming(), userId, conversationId) &&
-                         (!('serverId' in incoming()) || incoming().serverId == null || isServerMemberOrPublic(incoming().serverId));
-        allow update: if isSignedIn() && isValidId(conversationId) && request.auth.uid == userId &&
-                         isValidAiConversation(incoming(), userId, conversationId) &&
-                         incoming().userId == existing().userId &&
-                         incoming().id == existing().id;
-
-        match /messages/{messageId} {
-          allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
-          allow create: if isSignedIn() && isValidId(messageId) && request.auth.uid == userId &&
-                           isValidAiChatMessage(incoming(), userId, conversationId, messageId);
-          allow update: if false;
-        }
-      }
-
-      match /ai_usage/{quotaId} {
-        allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
-        allow create: if isSignedIn() && isValidId(quotaId) && request.auth.uid == userId &&
-                         isValidAiUsageQuota(incoming(), userId);
-        allow update: if isSignedIn() && isValidId(quotaId) && request.auth.uid == userId &&
-                         isValidAiUsageQuota(incoming(), userId) &&
-                         incoming().userId == existing().userId &&
-                         (incoming().dayKey != existing().dayKey || incoming().requestsToday >= existing().requestsToday);
-      }
-
       // 1.2 User-Scoped Sandboxed Extensions & Audit Logs
       match /plugins/{pluginId} {
         allow get, list, delete: if isSignedIn() && request.auth.uid == userId;
@@ -1291,9 +1235,10 @@ service cloud.firestore {
                        incoming().ownerId == request.auth.uid && request.auth.uid in incoming().memberIds;
       allow update: if isSignedIn() && isValidId(serverId) && isValidServer(incoming()) &&
                        incoming().ownerId == existing().ownerId && (
-                         // 5a. Owner or designated Admin: full management (cannot mutate ownerId)
+                         // 5a. Owner: full management including adminIds; Admin: full management (including isClosed) EXCEPT cannot mutate adminIds
                          existing().ownerId == request.auth.uid ||
-                         ('adminIds' in existing() && request.auth.uid in existing().adminIds) ||
+                         ('adminIds' in existing() && request.auth.uid in existing().adminIds &&
+                          (!('adminIds' in incoming()) ? !('adminIds' in existing()) : (('adminIds' in existing()) && incoming().adminIds == existing().adminIds))) ||
 
                          // 5b. Moderator: can manage events & categories or kick regular non-staff members
                          ('moderatorIds' in existing() && request.auth.uid in existing().moderatorIds &&
@@ -1357,13 +1302,15 @@ service cloud.firestore {
                        (resource.data.isPublic == true || isServerMemberOrPublic(serverId) || resource.data.uid == request.auth.uid);
         allow create: if isSignedIn() && isValidId(memberId) && isValidCommunityMember(incoming()) &&
                          incoming().serverId == serverId && (
-                           isCommunityAdmin(serverId) ||
+                           isServerOwner(serverId) ||
+                           (isCommunityAdmin(serverId) && incoming().role != 'ADMIN') ||
                            (memberId == request.auth.uid && incoming().uid == request.auth.uid &&
                             incoming().role == 'MEMBER' && isServerMemberOrPublic(serverId))
                          );
         allow update: if isSignedIn() && isValidId(memberId) && isValidCommunityMember(incoming()) &&
                          incoming().serverId == serverId && incoming().uid == existing().uid && (
-                           isCommunityAdmin(serverId) ||
+                           isServerOwner(serverId) ||
+                           (isCommunityAdmin(serverId) && existing().role != 'ADMIN' && incoming().role != 'ADMIN') ||
                            (isCommunityMod(serverId) && existing().role == 'MEMBER' && incoming().role == 'MEMBER' &&
                             incoming().diff(existing()).affectedKeys().hasOnly(['isTimedOut', 'updatedAt'])) ||
                            (memberId == request.auth.uid &&
@@ -1372,7 +1319,8 @@ service cloud.firestore {
                          );
         allow delete: if isSignedIn() && isValidId(memberId) && (
                            (memberId == request.auth.uid && !isServerOwner(serverId)) ||
-                           (isCommunityAdmin(serverId) && memberId != serverDoc(serverId).data.ownerId) ||
+                           (isServerOwner(serverId) && memberId != serverDoc(serverId).data.ownerId) ||
+                           (isCommunityAdmin(serverId) && memberId != serverDoc(serverId).data.ownerId && existing().role != 'ADMIN') ||
                            (isCommunityMod(serverId) && existing().role == 'MEMBER')
                          );
       }
@@ -1417,7 +1365,8 @@ service cloud.firestore {
         match /messages/{messageId} {
           allow get: if isSignedIn() && isValidId(messageId) && isServerMemberOrPublic(serverId);
           allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
-          allow create: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) && isServerMemberOrPublic(serverId) && (
+          allow create: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) && isServerMemberOrPublic(serverId) &&
+                           (!isServerClosed(serverId) || isCommunityAdmin(serverId)) && (
                            incoming().senderId == request.auth.uid ||
                            (('isBotMessage' in incoming()) && incoming().isBotMessage == true &&
                             ('triggeredByUid' in incoming()) && incoming().triggeredByUid == request.auth.uid &&
@@ -1558,29 +1507,56 @@ service cloud.firestore {
                        incoming().authorId == request.auth.uid &&
                        incoming().viewCount == 0 &&
                        (!('viewerIds' in incoming()) || incoming().viewerIds.size() == 0) &&
+                       (!('likesCount' in incoming()) || incoming().likesCount == 0) &&
+                       (!('likedByIds' in incoming()) || incoming().likedByIds.size() == 0) &&
                        incoming().reportCount == 0 &&
                        incoming().moderatedHidden == false;
       allow update: if isSignedIn() && isValidId(storyId) &&
-                       isValidStoryDoc(incoming()) &&
                        incoming().authorId == existing().authorId &&
                        incoming().createdAtMs == existing().createdAtMs &&
                        incoming().expiresAtMs == existing().expiresAtMs && (
                          // 7a. Author adjusting privacy settings
-                         (existing().authorId == request.auth.uid &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['visibility', 'allowedViewerIds', 'caption', 'updatedAt'])) ||
+                         (incoming().diff(existing()).affectedKeys().hasOnly(['visibility', 'allowedViewerIds', 'caption', 'updatedAt']) &&
+                          existing().authorId == request.auth.uid &&
+                          isValidStoryDoc(incoming())) ||
                          // 7b. Authorized viewer recording a view (incrementing once)
-                         (canViewStoryDoc(existing()) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['viewerIds', 'viewCount', 'updatedAt']) &&
-                          request.auth.uid in incoming().viewerIds &&
+                         (incoming().diff(existing()).affectedKeys().hasOnly(['viewerIds', 'viewCount', 'updatedAt']) &&
+                          incoming().viewCount is int &&
                           incoming().viewCount >= existing().viewCount &&
-                          incoming().viewCount <= existing().viewCount + 1) ||
+                          incoming().viewCount <= existing().viewCount + 1 &&
+                          (!('viewerIds' in incoming()) || (incoming().viewerIds is list && incoming().viewerIds.size() <= 500 && request.auth.uid in incoming().viewerIds)) &&
+                          canViewStoryDoc(existing())) ||
                          // 7c. Authorized viewer reporting the story (+1 reportCount)
-                         (canViewStoryDoc(existing()) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['reportCount', 'updatedAt']) &&
-                          incoming().reportCount == existing().reportCount + 1) ||
+                         (incoming().diff(existing()).affectedKeys().hasOnly(['reportCount', 'updatedAt']) &&
+                          incoming().reportCount is int &&
+                          incoming().reportCount == existing().reportCount + 1 &&
+                          canViewStoryDoc(existing())) ||
                          // 7d. Verified moderator moderating the story
-                         (isStoryModerator(existing()) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['moderatedHidden', 'moderationReason', 'moderatedByUid', 'updatedAt']))
+                         (incoming().diff(existing()).affectedKeys().hasOnly(['moderatedHidden', 'moderationReason', 'moderatedByUid', 'updatedAt']) &&
+                          incoming().moderatedHidden is bool &&
+                          (!('moderationReason' in incoming()) || incoming().moderationReason == null || (incoming().moderationReason is string && incoming().moderationReason.size() <= 240)) &&
+                          (!('moderatedByUid' in incoming()) || incoming().moderatedByUid == null || (incoming().moderatedByUid is string && incoming().moderatedByUid.size() <= 128)) &&
+                          isStoryModerator(existing())) ||
+                         // 7e. Non-author viewer liking or unliking the story (+1 / -1)
+                         (incoming().diff(existing()).affectedKeys().hasOnly(['likedByIds', 'likesCount', 'updatedAt']) &&
+                          existing().authorId != request.auth.uid &&
+                          incoming().likedByIds is list &&
+                          incoming().likedByIds.size() <= 1000 &&
+                          incoming().likesCount is int &&
+                          incoming().likesCount >= 0 &&
+                          (
+                            ((!('likedByIds' in existing()) || !(request.auth.uid in existing().likedByIds)) &&
+                             request.auth.uid in incoming().likedByIds &&
+                             ((!('likesCount' in existing()) && incoming().likesCount == 1) ||
+                              (('likesCount' in existing()) && incoming().likesCount == existing().likesCount + 1))) ||
+                            (('likedByIds' in existing()) &&
+                             request.auth.uid in existing().likedByIds &&
+                             !(request.auth.uid in incoming().likedByIds) &&
+                             ('likesCount' in existing()) &&
+                             existing().likesCount > 0 &&
+                             incoming().likesCount == existing().likesCount - 1)
+                          ) &&
+                          canViewStoryDoc(existing()))
                        );
       allow delete: if isSignedIn() && isValidId(storyId) &&
                        (existing().authorId == request.auth.uid || isStoryModerator(existing()));
@@ -1588,11 +1564,9 @@ service cloud.firestore {
       match /views/{viewerId} {
         allow get: if isSignedIn() && isValidId(viewerId) && storyExists(storyId) &&
                       (storyDoc(storyId).data.authorId == request.auth.uid ||
-                       viewerId == request.auth.uid ||
-                       isStoryModerator(storyDoc(storyId).data));
+                       viewerId == request.auth.uid);
         allow list: if isSignedIn() && storyExists(storyId) &&
-                       (storyDoc(storyId).data.authorId == request.auth.uid ||
-                        isStoryModerator(storyDoc(storyId).data));
+                       storyDoc(storyId).data.authorId == request.auth.uid;
         allow create, update: if isSignedIn() && isValidId(viewerId) &&
                                  viewerId == request.auth.uid &&
                                  storyExists(storyId) &&

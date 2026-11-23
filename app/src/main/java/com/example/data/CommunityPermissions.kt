@@ -29,6 +29,34 @@ object CommunityPermissions {
         return member?.role ?: UserRole.MEMBER
     }
 
+    fun isCreatorOrAdmin(server: Server, userId: String): Boolean =
+        userId.isNotBlank() && (isOwner(server, userId) || effectiveRole(server, userId) == UserRole.ADMIN)
+
+    fun canToggleServerClosed(server: Server, userId: String): Boolean =
+        isCreatorOrAdmin(server, userId)
+
+    fun canSendMessageInServer(server: Server?, userId: String): Boolean =
+        server == null || server.isDmTab || !server.isClosed || isCreatorOrAdmin(server, userId)
+
+    fun canManageAdminRole(
+        server: Server,
+        actorUid: String,
+        targetUid: String,
+        newRole: UserRole,
+        customRole: CustomRole? = null
+    ): Boolean {
+        if (actorUid.isBlank() || targetUid.isBlank()) return false
+        if (targetUid == server.ownerId) return false
+        val targetCurrentRole = effectiveRole(server, targetUid)
+        val involvesAdmin = newRole == UserRole.ADMIN ||
+            customRole?.isAdmin == true ||
+            targetCurrentRole == UserRole.ADMIN
+        if (involvesAdmin) {
+            return isOwner(server, actorUid)
+        }
+        return hasPermission(server, actorUid, RolePermission.MANAGE_ROLES)
+    }
+
     fun getEffectivePermissions(server: Server, userId: String): Set<RolePermission> {
         if (isOwner(server, userId)) {
             return RolePermission.entries.toSet()

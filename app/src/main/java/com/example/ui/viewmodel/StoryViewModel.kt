@@ -154,6 +154,15 @@ class StoryViewModel(private val repo: StoryRepository) : ViewModel() {
         }
     }
 
+    fun toggleStoryLike(storyId: String) {
+        viewModelScope.launch {
+            val res = repo.toggleStoryLike(storyId)
+            res.onFailure { err ->
+                _feedback.value = null to (err.message ?: "Impossible d'aimer cette story.")
+            }
+        }
+    }
+
     fun deleteStory(storyId: String, onDeleted: () -> Unit = {}) {
         viewModelScope.launch {
             _busy.value = true

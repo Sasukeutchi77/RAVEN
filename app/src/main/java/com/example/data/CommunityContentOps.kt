@@ -27,6 +27,9 @@ suspend fun CommunityRepository.saveCustomRole(
     if (clean.isBlank()) return Result.failure(IllegalArgumentException("Nom de rôle requis."))
 
     val isAdmin = RolePermission.MANAGE_COMMUNITY in permissions || RolePermission.MANAGE_ROLES in permissions
+    if (isAdmin && !CommunityPermissions.isOwner(srv, currentUid())) {
+        return Result.failure(SecurityException("Seul le créateur du serveur ou de la communauté peut créer un rôle administrateur."))
+    }
     val canKick = RolePermission.MODERATE_MEMBERS in permissions
     val canManageCh = RolePermission.MANAGE_CHANNELS in permissions
     val role = CustomRole(
@@ -60,18 +63,25 @@ suspend fun CommunityRepository.assignMemberRole(
 ): Result<Unit> {
     val srv = chatRepo.servers.value.find { it.id == serverId }
         ?: return Result.failure(IllegalArgumentException("Communauté introuvable."))
-    if (!CommunityPermissions.hasPermission(srv, currentUid(), RolePermission.MANAGE_ROLES)) {
-        return Result.failure(SecurityException("Permission MANAGE_ROLES requise."))
+    val actorUid = currentUid()
+    val customRole = customRoleId?.let { rid -> srv.customRoles.find { it.id == rid } }
+    if (targetUid == srv.ownerId) {
+        return Result.failure(SecurityException("Le rôle du créateur du serveur ne peut pas être modifié."))
     }
+    if (!CommunityPermissions.canManageAdminRole(srv, actorUid, targetUid, role, customRole)) {
+        return Result.failure(SecurityException("Seul le créateur du serveur ou de la communauté peut nommer ou retirer un administrateur."))
+    }
+
+    val isActorOwner = CommunityPermissions.isOwner(srv, actorUid)
     val nextAdmins = when (role) {
         UserRole.ADMIN -> (srv.adminIds + targetUid).distinct()
-        else -> if (targetUid == srv.ownerId) srv.adminIds else srv.adminIds - targetUid
+        else -> srv.adminIds - targetUid
     }
     val nextMods = when (role) {
         UserRole.MODERATOR -> (srv.moderatorIds + targetUid).distinct()
         else -> srv.moderatorIds - targetUid
     }
-    val customPerms = customRoleId?.let { rid -> srv.customRoles.find { it.id == rid }?.permissions }
+    val customPerms = customRole?.permissions
         ?: when (role) {
             UserRole.ADMIN -> RolePermission.entries.filter { it != RolePermission.DELETE_COMMUNITY }.toSet()
             UserRole.MODERATOR -> defaultPermissionsForFlags(false, canKickBan = true, canManageChannels = true)
@@ -80,7 +90,26 @@ suspend fun CommunityRepository.assignMemberRole(
     val nextMembers = srv.members.map {
         if (it.id == targetUid) it.copy(role = role, customRoleId = customRoleId) else it
     }
-    val updated = srv.copy(adminIds = nextAdmins, moderatorIds = nextMods, members = nextMembers)
+    val targetName = srv.members.find { it.id == targetUid }?.name ?: "Membre"
+    val wasAdmin = CommunityPermissions.effectiveRole(srv, targetUid) == UserRole.ADMIN
+    val actionDesc = when {
+        role == UserRole.ADMIN -> "a nommé administrateur"
+        wasAdmin && role != UserRole.ADMIN -> "a retiré le titre d'administrateur à"
+        else -> "a attribué le rôle ${customRole?.name ?: role.title} à"
+    }
+    val logEntry = AuditLogEntry(
+        id = "log_${UUID.randomUUID().toString().take(8)}",
+        actorName = currentUserName(),
+        actionDescription = actionDesc,
+        targetName = targetName,
+        timestamp = CommunityPermissions.nowTimeLabel()
+    )
+    val updated = srv.copy(
+        adminIds = nextAdmins,
+        moderatorIds = nextMods,
+        members = nextMembers,
+        auditLogs = (listOf(logEntry) + srv.auditLogs).take(40)
+    )
 
     val db = chatRepo.firestoreDb()
     val authUser = chatRepo.authInstance()?.currentUser
@@ -88,11 +117,14 @@ suspend fun CommunityRepository.assignMemberRole(
         val res = withContext(Dispatchers.IO) {
             try {
                 val srvRef = db.collection("servers").document(serverId)
-                Tasks.await(srvRef.update(mapOf(
-                    "adminIds" to nextAdmins,
+                val srvUpdate = hashMapOf<String, Any>(
                     "moderatorIds" to nextMods,
                     "updatedAt" to FieldValue.serverTimestamp()
-                )))
+                )
+                if (isActorOwner) {
+                    srvUpdate["adminIds"] = nextAdmins
+                }
+                Tasks.await(srvRef.update(srvUpdate))
                 val targetMember = nextMembers.find { it.id == targetUid } ?: User(id = targetUid, name = "Membre")
                 Tasks.await(
                     srvRef.collection("members").document(targetUid).set(
@@ -110,6 +142,61 @@ suspend fun CommunityRepository.assignMemberRole(
     }
     replaceServerInFlow(updated)
     return Result.success(Unit)
+}
+
+suspend fun CommunityRepository.setServerClosed(
+    serverId: String,
+    closed: Boolean
+): Result<Boolean> {
+    val srv = chatRepo.servers.value.find { it.id == serverId }
+        ?: return Result.failure(IllegalArgumentException("Serveur introuvable."))
+    val actorUid = currentUid()
+    if (!CommunityPermissions.canToggleServerClosed(srv, actorUid)) {
+        return Result.failure(SecurityException("Seuls les administrateurs et le créateur peuvent fermer ou ouvrir ce serveur."))
+    }
+    val actorName = currentUserName()
+    val nowMs = System.currentTimeMillis()
+    val closedByUidVal = if (closed) actorUid else null
+    val closedByNameVal = if (closed) actorName else null
+    val closedAtMsVal = if (closed) nowMs else null
+    val logEntry = AuditLogEntry(
+        id = "log_${UUID.randomUUID().toString().take(8)}",
+        actorName = actorName,
+        actionDescription = if (closed) "a fermé le serveur (admins uniquement)" else "a rouvert le serveur à tous les membres",
+        targetName = srv.name,
+        timestamp = CommunityPermissions.nowTimeLabel()
+    )
+    val updated = srv.copy(
+        isClosed = closed,
+        closedByUid = closedByUidVal,
+        closedByName = closedByNameVal,
+        closedAtMs = closedAtMsVal,
+        auditLogs = (listOf(logEntry) + srv.auditLogs).take(40)
+    )
+
+    val db = chatRepo.firestoreDb()
+    val authUser = chatRepo.authInstance()?.currentUser
+    if (db != null && authUser != null) {
+        val res = withContext(Dispatchers.IO) {
+            try {
+                val payload = hashMapOf<String, Any?>(
+                    "isClosed" to closed,
+                    "closedByUid" to closedByUidVal,
+                    "closedByName" to closedByNameVal,
+                    "closedAtMs" to closedAtMsVal,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                Tasks.await(db.collection("servers").document(serverId).update(payload))
+                Result.success(Unit)
+            } catch (e: Exception) {
+                val msg = FirestoreErrorHandler.handleFirestoreError(e, OperationType.UPDATE, "servers/$serverId", authUser.uid)
+                Result.failure<Unit>(IllegalStateException(msg, e))
+            }
+        }
+        if (res.isFailure) return Result.failure(res.exceptionOrNull()!!)
+    }
+    replaceServerInFlow(updated)
+    return Result.success(closed)
 }
 
 suspend fun CommunityRepository.timeoutMember(serverId: String, targetUid: String): Result<Boolean> {

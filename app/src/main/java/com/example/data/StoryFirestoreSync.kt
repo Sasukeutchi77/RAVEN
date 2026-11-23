@@ -36,6 +36,8 @@ object StoryFirestoreSync {
         put("expiresAtMs", story.expiresAtMs)
         put("viewCount", 0)
         put("viewerIds", emptyList<String>())
+        put("likesCount", 0)
+        put("likedByIds", emptyList<String>())
         put("reportCount", 0)
         put("moderatedHidden", false)
         put("createdAt", FieldValue.serverTimestamp())
@@ -50,6 +52,7 @@ object StoryFirestoreSync {
         val allowed = (data["allowedViewerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
         val moderators = (data["moderatorIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
         val viewerIds = (data["viewerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+        val likedByIds = (data["likedByIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
         return StoryItem(
             id = doc.id,
             authorId = authorId,
@@ -75,6 +78,8 @@ object StoryFirestoreSync {
             expiresAtMs = (data["expiresAtMs"] as? Number)?.toLong() ?: 0L,
             viewCount = (data["viewCount"] as? Number)?.toInt() ?: viewerIds.size,
             viewerIds = viewerIds,
+            likesCount = (data["likesCount"] as? Number)?.toInt() ?: likedByIds.size,
+            likedByIds = likedByIds,
             reportCount = (data["reportCount"] as? Number)?.toInt() ?: 0,
             moderatedHidden = (data["moderatedHidden"] as? Boolean) ?: false,
             moderationReason = data["moderationReason"] as? String,
@@ -177,5 +182,23 @@ object StoryFirestoreSync {
             updateMap["viewCount"] = FieldValue.increment(1L)
         }
         Tasks.await(storyRef.update(updateMap))
+    }
+
+    fun toggleLikeBlocking(
+        db: FirebaseFirestore,
+        storyId: String,
+        nextLikedByIds: List<String>,
+        nextLikesCount: Int
+    ) {
+        val storyRef = db.collection(COLLECTION_STORIES).document(storyId)
+        Tasks.await(
+            storyRef.update(
+                mapOf(
+                    "likedByIds" to nextLikedByIds,
+                    "likesCount" to nextLikesCount,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+        )
     }
 }

@@ -50,23 +50,34 @@ object CloudinaryHelper {
 
     fun isConfigured(): Boolean = cloudName != "demo" && uploadPreset != "unsigned_preset" && cloudName.isNotBlank() && uploadPreset.isNotBlank()
 
-    suspend fun uploadImage(context: Context, imageUri: Uri): String = withContext(Dispatchers.IO) {
+    suspend fun uploadImage(context: Context, imageUri: Uri): String =
+        persistImage(context, imageUri, subDir = null)
+
+    suspend fun persistImage(
+        context: Context,
+        imageUri: Uri,
+        subDir: String? = "backgrounds"
+    ): String = withContext(Dispatchers.IO) {
         try {
             val inputStream = context.contentResolver.openInputStream(imageUri) ?: return@withContext imageUri.toString()
-            val tempFile = File(context.cacheDir, "upload_${System.currentTimeMillis()}.jpg")
-            val outputStream = FileOutputStream(tempFile)
-            inputStream.copyTo(outputStream)
-            inputStream.close()
-            outputStream.close()
+            val targetDir = if (!subDir.isNullOrBlank()) {
+                File(context.filesDir, subDir).apply { if (!exists()) mkdirs() }
+            } else {
+                context.cacheDir
+            }
+            val destFile = File(targetDir, "img_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(destFile).use { outputStream ->
+                inputStream.use { it.copyTo(outputStream) }
+            }
 
             if (!isConfigured()) {
-                return@withContext tempFile.absolutePath
+                return@withContext destFile.absolutePath
             }
 
             val client = OkHttpClient()
             val requestBody = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-                .addFormDataPart("file", tempFile.name, tempFile.asRequestBody("image/*".toMediaTypeOrNull()))
+                .addFormDataPart("file", destFile.name, destFile.asRequestBody("image/*".toMediaTypeOrNull()))
                 .addFormDataPart("upload_preset", uploadPreset)
                 .build()
 
@@ -78,10 +89,10 @@ object CloudinaryHelper {
             val response = client.newCall(request).execute()
             if (response.isSuccessful) {
                 val json = JSONObject(response.body?.string() ?: "")
-                json.optString("secure_url", tempFile.absolutePath)
+                json.optString("secure_url", destFile.absolutePath)
             } else {
                 Log.w("Cloudinary", "Upload failed: ${response.code}, falling back to local file")
-                tempFile.absolutePath
+                destFile.absolutePath
             }
         } catch (e: Exception) {
             Log.e("Cloudinary", "Error uploading to Cloudinary", e)

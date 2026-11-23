@@ -58,6 +58,7 @@ fun StoryViewerDialog(
     onReportStory: (storyId: String, StoryReportReason, String) -> Unit,
     onModerateHideStory: (storyId: String, reason: String) -> Unit,
     onReplyToStory: (storyId: String, String) -> Unit,
+    onToggleLike: (storyId: String) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val startGroupIndex = remember(groups, initialAuthorId) {
@@ -425,7 +426,7 @@ fun StoryViewerDialog(
                     )
                 }
 
-                if (activeStory.authorId == currentUserId || isModerator) {
+                if (activeStory.authorId == currentUserId) {
                     Surface(
                         color = Color.White.copy(alpha = 0.16f),
                         shape = RoundedCornerShape(20.dp),
@@ -445,7 +446,12 @@ fun StoryViewerDialog(
                         ) {
                             Icon(Icons.Default.Visibility, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                             Text(
-                                text = "${activeStory.viewCount} vue(s) • Voir qui a regardé",
+                                text = buildString {
+                                    append("${activeStory.viewCount} vue(s) • Voir qui a regardé")
+                                    if (activeStory.likesCount > 0) {
+                                        append(" • ${activeStory.likesCount} ♥")
+                                    }
+                                },
                                 color = Color.White,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold
@@ -455,6 +461,7 @@ fun StoryViewerDialog(
                 }
 
                 if (activeStory.authorId != currentUserId) {
+                    val isLiked = activeStory.hasBeenLikedBy(currentUserId)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -478,6 +485,37 @@ fun StoryViewerDialog(
                             ),
                             modifier = Modifier.weight(1f).testTag("story_reply_input")
                         )
+                        Surface(
+                            color = if (isLiked) DiscordRed.copy(alpha = 0.28f) else Color.White.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .clip(RoundedCornerShape(24.dp))
+                                .clickable { onToggleLike(activeStory.id) }
+                                .testTag("story_viewer_like_button")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                    contentDescription = if (isLiked) "Retirer le j'aime" else "Liker cette story",
+                                    tint = if (isLiked) Color(0xFFFF4D6D) else Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                if (activeStory.likesCount > 0) {
+                                    Text(
+                                        text = "${activeStory.likesCount}",
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.testTag("story_viewer_likes_count")
+                                    )
+                                }
+                            }
+                        }
                         IconButton(
                             onClick = {
                                 if (replyText.isNotBlank()) {
@@ -499,7 +537,7 @@ fun StoryViewerDialog(
         }
     }
 
-    if (showViewersSheet) {
+    if (showViewersSheet && activeStory.authorId == currentUserId) {
         val displayViewers = remember(loadedViewers, activeStory.viewers) {
             if (loadedViewers.isNotEmpty()) loadedViewers else activeStory.viewers
         }

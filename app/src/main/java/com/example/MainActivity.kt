@@ -16,7 +16,6 @@ import com.example.ui.RavenApp
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.RavenAppViewModel
 import com.example.util.CloudinaryHelper
-import com.example.util.configureAppCheck
 import com.google.firebase.messaging.FirebaseMessaging
 
 class MainActivity : ComponentActivity() {
@@ -40,7 +39,6 @@ class MainActivity : ComponentActivity() {
             }
         })
 
-        configureAppCheck(this, intent)
         CloudinaryHelper.init(applicationContext)
         try {
             FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->

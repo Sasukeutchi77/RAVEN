@@ -48,7 +48,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.example.data.AccountSecurityRepository
-import com.example.data.AiAssistantRepository
 import com.example.data.BotRepository
 import com.example.data.ChatRepository
 import com.example.data.CommunityPermissions
@@ -70,12 +69,14 @@ import com.example.model.RavenBot
 import com.example.model.RolePermission
 import com.example.model.SearchEntityType
 import com.example.model.Server
+import com.example.model.ShopCatalog
 import com.example.model.UserRole
 import com.example.model.UserStatus
+import com.example.model.resolveServerBackgroundTheme
+import com.example.model.serverBackgroundTargetKey
 import com.example.ui.components.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.AccountSecurityViewModel
-import com.example.ui.viewmodel.AiAssistantViewModel
 import com.example.ui.viewmodel.BotDashboardViewModel
 import com.example.ui.viewmodel.CommunityViewModel
 import com.example.ui.viewmodel.EventViewModel
@@ -162,10 +163,6 @@ fun RavenApp(
     val botLogsByBot by botRepo.logsByBot.collectAsState()
     val botUiState by botViewModel.uiState.collectAsState()
 
-    val aiRepo = remember(repository) { AiAssistantRepository(repository) }
-    val aiViewModel = remember(aiRepo) { AiAssistantViewModel(aiRepo) }
-    val aiUiState by aiViewModel.uiState.collectAsState()
-
     val storyRepo = remember(repository) { StoryRepository(repository) }
     val storyViewModel = remember(storyRepo) { StoryViewModel(storyRepo) }
     val storyUiState by storyViewModel.uiState.collectAsState()
@@ -225,7 +222,7 @@ fun RavenApp(
     }
     var isViewingCommunityHome by remember { mutableStateOf(false) }
     var showBotDashboardSheet by remember { mutableStateOf(false) }
-    var showAiAssistantSheet by remember { mutableStateOf(false) }
+    var showServerBackgroundDialog by remember { mutableStateOf(false) }
     var showPollsHubSheet by remember { mutableStateOf(false) }
     var showAdvancedPollEditor by remember { mutableStateOf(false) }
     var editingPollDraft by remember { mutableStateOf<AdvancedPoll?>(null) }
@@ -304,10 +301,6 @@ fun RavenApp(
         botRepo.attachToChatRepository()
     }
 
-    LaunchedEffect(aiRepo) {
-        aiRepo.attachSlashCommandHook()
-    }
-
     LaunchedEffect(pluginRepo) {
         pluginRepo.attachToChatRepository()
     }
@@ -317,7 +310,6 @@ fun RavenApp(
             communityViewModel.observeCommunity(selectedServerId)
         }
         botViewModel.startObserving(selectedServerId)
-        aiViewModel.startObserving()
         storyViewModel.startObserving()
         pollViewModel.syncWithAuthUid(if (isFirebaseSignedIn) repository.authInstance()?.currentUser?.uid else null)
         eventViewModel.syncWithAuthUid(if (isFirebaseSignedIn) repository.authInstance()?.currentUser?.uid else null)
@@ -438,10 +430,6 @@ fun RavenApp(
                     if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                     showBotDashboardSheet = true
                 },
-                onOpenAiAssistant = {
-                    if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
-                    showAiAssistantSheet = true
-                },
                 unseenStoriesCount = storyUiState.unseenGroups.count { !it.isCurrentUser },
                 onOpenStories = {
                     if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
@@ -506,9 +494,9 @@ fun RavenApp(
                         if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                         showBotDashboardSheet = true
                     },
-                    onOpenAiAssistant = {
+                    onOpenServerBackground = {
                         if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
-                        showAiAssistantSheet = true
+                        showServerBackgroundDialog = true
                     },
                     onOpenPollsHub = {
                         if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
@@ -521,6 +509,9 @@ fun RavenApp(
                     onOpenAdminDashboard = {
                         if (closeDrawerAfterSelect) coroutineScope.launch { drawerState.close() }
                         showServerAdminDashboard = true
+                    },
+                    onToggleServerClosed = { closed ->
+                        communityViewModel.setServerClosed(activeServer.id, closed)
                     },
                     onEditCommunity = { editingCommunityServer = activeServer },
                     onLeaveCommunity = {
@@ -1034,6 +1025,7 @@ fun RavenApp(
                                 currentUser = currentUser,
                                 unreadNotificationsCount = unreadNotificationsCount,
                                 showDrawerButton = showDrawerButton,
+                                applyTopInsets = showDrawerButton,
                                 onToggleDrawer = {
                                     coroutineScope.launch { drawerState.open() }
                                 },
@@ -1054,6 +1046,12 @@ fun RavenApp(
                                 onOpenCategories = { showCategoriesManagerSheet = true },
                                 onOpenNotifications = { showInboxSheet = true },
                                 onOpenAdminDashboard = { showServerAdminDashboard = true },
+                                onToggleServerClosed = { closed ->
+                                    communityViewModel.setServerClosed(activeServer.id, closed)
+                                },
+                                onAssignMemberRole = { uid, role, customId ->
+                                    communityViewModel.assignMemberRole(activeServer.id, uid, role, customId)
+                                },
                                 onLeaveCommunity = {
                                     communityViewModel.leaveCommunity(activeServer.id) {
                                         isViewingCommunityHome = false
@@ -1089,7 +1087,13 @@ fun RavenApp(
                                         setViewingVoiceRoom(true)
                                     }
                                 },
-                                onOpenEventsHub = { showServerEventsSheet = true }
+                                onOpenEventsHub = { showServerEventsSheet = true },
+                                serverBackground = resolveServerBackgroundTheme(
+                                    server = activeServer,
+                                    channelId = null,
+                                    userBackgrounds = chatBackgrounds
+                                ),
+                                onOpenServerBackground = { showServerBackgroundDialog = true }
                             )
                         }
 
@@ -1132,9 +1136,31 @@ fun RavenApp(
                                 },
                                 unreadNotificationsCount = unreadNotificationsCount,
                                 onOpenInbox = { showInboxSheet = true },
-                                chatTheme = chatBackgrounds[activeChannel.id],
+                                chatTheme = resolveServerBackgroundTheme(
+                                    server = activeServer,
+                                    channelId = activeChannel.id,
+                                    userBackgrounds = chatBackgrounds
+                                ),
                                 onApplyChatTheme = { theme ->
                                     repository.setChatBackground(activeChannel.id, theme)
+                                },
+                                onResetChatTheme = {
+                                    repository.clearChatBackground(activeChannel.id)
+                                },
+                                serverName = activeServer.name,
+                                canManageServerBackground = CommunityPermissions.isCreatorOrAdmin(activeServer, currentUser.id) ||
+                                    CommunityPermissions.hasPermission(activeServer, currentUser.id, RolePermission.MANAGE_COMMUNITY),
+                                onApplyServerBackground = { theme, makeOfficial ->
+                                    repository.setChatBackground(serverBackgroundTargetKey(activeServer.id), theme)
+                                    if (makeOfficial) {
+                                        val isPreset = ShopCatalog.initialChatThemes.any { it.id == theme.id && it.imageUrl.isNullOrBlank() }
+                                        communityViewModel.updateServerOfficialBackground(
+                                            server = activeServer,
+                                            backgroundThemeId = if (isPreset && theme.imageUrl.isNullOrBlank()) theme.id else null,
+                                            backgroundImageUrl = theme.imageUrl,
+                                            backgroundOpacity = theme.opacity
+                                        )
+                                    }
                                 },
                                 onCreatePoll = { question, options, allowsMultiple ->
                                     repository.createPoll(activeChannel.id, question, options, allowsMultiple)
@@ -1184,7 +1210,6 @@ fun RavenApp(
                                     repository.scheduleMessageReminder(msg, delayMs, delayLabel)
                                 },
                                 onOpenWhiteboard = { whiteboardTarget = activeChannel.id to "#${activeChannel.name}" },
-                                onOpenAiAssistant = { showAiAssistantSheet = true },
                                 botSlashCommands = remember(activeServer.id, botInstallationsByServer, bots, pluginUiState.plugins) {
                                     botRepo.getSlashCommandsForServer(activeServer.id) + pluginRepo.activeSlashCommands()
                                 },
@@ -1195,6 +1220,12 @@ fun RavenApp(
                                 onOpenAdvancedPollEditor = {
                                     editingPollDraft = null
                                     showAdvancedPollEditor = true
+                                },
+                                isServerClosed = activeServer.isClosed,
+                                canBypassServerClosed = CommunityPermissions.isCreatorOrAdmin(activeServer, currentUser.id),
+                                serverClosedByName = activeServer.closedByName,
+                                onToggleServerClosed = { closed ->
+                                    communityViewModel.setServerClosed(activeServer.id, closed)
                                 }
                             )
                         }
@@ -1234,13 +1265,11 @@ fun RavenApp(
                     )
                 }
             }
-            // Community, Bot, Voice, Story, Plugin, Friend & AI Action Toast Feedback Banner
+            // Community, Bot, Voice, Story, Plugin & Friend Action Toast Feedback Banner
             val bannerError = voiceError ?: friendUiState.errorMessage ?: storyUiState.errorMessage ?: communityUiState.errorMessage ?: botUiState.errorMessage
                 ?: (if (!showPluginsSheet) pluginUiState.errorMessage else null)
-                ?: if (!showAiAssistantSheet) aiUiState.errorMessage else null
             val bannerText = bannerError ?: friendUiState.feedbackMessage ?: storyUiState.feedbackMessage ?: communityUiState.feedbackMessage ?: botUiState.feedbackMessage
                 ?: (if (!showPluginsSheet) pluginUiState.feedbackMessage else null)
-                ?: if (!showAiAssistantSheet) aiUiState.feedbackMessage else null
             if (bannerText != null) {
                 Surface(
                     color = if (bannerError != null) DiscordRed else DiscordGreen,
@@ -1269,7 +1298,6 @@ fun RavenApp(
                             storyViewModel.clearFeedback()
                             communityViewModel.clearFeedback()
                             botViewModel.clearFeedback()
-                            aiViewModel.clearFeedback()
                             pluginViewModel.clearFeedback()
                         }) {
                             Text("OK", color = Color.White, fontWeight = FontWeight.Bold)
@@ -1363,23 +1391,23 @@ fun RavenApp(
                         .windowInsetsPadding(WindowInsets.safeDrawing)
                 ) {
                     // Authentic Discord Desktop Top Window Bar (Back/Forward • Centered Title • Inbox/Security/Help)
-                    Box(
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(34.dp)
+                            .heightIn(min = 38.dp)
                             .background(palette.primaryBg)
-                            .padding(horizontal = 10.dp)
-                            .testTag("desktop_environment_bar")
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                            .testTag("desktop_environment_bar"),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(
-                            modifier = Modifier.align(Alignment.CenterStart),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             if (platformProfile.windowWidthDp < 680) {
                                 IconButton(
                                     onClick = { isCompactPcSidebarOpen = !isCompactPcSidebarOpen },
-                                    modifier = Modifier.size(26.dp).desktopHoverPointer(platformProfile.isPc).testTag("desktop_toggle_sidebar_btn")
+                                    modifier = Modifier.size(28.dp).desktopHoverPointer(platformProfile.isPc).testTag("desktop_toggle_sidebar_btn")
                                 ) {
                                     Icon(
                                         imageVector = if (isCompactPcSidebarOpen) Icons.Default.MenuOpen else Icons.Default.Menu,
@@ -1421,7 +1449,7 @@ fun RavenApp(
                             }
                         }
 
-                        // Centered Context Indicator matching screenshot ("👥 Amis" / "#salon" / "@Ami")
+                        // Centered Context Indicator with weight(1f) so it never collides with right icons
                         val topTitle = when {
                             effectiveViewingVoiceRoom && connectedVoiceChannel != null -> connectedVoiceChannel!!.name
                             activeServer.isDmTab -> {
@@ -1441,9 +1469,11 @@ fun RavenApp(
                             else -> Icons.Default.Tag
                         }
                         Row(
-                            modifier = Modifier.align(Alignment.Center),
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.Center
                         ) {
                             Icon(
                                 imageVector = topIcon,
@@ -1451,6 +1481,7 @@ fun RavenApp(
                                 tint = palette.textSecondary,
                                 modifier = Modifier.size(15.dp)
                             )
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = topTitle,
                                 color = palette.textPrimary,
@@ -1463,7 +1494,6 @@ fun RavenApp(
 
                         // Right minimalist icons (Inbox, Security Shield, Dock Members, Platform Settings)
                         Row(
-                            modifier = Modifier.align(Alignment.CenterEnd),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
@@ -1636,7 +1666,6 @@ fun RavenApp(
                                     onExploreServersClick = { showExploreServersSheet = true },
                                     onOpenOrbsShop = { showOrbsShopDialog = true },
                                     onOpenBotsDashboard = { showBotDashboardSheet = true },
-                                    onOpenAiAssistant = { showAiAssistantSheet = true },
                                     unseenStoriesCount = storyUiState.unseenGroups.count { !it.isCurrentUser },
                                     onOpenStories = {
                                         val targetGroup = storyUiState.unseenGroups.firstOrNull() ?: storyUiState.allGroups.firstOrNull()
@@ -1930,6 +1959,7 @@ fun RavenApp(
     if (showRolesMatrixSheet && !activeServer.isDmTab) {
         CommunityRolesMatrixSheet(
             server = activeServer,
+            currentUserId = currentUser.id,
             canManageRoles = CommunityPermissions.hasPermission(activeServer, currentUser.id, RolePermission.MANAGE_ROLES),
             onSaveRole = { name, colorHex, secHex, perms ->
                 communityViewModel.saveCustomRole(activeServer.id, name, colorHex, secHex, perms)
@@ -2087,6 +2117,9 @@ fun RavenApp(
             onUpdateServerBannerColor = { colorHex -> repository.updateServerBannerColor(activeServer.id, colorHex) },
             onUpdateChannelSettings = { chId, slowSec, readOnly ->
                 repository.updateChannelSettings(activeServer.id, chId, slowSec, readOnly)
+            },
+            onToggleServerClosed = { closed ->
+                communityViewModel.setServerClosed(activeServer.id, closed)
             },
             onOpenFullAdminDashboard = { showServerAdminDashboard = true },
             onDismiss = { showServerSettingsSheet = false }
@@ -2368,32 +2401,50 @@ fun RavenApp(
         )
     }
 
-    // RAVEN AI Assistant Modal Sheet
-    if (showAiAssistantSheet) {
-        AiAssistantSheet(
-            uiState = aiUiState,
-            viewModel = aiViewModel,
-            activeServer = activeServer,
-            activeChannel = activeChannel,
-            channelMessages = messages[activeChannel.id].orEmpty(),
-            currentUserId = currentUser.id,
-            onPostToChannel = { text ->
-                if (!activeServer.isDmTab) {
-                    repository.sendMessage(activeChannel.id, text, null, null, 0)
-                    showAiAssistantSheet = false
+    // Server Background & Theme Dialog (preset themes or gallery)
+    if (showServerBackgroundDialog && !activeServer.isDmTab) {
+        val currentServerBg = resolveServerBackgroundTheme(
+            server = activeServer,
+            channelId = null,
+            userBackgrounds = chatBackgrounds
+        )
+        val canManageOfficial = CommunityPermissions.isCreatorOrAdmin(activeServer, currentUser.id) ||
+            CommunityPermissions.hasPermission(activeServer, currentUser.id, RolePermission.MANAGE_COMMUNITY)
+        ChatBackgroundDialog(
+            currentTheme = currentServerBg,
+            title = "Fond du serveur • ${activeServer.name}",
+            subtitle = "Choisissez un thème ou une photo de votre galerie",
+            allowServerScopeToggle = true,
+            initialApplyToWholeServer = true,
+            canSetOfficialServerDefault = canManageOfficial,
+            onApplyTheme = { theme ->
+                repository.setChatBackground(activeChannel.id, theme)
+            },
+            onApplyServerWide = { theme, makeOfficial ->
+                repository.setChatBackground(serverBackgroundTargetKey(activeServer.id), theme)
+                if (makeOfficial && canManageOfficial) {
+                    val isPreset = ShopCatalog.initialChatThemes.any { it.id == theme.id && it.imageUrl.isNullOrBlank() }
+                    communityViewModel.updateServerOfficialBackground(
+                        server = activeServer,
+                        backgroundThemeId = if (isPreset && theme.imageUrl.isNullOrBlank()) theme.id else null,
+                        backgroundImageUrl = theme.imageUrl,
+                        backgroundOpacity = theme.opacity
+                    )
                 }
             },
-            onPublishAnnouncement = { title, content, isPinned ->
-                if (!activeServer.isDmTab) {
-                    communityViewModel.publishAnnouncement(activeServer.id, title, content, isPinned)
+            onResetTheme = {
+                repository.clearChatBackground(serverBackgroundTargetKey(activeServer.id))
+                repository.clearChatBackground(activeChannel.id)
+                if (canManageOfficial) {
+                    communityViewModel.updateServerOfficialBackground(
+                        server = activeServer,
+                        backgroundThemeId = null,
+                        backgroundImageUrl = null,
+                        backgroundOpacity = 0.50f
+                    )
                 }
             },
-            onCreateEvent = { title, desc, dateTime, location ->
-                if (!activeServer.isDmTab) {
-                    communityViewModel.createEvent(activeServer.id, title, desc, dateTime, location)
-                }
-            },
-            onDismiss = { showAiAssistantSheet = false }
+            onDismiss = { showServerBackgroundDialog = false }
         )
     }
 
@@ -2437,6 +2488,7 @@ fun RavenApp(
                 onReportStory = { storyId, reason, details -> storyViewModel.reportStory(storyId, reason, details) },
                 onModerateHideStory = { storyId, reason -> storyViewModel.moderateStory(storyId, true, reason) },
                 onReplyToStory = { storyId, reply -> storyViewModel.replyToStory(storyId, reply) },
+                onToggleLike = { storyId -> storyViewModel.toggleStoryLike(storyId) },
                 onDismiss = { viewingStoryAuthorId = null }
             )
         } else {
@@ -2464,10 +2516,10 @@ fun RavenApp(
             server = activeServer,
             currentUser = currentUser,
             communityUiState = communityUiState,
-            onUpdateIdentityAndTheme = { name, handle, desc, iconText, iconPreset, imgUrl, banUrl, accentHex, secHex, style, catTag ->
+            onUpdateIdentityAndTheme = { name, handle, desc, iconText, iconPreset, imgUrl, banUrl, accentHex, secHex, style, catTag, bgThemeId, bgImgUrl, bgOpacity ->
                 communityViewModel.updateIdentityAndTheme(
                     activeServer.id, name, handle, desc, iconText, iconPreset,
-                    imgUrl, banUrl, accentHex, secHex, style, catTag
+                    imgUrl, banUrl, accentHex, secHex, style, catTag, bgThemeId, bgImgUrl, bgOpacity
                 )
             },
             onUpsertCategory = { catId, name, isPriv, roleIds ->
@@ -2514,6 +2566,9 @@ fun RavenApp(
             },
             onUpdatePrivacyConfig = { pub, cfg ->
                 communityViewModel.updatePrivacyConfig(activeServer.id, pub, cfg)
+            },
+            onToggleServerClosed = { closed ->
+                communityViewModel.setServerClosed(activeServer.id, closed)
             },
             onDismiss = { showServerAdminDashboard = false }
         )

@@ -92,6 +92,10 @@ fun ChatView(
     onOpenInbox: () -> Unit = {},
     chatTheme: ChatBackgroundTheme? = null,
     onApplyChatTheme: (ChatBackgroundTheme) -> Unit = {},
+    onResetChatTheme: (() -> Unit)? = null,
+    serverName: String = "",
+    canManageServerBackground: Boolean = false,
+    onApplyServerBackground: ((ChatBackgroundTheme, Boolean) -> Unit)? = null,
     onCreatePoll: (question: String, options: List<String>, allowsMultiple: Boolean) -> Unit = { _, _, _ -> },
     onVotePoll: (messageId: String, optionId: String) -> Unit = { _, _ -> },
     unlockedStickers: List<String> = emptyList(),
@@ -118,13 +122,16 @@ fun ChatView(
     onSendScheduledNow: (String) -> Unit = {},
     onScheduleReminder: (message: Message, delayMs: Long, delayLabel: String) -> Unit = { _, _, _ -> },
     onOpenWhiteboard: () -> Unit = {},
-    onOpenAiAssistant: () -> Unit = {},
     botSlashCommands: List<SlashCommandOption> = emptyList(),
     currentUserId: String = "",
     currentUserName: String = "",
     pollViewModel: PollViewModel? = null,
     onOpenPollsHub: () -> Unit = {},
     onOpenAdvancedPollEditor: () -> Unit = {},
+    isServerClosed: Boolean = false,
+    canBypassServerClosed: Boolean = false,
+    serverClosedByName: String? = null,
+    onToggleServerClosed: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -287,6 +294,21 @@ fun ChatView(
                                             fontSize = 11.sp
                                         )
                                     }
+                                    if (isServerClosed) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            color = DiscordRed.copy(alpha = 0.2f),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "Fermé",
+                                                color = DiscordRed,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
                                     if (channel.isReadOnly) {
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Icon(Icons.Default.Lock, contentDescription = "Lecture seule", tint = DiscordAmber, modifier = Modifier.size(13.dp))
@@ -403,17 +425,6 @@ fun ChatView(
                             Icon(
                                 imageVector = Icons.Default.Poll,
                                 contentDescription = "Sondages avancés",
-                                tint = palette.textSecondary
-                            )
-                        }
-
-                        IconButton(
-                            onClick = onOpenAiAssistant,
-                            modifier = Modifier.testTag("chat_ai_assistant_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.AutoAwesome,
-                                contentDescription = "Ouvrir RAVEN AI",
                                 tint = palette.textSecondary
                             )
                         }
@@ -855,11 +866,14 @@ fun ChatView(
                     }
                 }
 
-                // Read-Only / Slowmode / Error notice banner
-                if (channel.isReadOnly || slowmodeRemainingSec > 0 || sendBlockedReason != null) {
+                // Closed server / Read-Only / Slowmode / Error notice banner
+                val isLockedByClosedServer = isServerClosed && !canBypassServerClosed
+                if (isServerClosed || channel.isReadOnly || slowmodeRemainingSec > 0 || sendBlockedReason != null) {
+                    val noticeBg = if (isServerClosed) DiscordRed.copy(alpha = 0.14f) else DiscordAmber.copy(alpha = 0.14f)
+                    val noticeAccent = if (isServerClosed) DiscordRed else DiscordAmber
                     Surface(
-                        color = DiscordAmber.copy(alpha = 0.14f),
-                        modifier = Modifier.fillMaxWidth()
+                        color = noticeBg,
+                        modifier = Modifier.fillMaxWidth().testTag("chat_notice_banner")
                     ) {
                         Row(
                             modifier = Modifier
@@ -870,25 +884,37 @@ fun ChatView(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                 Icon(
-                                    imageVector = if (channel.isReadOnly) Icons.Default.Lock else Icons.Default.Timer,
+                                    imageVector = if (isServerClosed || channel.isReadOnly) Icons.Default.Lock else Icons.Default.Timer,
                                     contentDescription = null,
-                                    tint = DiscordAmber,
+                                    tint = noticeAccent,
                                     modifier = Modifier.size(15.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 val noticeText = when {
+                                    isServerClosed && canBypassServerClosed ->
+                                        "Serveur fermé : seuls les administrateurs et le créateur peuvent envoyer des messages."
+                                    isServerClosed ->
+                                        "Ce serveur est fermé${serverClosedByName?.let { " par $it" }.orEmpty()} — seuls les administrateurs peuvent écrire."
                                     channel.isReadOnly -> "Salon en lecture seule — envoi de messages verrouillé."
                                     slowmodeRemainingSec > 0 -> "Mode lent actif : prochain envoi dans ${slowmodeRemainingSec}s"
                                     else -> sendBlockedReason ?: ""
                                 }
                                 Text(
                                     text = noticeText,
-                                    color = DiscordAmber,
+                                    color = noticeAccent,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
                             }
-                            if (sendBlockedReason != null && !channel.isReadOnly && slowmodeRemainingSec == 0) {
+                            if (isServerClosed && canBypassServerClosed && onToggleServerClosed != null) {
+                                TextButton(
+                                    onClick = { onToggleServerClosed(false) },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                    modifier = Modifier.height(28.dp).testTag("chat_reopen_server_btn")
+                                ) {
+                                    Text("Ouvrir", color = DiscordGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            } else if (sendBlockedReason != null && !isServerClosed && !channel.isReadOnly && slowmodeRemainingSec == 0) {
                                 IconButton(
                                     onClick = onDismissBlockedReason,
                                     modifier = Modifier.size(20.dp)
@@ -902,7 +928,7 @@ fun ChatView(
 
                 // Input bar — Discord unified rounded composer box
                 if (!isRecordingAudio) {
-                    val canCompose = !channel.isReadOnly
+                    val canCompose = !channel.isReadOnly && !isLockedByClosedServer
                     Surface(
                         color = if (canCompose) palette.inputBg else palette.inputBg.copy(alpha = 0.55f),
                         shape = RoundedCornerShape(12.dp),
@@ -963,6 +989,7 @@ fun ChatView(
                                 placeholder = {
                                     Text(
                                         text = when {
+                                            isLockedByClosedServer -> "Serveur fermé (admins uniquement)"
                                             channel.isReadOnly -> "Salon en lecture seule"
                                             slowmodeRemainingSec > 0 -> "Slowmode (${slowmodeRemainingSec}s)..."
                                             else -> "Envoyer un message dans #${channel.name}"
@@ -1113,11 +1140,11 @@ fun ChatView(
                             .background(Brush.verticalGradient(listOf(color1, color2)))
                     )
                 }
-                // Dark scrim for readability, with darkness adjusted by opacity setting
+                // Dark scrim for readability, adjusted smoothly by user visibility setting
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 1f - (theme.opacity * 0.45f)))
+                        .background(Color.Black.copy(alpha = (0.78f - theme.opacity * 0.62f).coerceIn(0.16f, 0.78f)))
                 )
             }
 
@@ -1356,13 +1383,29 @@ fun ChatView(
         )
     }
 
-    // Chat background customization dialog
+    // Chat & server background customization dialog
     if (showBackgroundDialog) {
         ChatBackgroundDialog(
             currentTheme = chatTheme,
             onApplyTheme = { theme ->
                 onApplyChatTheme(theme)
                 showBackgroundDialog = false
+            },
+            title = if (serverName.isNotBlank()) "Fond • #${channel.name}" else "Fond de discussion",
+            subtitle = if (serverName.isNotBlank()) "Salon ou tout le serveur $serverName" else "Choisissez un thème ou votre galerie",
+            allowServerScopeToggle = serverName.isNotBlank(),
+            canSetOfficialServerDefault = canManageServerBackground,
+            onApplyServerWide = if (onApplyServerBackground != null) {
+                { theme, makeOfficial ->
+                    onApplyServerBackground(theme, makeOfficial)
+                    showBackgroundDialog = false
+                }
+            } else null,
+            onResetTheme = onResetChatTheme?.let { reset ->
+                {
+                    reset()
+                    showBackgroundDialog = false
+                }
             },
             onDismiss = { showBackgroundDialog = false }
         )

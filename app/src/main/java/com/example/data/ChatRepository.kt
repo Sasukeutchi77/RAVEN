@@ -278,7 +278,6 @@ class ChatRepository(
     }
 
     internal var botCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
-    internal var aiCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
     internal var botMessageHandler: ((serverId: String, channelId: String, message: Message) -> Unit)? = null
     internal var botCommunityEventHandler: ((serverId: String, eventType: String, actorUid: String, actorName: String, detail: String) -> Unit)? = null
     internal var pluginCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
@@ -374,28 +373,6 @@ class ChatRepository(
         )
         val currentList = _messages.value[targetId] ?: emptyList()
         _messages.value = _messages.value + (targetId to (currentList + extMsg))
-    }
-
-    internal fun postLocalAssistantFeedback(targetId: String, text: String) {
-        val currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-        val aiSender = User(
-            id = "raven_ai",
-            name = "RAVEN AI",
-            tag = "#AI",
-            avatarColor = 0xFF7C3AEDL,
-            role = UserRole.BOT,
-            status = UserStatus.ONLINE
-        )
-        val msg = Message(
-            id = "ai_local_${UUID.randomUUID().toString().take(8)}",
-            channelId = targetId,
-            sender = aiSender,
-            text = text,
-            timestamp = currentTime,
-            isSystemAnnouncement = false
-        )
-        val currentList = _messages.value[targetId] ?: emptyList()
-        _messages.value = _messages.value + (targetId to (currentList + msg))
     }
 
     private val jukeboxAudioEngine: JukeboxAudioEngine? by lazy {
@@ -703,13 +680,24 @@ class ChatRepository(
         }
         _isFirebaseSignedIn.value = true
         _firebaseUserEmail.value = authUser.email
-        _currentUser.value = _currentUser.value.copy(
+        val updatedCurr = _currentUser.value.copy(
             id = authUser.uid,
             name = authUser.displayName?.takeIf { it.isNotBlank() } ?: _currentUser.value.name,
             avatarUrl = authUser.photoUrl?.toString() ?: _currentUser.value.avatarUrl,
             email = authUser.email ?: _currentUser.value.email,
             role = UserRole.ADMIN
         )
+        _currentUser.value = updatedCurr
+        _servers.value = _servers.value.map { srv ->
+            if (srv.ownerId == "user_me" || "user_me" in srv.adminIds || srv.members.any { it.id == "user_me" }) {
+                srv.copy(
+                    ownerId = if (srv.ownerId == "user_me") authUser.uid else srv.ownerId,
+                    adminIds = srv.adminIds.map { if (it == "user_me") authUser.uid else it }.distinct(),
+                    moderatorIds = srv.moderatorIds.map { if (it == "user_me") authUser.uid else it }.distinct(),
+                    members = srv.members.map { if (it.id == "user_me") updatedCurr else it }
+                )
+            } else srv
+        }
         loadFullStateFromFirestore()
         listenToUserNotifications(authUser.uid)
         listenToPublicProfiles()
@@ -808,6 +796,7 @@ class ChatRepository(
                     "boostCount" to (localServer?.boostCount ?: 0),
                     "boostLevel" to (localServer?.boostLevel ?: 0),
                     "isPublic" to isPublic,
+                    "isClosed" to (localServer?.isClosed ?: false),
                     "categoryTag" to (localServer?.categoryTag ?: "Communauté"),
                     "description" to (localServer?.description ?: "Serveur communautaire Raven"),
                     "rulesGuidelines" to (localServer?.rulesGuidelines ?: "Respect, entraide et bienveillance entre membres."),
@@ -1068,6 +1057,11 @@ class ChatRepository(
         }
         val srv = _servers.value.find { it.id == ch.serverId }
         val uid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        if (srv != null && !srv.isDmTab && srv.isClosed && !CommunityPermissions.isCreatorOrAdmin(srv, uid)) {
+            _lastSendBlockedReason.value =
+                "Serveur fermé : seuls les administrateurs et le créateur peuvent envoyer des messages."
+            return false
+        }
         val isStaff = srv != null && (
             CommunityPermissions.isOwner(srv, uid) ||
                 CommunityPermissions.effectiveRole(srv, uid) in setOf(UserRole.ADMIN, UserRole.MODERATOR)
@@ -1766,6 +1760,14 @@ class ChatRepository(
     fun setChatBackground(targetId: String, theme: ChatBackgroundTheme) {
         _chatBackgrounds.value = _chatBackgrounds.value + (targetId to theme)
         advanceQuest("q_profile")
+        saveProfileToFirestore()
+    }
+
+    fun clearChatBackground(targetId: String) {
+        if (_chatBackgrounds.value.containsKey(targetId)) {
+            _chatBackgrounds.value = _chatBackgrounds.value - targetId
+            saveProfileToFirestore()
+        }
     }
 
     fun updateOrbsBalance(balance: Int) {
@@ -1918,13 +1920,14 @@ class ChatRepository(
         val settings = _appSettings.value
 
         val bgSerialized = _chatBackgrounds.value.mapValues { (_, theme) ->
-            mapOf(
-                "id" to theme.id,
-                "name" to theme.name,
-                "primaryColor" to theme.primaryColor,
-                "secondaryColor" to (theme.secondaryColor ?: theme.primaryColor),
-                "opacity" to theme.opacity.toDouble()
-            )
+            buildMap<String, Any> {
+                put("id", theme.id)
+                put("name", theme.name)
+                put("primaryColor", theme.primaryColor)
+                put("secondaryColor", theme.secondaryColor ?: theme.primaryColor)
+                theme.imageUrl?.takeIf { it.isNotBlank() }?.let { put("imageUrl", it) }
+                put("opacity", theme.opacity.toDouble())
+            }
         }
         val foldersSerialized = _serverFolders.value.map { folder ->
             mapOf(
@@ -2013,9 +2016,10 @@ class ChatRepository(
             try {
                 Tasks.await(db.collection("users").document(authUser.uid).set(data))
                 Tasks.await(db.collection("public_profiles").document(authUser.uid).set(publicProfile))
-                // Also sync user-owned custom servers (skip default shared mock server_main unless explicitly owned)
+                // Also sync user-owned custom servers (skip default shared mock server_main unless explicitly created in cloud)
                 _servers.value.filter {
-                    !it.isDmTab && (it.ownerId == authUser.uid || (it.id != "server_main" && (it.ownerId == user.id || it.ownerId == "user_me")))
+                    !it.isDmTab && it.id != "server_main" &&
+                        (it.ownerId == authUser.uid || it.ownerId == user.id || it.ownerId == "user_me")
                 }.forEach { srv ->
                     val srvPayload = hashMapOf<String, Any>(
                         "id" to srv.id,
@@ -2031,6 +2035,7 @@ class ChatRepository(
                         "boostLevel" to srv.boostLevel,
                         "isPublic" to srv.isPublic,
                         "isVerified" to srv.isVerified,
+                        "isClosed" to srv.isClosed,
                         "categoryTag" to srv.categoryTag,
                         "description" to srv.description,
                         "rulesGuidelines" to srv.rulesGuidelines,
@@ -2189,6 +2194,29 @@ class ChatRepository(
                             ServerFolder(id, name, colorHex, sIds, exp)
                         }
                     }
+                    val rawBackgrounds = doc.get("chatBackgrounds") as? Map<String, Any?>
+                    if (rawBackgrounds != null) {
+                        val loadedBackgrounds = rawBackgrounds.mapNotNull { (targetKey, rawVal) ->
+                            val map = rawVal as? Map<*, *> ?: return@mapNotNull null
+                            val id = (map["id"] as? String) ?: "custom"
+                            val name = (map["name"] as? String) ?: "Fond personnalisé"
+                            val primary = (map["primaryColor"] as? Number)?.toLong() ?: 0xFF1E1F22L
+                            val secondary = (map["secondaryColor"] as? Number)?.toLong()
+                            val imageUrl = (map["imageUrl"] as? String)?.takeIf { it.isNotBlank() }
+                            val opacity = ((map["opacity"] as? Number)?.toFloat() ?: 0.50f).coerceIn(0.10f, 0.90f)
+                            targetKey to ChatBackgroundTheme(
+                                id = id,
+                                name = name,
+                                primaryColor = primary,
+                                secondaryColor = secondary,
+                                imageUrl = imageUrl,
+                                opacity = opacity
+                            )
+                        }.toMap()
+                        if (loadedBackgrounds.isNotEmpty()) {
+                            _chatBackgrounds.value = _chatBackgrounds.value + loadedBackgrounds
+                        }
+                    }
                 }
                 // Restore user member/owned servers (aligned query: memberIds array-contains)
                 val srvDocs = Tasks.await(
@@ -2213,6 +2241,10 @@ class ChatRepository(
                         val sAdminIds = (srvDoc.get("adminIds") as? List<*>)?.mapNotNull { it as? String } ?: listOf(sOwner)
                         val sModIds = (srvDoc.get("moderatorIds") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
                         val sVerified = srvDoc.getBoolean("isVerified") ?: false
+                        val sClosed = srvDoc.getBoolean("isClosed") ?: false
+                        val sClosedByUid = srvDoc.getString("closedByUid")
+                        val sClosedByName = srvDoc.getString("closedByName")
+                        val sClosedAtMs = srvDoc.getLong("closedAtMs")
                         val bCount = srvDoc.getLong("boostCount")?.toInt() ?: 0
                         val bLevel = srvDoc.getLong("boostLevel")?.toInt() ?: 0
                         val bBanner = srvDoc.getLong("customBannerColorHex")
@@ -2244,6 +2276,10 @@ class ChatRepository(
                                 moderatorIds = sModIds,
                                 categories = if (rawCategories.isNotEmpty()) rawCategories else currentServers[existingIdx].categories,
                                 isVerified = sVerified,
+                                isClosed = sClosed,
+                                closedByUid = sClosedByUid,
+                                closedByName = sClosedByName,
+                                closedAtMs = sClosedAtMs,
                                 boostCount = maxOf(currentServers[existingIdx].boostCount, bCount),
                                 boostLevel = maxOf(currentServers[existingIdx].boostLevel, bLevel),
                                 customBannerColorHex = bBanner ?: currentServers[existingIdx].customBannerColorHex
@@ -2268,6 +2304,10 @@ class ChatRepository(
                                     moderatorIds = sModIds,
                                     categories = rawCategories,
                                     isVerified = sVerified,
+                                    isClosed = sClosed,
+                                    closedByUid = sClosedByUid,
+                                    closedByName = sClosedByName,
+                                    closedAtMs = sClosedAtMs,
                                     boostCount = bCount,
                                     boostLevel = bLevel,
                                     customBannerColorHex = bBanner,
@@ -2316,6 +2356,7 @@ class ChatRepository(
     fun sendThreadMessage(channelId: String, parentMessageId: String, text: String) {
         val trimmed = text.trim()
         if (trimmed.isBlank()) return
+        if (!canPostInTarget(channelId, trimmed)) return
         val currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
         val replyMsg = Message(
             id = "th_${UUID.randomUUID().toString().take(8)}",
@@ -2601,6 +2642,13 @@ class ChatRepository(
     ) {
         val clean = roleName.trim()
         if (clean.isBlank()) return
+        val targetSrv = _servers.value.find { it.id == serverId } ?: return
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        if (isAdmin && !CommunityPermissions.isOwner(targetSrv, actorUid)) {
+            _lastSendBlockedReason.value =
+                "Seul le créateur du serveur ou de la communauté peut créer un rôle administrateur."
+            return
+        }
         val newRole = CustomRole(
             id = "role_${UUID.randomUUID().toString().take(6)}",
             name = clean,
@@ -2628,25 +2676,138 @@ class ChatRepository(
     }
 
     fun assignMemberRole(serverId: String, userId: String, role: UserRole, customRoleId: String? = null) {
+        val srv = _servers.value.find { it.id == serverId } ?: return
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        val customRole = customRoleId?.let { rid -> srv.customRoles.find { it.id == rid } }
+        if (userId == srv.ownerId) {
+            _lastSendBlockedReason.value = "Le rôle du créateur du serveur ne peut pas être modifié."
+            return
+        }
+        if (!CommunityPermissions.canManageAdminRole(srv, actorUid, userId, role, customRole)) {
+            _lastSendBlockedReason.value =
+                "Seul le créateur du serveur ou de la communauté peut nommer ou retirer un administrateur."
+            return
+        }
+        val isActorOwner = CommunityPermissions.isOwner(srv, actorUid)
+        val nextAdmins = when (role) {
+            UserRole.ADMIN -> (srv.adminIds + userId).distinct()
+            else -> srv.adminIds - userId
+        }
+        val nextMods = when (role) {
+            UserRole.MODERATOR -> (srv.moderatorIds + userId).distinct()
+            else -> srv.moderatorIds - userId
+        }
+        val targetName = srv.members.find { it.id == userId }?.name ?: "Membre"
+        val wasAdmin = CommunityPermissions.effectiveRole(srv, userId) == UserRole.ADMIN
+        val actionDesc = when {
+            role == UserRole.ADMIN -> "a nommé administrateur"
+            wasAdmin && role != UserRole.ADMIN -> "a retiré le titre d'administrateur à"
+            else -> "a attribué le rôle ${customRole?.name ?: role.title} à"
+        }
+        val log = AuditLogEntry(
+            id = "log_${UUID.randomUUID().toString().take(6)}",
+            actorName = _currentUser.value.name,
+            actionDescription = actionDesc,
+            targetName = targetName,
+            timestamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        )
+        val updatedMembers = srv.members.map {
+            if (it.id == userId) it.copy(role = role, customRoleId = customRoleId) else it
+        }
         _servers.value = _servers.value.map { server ->
             if (server.id == serverId) {
-                val targetName = server.members.find { it.id == userId }?.name ?: "Membre"
-                val roleLabel = customRoleId?.let { rid -> server.customRoles.find { it.id == rid }?.name } ?: role.name
-                val log = AuditLogEntry(
-                    id = "log_${UUID.randomUUID().toString().take(6)}",
-                    actorName = _currentUser.value.name,
-                    actionDescription = "a attribué le rôle $roleLabel à",
-                    targetName = targetName,
-                    timestamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-                )
                 server.copy(
-                    members = server.members.map {
-                        if (it.id == userId) it.copy(role = role, customRoleId = customRoleId) else it
-                    },
+                    adminIds = nextAdmins,
+                    moderatorIds = nextMods,
+                    members = updatedMembers,
                     auditLogs = listOf(log) + server.auditLogs
                 )
             } else server
         }
+        val db = firestore
+        val authUser = currentAuth()?.currentUser
+        if (db != null && authUser != null && serverId != "server_main") {
+            val customPerms = customRole?.permissions ?: when (role) {
+                UserRole.ADMIN -> RolePermission.entries.filter { it != RolePermission.DELETE_COMMUNITY }.toSet()
+                UserRole.MODERATOR -> defaultPermissionsForFlags(false, canKickBan = true, canManageChannels = true)
+                else -> setOf(RolePermission.SEND_MESSAGES, RolePermission.CONNECT_VOICE)
+            }
+            val targetMember = updatedMembers.find { it.id == userId } ?: User(id = userId, name = targetName)
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val srvRef = db.collection("servers").document(serverId)
+                    val srvUpdate = hashMapOf<String, Any>(
+                        "moderatorIds" to nextMods,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    if (isActorOwner) {
+                        srvUpdate["adminIds"] = nextAdmins
+                    }
+                    Tasks.await(srvRef.update(srvUpdate))
+                    Tasks.await(
+                        srvRef.collection("members").document(userId).set(
+                            CommunityFirestoreSync.memberToMap(targetMember, serverId, role, customPerms, srv.isPublic),
+                            SetOptions.merge()
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w("ChatRepo", "Failed to sync role assignment", e)
+                }
+            }
+        }
+    }
+
+    fun setServerClosed(serverId: String, closed: Boolean): Boolean {
+        val srv = _servers.value.find { it.id == serverId } ?: return false
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        if (!CommunityPermissions.canToggleServerClosed(srv, actorUid)) {
+            _lastSendBlockedReason.value =
+                "Seuls les administrateurs et le créateur peuvent fermer ou ouvrir ce serveur."
+            return false
+        }
+        val actorName = _currentUser.value.name.ifBlank { "Administrateur" }
+        val nowMs = System.currentTimeMillis()
+        val closedByUidVal = if (closed) actorUid else null
+        val closedByNameVal = if (closed) actorName else null
+        val closedAtMsVal = if (closed) nowMs else null
+        val log = AuditLogEntry(
+            id = "log_${UUID.randomUUID().toString().take(6)}",
+            actorName = actorName,
+            actionDescription = if (closed) "a fermé le serveur (admins uniquement)" else "a rouvert le serveur à tous les membres",
+            targetName = srv.name,
+            timestamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        )
+        _servers.value = _servers.value.map { server ->
+            if (server.id == serverId) {
+                server.copy(
+                    isClosed = closed,
+                    closedByUid = closedByUidVal,
+                    closedByName = closedByNameVal,
+                    closedAtMs = closedAtMsVal,
+                    auditLogs = (listOf(log) + server.auditLogs).take(40)
+                )
+            } else server
+        }
+        val db = firestore
+        val authUser = currentAuth()?.currentUser
+        if (db != null && authUser != null && serverId != "server_main") {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    db.collection("servers").document(serverId).update(
+                        hashMapOf<String, Any?>(
+                            "isClosed" to closed,
+                            "closedByUid" to closedByUidVal,
+                            "closedByName" to closedByNameVal,
+                            "closedAtMs" to closedAtMsVal,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w("ChatRepo", "Failed to sync server closed status", e)
+                }
+            }
+        }
+        return true
     }
 
     fun timeoutMember(serverId: String, userId: String) {
@@ -2724,6 +2885,7 @@ class ChatRepository(
             channels = defaultChannels,
             members = listOf(_currentUser.value),
             ownerId = _currentUser.value.id,
+            adminIds = listOf(_currentUser.value.id),
             inviteCode = inviteCode,
             isPublic = isPublic,
             categoryTag = categoryTag,
@@ -3100,6 +3262,7 @@ class ChatRepository(
     fun executeSlashCommand(targetId: String, rawInput: String): Boolean {
         val trimmed = rawInput.trim()
         if (!trimmed.startsWith("/")) return false
+        if (!canPostInTarget(targetId, trimmed)) return false
         val parts = trimmed.split(" ", limit = 2)
         val cmd = parts[0].lowercase()
         val arg = parts.getOrNull(1)?.trim().orEmpty()
@@ -3142,8 +3305,7 @@ class ChatRepository(
             "/clear" -> {
                 _messages.value = _messages.value + (targetId to emptyList())
             }
-            else -> return (aiCommandHandler?.invoke(targetId, trimmed) == true) ||
-                    (pluginCommandHandler?.invoke(targetId, trimmed) == true) ||
+            else -> return (pluginCommandHandler?.invoke(targetId, trimmed) == true) ||
                     (botCommandHandler?.invoke(targetId, trimmed) == true)
         }
         return true

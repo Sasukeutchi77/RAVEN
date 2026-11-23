@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.CommunityPermissions
 import com.example.model.ChannelType
 import com.example.model.CustomRole
 import com.example.model.Server
@@ -258,10 +259,13 @@ fun ServerSettingsSheet(
     onBoostServer: () -> Boolean = { false },
     onUpdateServerBannerColor: (Long) -> Unit = {},
     onUpdateChannelSettings: (channelId: String, slowmodeSeconds: Int, isReadOnly: Boolean) -> Unit = { _, _, _ -> },
+    onToggleServerClosed: (Boolean) -> Unit = {},
     onOpenFullAdminDashboard: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val palette = ravenPalette()
+    val isActorOwner = CommunityPermissions.isOwner(server, currentUser.id)
+    val canToggleClosed = CommunityPermissions.canToggleServerClosed(server, currentUser.id)
     var selectedTab by remember { mutableIntStateOf(0) }
     var serverNameInput by remember(server.id) { mutableStateOf(server.name) }
 
@@ -353,6 +357,50 @@ fun ServerSettingsSheet(
                 when (selectedTab) {
                     0 -> {
                         item {
+                            Surface(
+                                color = palette.cardBg,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (server.isClosed) DiscordRed.copy(alpha = 0.45f) else palette.border
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (server.isClosed) Icons.Default.Lock else Icons.Default.LockOpen,
+                                        contentDescription = null,
+                                        tint = if (server.isClosed) DiscordRed else DiscordGreen
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = if (server.isClosed) "Serveur fermé (Admins uniquement)" else "Serveur ouvert à tous les membres",
+                                            color = palette.textPrimary,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = if (server.isClosed) "Seuls le créateur et les administrateurs peuvent écrire dans les salons." else "Tous les membres autorisés peuvent envoyer des messages.",
+                                            color = palette.textMuted,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                    Switch(
+                                        checked = server.isClosed,
+                                        enabled = canToggleClosed,
+                                        onCheckedChange = { closed -> onToggleServerClosed(closed) },
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color.White,
+                                            checkedTrackColor = DiscordRed
+                                        ),
+                                        modifier = Modifier.testTag("settings_server_closed_switch")
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
                             Text("NOM DU SERVEUR", color = palette.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.height(6.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -453,7 +501,11 @@ fun ServerSettingsSheet(
                                         }
                                     }
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    RolePermissionRow("Droits Administrateur", permIsAdmin) { permIsAdmin = it }
+                                    RolePermissionRow(
+                                        label = if (isActorOwner) "Droits Administrateur" else "Droits Administrateur (créateur requis)",
+                                        checked = permIsAdmin && isActorOwner,
+                                        enabled = isActorOwner
+                                    ) { permIsAdmin = it }
                                     RolePermissionRow("Expulser / Timeout membres", permCanKick) { permCanKick = it }
                                     RolePermissionRow("Gérer les salons", permCanManage) { permCanManage = it }
 
@@ -461,7 +513,7 @@ fun ServerSettingsSheet(
                                     Button(
                                         onClick = {
                                             if (roleNameInput.isNotBlank()) {
-                                                onCreateRole(roleNameInput, roleColorHex, roleSecondaryHex, permIsAdmin, permCanKick, permCanManage)
+                                                onCreateRole(roleNameInput, roleColorHex, roleSecondaryHex, permIsAdmin && isActorOwner, permCanKick, permCanManage)
                                                 roleNameInput = ""
                                             }
                                         },
@@ -689,6 +741,9 @@ fun ServerSettingsSheet(
                     2 -> {
                         items(server.members, key = { it.id }) { member ->
                             val isSelf = member.id == currentUser.id || member.id == "user_me"
+                            val isTargetOwner = CommunityPermissions.isOwner(server, member.id)
+                            val effectiveRole = CommunityPermissions.effectiveRole(server, member.id)
+                            val canEditTargetRole = !isTargetOwner && (effectiveRole != UserRole.ADMIN || isActorOwner)
                             var roleMenuExpanded by remember { mutableStateOf(false) }
 
                             Surface(
@@ -710,6 +765,13 @@ fun ServerSettingsSheet(
                                                     fontSize = 14.sp,
                                                     fontWeight = FontWeight.Bold
                                                 )
+                                                if (isTargetOwner) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    RoleTagBadge("CRÉATEUR", DiscordBlurple)
+                                                } else if (effectiveRole == UserRole.ADMIN) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    RoleTagBadge("ADMIN", DiscordRed)
+                                                }
                                                 if (member.isTimedOut) {
                                                     Spacer(modifier = Modifier.width(6.dp))
                                                     Surface(color = DiscordAmber.copy(alpha = 0.2f), shape = RoundedCornerShape(4.dp)) {
@@ -723,9 +785,11 @@ fun ServerSettingsSheet(
                                                     }
                                                 }
                                             }
-                                            val roleLabel = member.customRoleId?.let { rid ->
-                                                server.customRoles.find { it.id == rid }?.name
-                                            } ?: member.role.title
+                                            val roleLabel = when {
+                                                isTargetOwner -> "Créateur du serveur"
+                                                member.customRoleId != null -> server.customRoles.find { it.id == member.customRoleId }?.name ?: effectiveRole.title
+                                                else -> effectiveRole.title
+                                            }
                                             Text(
                                                 text = "Rôle : $roleLabel • Niv. ${member.level}",
                                                 color = palette.textMuted,
@@ -733,34 +797,87 @@ fun ServerSettingsSheet(
                                             )
                                         }
 
-                                        Box {
-                                            TextButton(onClick = { roleMenuExpanded = true }) {
-                                                Text("Rôle", color = DiscordBlurple, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                            }
-                                            DropdownMenu(
-                                                expanded = roleMenuExpanded,
-                                                onDismissRequest = { roleMenuExpanded = false },
-                                                modifier = Modifier.background(palette.cardBg)
-                                            ) {
-                                                server.customRoles.forEach { cr ->
-                                                    DropdownMenuItem(
-                                                        text = { Text(cr.name, color = Color(cr.colorHex), fontWeight = FontWeight.SemiBold) },
-                                                        onClick = {
-                                                            val mappedRole = when {
-                                                                cr.isAdmin -> UserRole.ADMIN
-                                                                cr.canKickBan -> UserRole.MODERATOR
-                                                                else -> UserRole.MEMBER
+                                        if (canEditTargetRole) {
+                                            Box {
+                                                TextButton(onClick = { roleMenuExpanded = true }) {
+                                                    Text("Rôle", color = DiscordBlurple, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                                }
+                                                DropdownMenu(
+                                                    expanded = roleMenuExpanded,
+                                                    onDismissRequest = { roleMenuExpanded = false },
+                                                    modifier = Modifier.background(palette.cardBg)
+                                                ) {
+                                                    if (isActorOwner) {
+                                                        val isTargetAdmin = effectiveRole == UserRole.ADMIN
+                                                        DropdownMenuItem(
+                                                            text = {
+                                                                Text(
+                                                                    text = if (isTargetAdmin) "Retirer le titre Admin" else "Nommer Admin",
+                                                                    color = if (isTargetAdmin) DiscordRed else DiscordGreen,
+                                                                    fontWeight = FontWeight.Bold
+                                                                )
+                                                            },
+                                                            onClick = {
+                                                                onAssignMemberRole(
+                                                                    member.id,
+                                                                    if (isTargetAdmin) UserRole.MEMBER else UserRole.ADMIN,
+                                                                    null
+                                                                )
+                                                                roleMenuExpanded = false
                                                             }
-                                                            onAssignMemberRole(member.id, mappedRole, cr.id)
-                                                            roleMenuExpanded = false
-                                                        }
-                                                    )
+                                                        )
+                                                    }
+                                                    server.customRoles.filter { !it.isAdmin || isActorOwner }.forEach { cr ->
+                                                        DropdownMenuItem(
+                                                            text = { Text(cr.name, color = Color(cr.colorHex), fontWeight = FontWeight.SemiBold) },
+                                                            onClick = {
+                                                                val mappedRole = when {
+                                                                    cr.isAdmin -> UserRole.ADMIN
+                                                                    cr.canKickBan -> UserRole.MODERATOR
+                                                                    else -> UserRole.MEMBER
+                                                                }
+                                                                onAssignMemberRole(member.id, mappedRole, cr.id)
+                                                                roleMenuExpanded = false
+                                                            }
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
                                     }
 
-                                    if (!isSelf) {
+                                    if (isActorOwner && !isSelf && !isTargetOwner) {
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        val isTargetAdmin = effectiveRole == UserRole.ADMIN
+                                        FilledTonalButton(
+                                            onClick = {
+                                                onAssignMemberRole(
+                                                    member.id,
+                                                    if (isTargetAdmin) UserRole.MEMBER else UserRole.ADMIN,
+                                                    null
+                                                )
+                                            },
+                                            colors = ButtonDefaults.filledTonalButtonColors(
+                                                containerColor = if (isTargetAdmin) DiscordRed.copy(alpha = 0.16f) else DiscordBlurple.copy(alpha = 0.16f),
+                                                contentColor = if (isTargetAdmin) DiscordRed else DiscordBlurple
+                                            ),
+                                            modifier = Modifier.fillMaxWidth().testTag("settings_admin_toggle_${member.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isTargetAdmin) Icons.Default.RemoveModerator else Icons.Default.AdminPanelSettings,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = if (isTargetAdmin) "Retirer Admin" else "Nommer Admin",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+
+                                    if (!isSelf && !isTargetOwner && (effectiveRole != UserRole.ADMIN || isActorOwner)) {
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             OutlinedButton(
@@ -849,6 +966,7 @@ fun ServerSettingsSheet(
 private fun RolePermissionRow(
     label: String,
     checked: Boolean,
+    enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
     val palette = ravenPalette()
@@ -857,9 +975,10 @@ private fun RolePermissionRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(text = label, color = palette.textSecondary, fontSize = 12.sp)
+        Text(text = label, color = if (enabled) palette.textSecondary else palette.textMuted, fontSize = 12.sp, modifier = Modifier.weight(1f))
         Switch(
             checked = checked,
+            enabled = enabled,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = DiscordBlurple)
         )

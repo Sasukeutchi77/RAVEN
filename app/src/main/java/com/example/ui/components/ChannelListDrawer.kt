@@ -55,10 +55,11 @@ fun ChannelListDrawer(
     onOpenRolesMatrix: () -> Unit = {},
     onOpenCategoriesManager: () -> Unit = {},
     onOpenBotsDashboard: () -> Unit = {},
-    onOpenAiAssistant: () -> Unit = {},
+    onOpenServerBackground: () -> Unit = {},
     onOpenPollsHub: () -> Unit = {},
     onOpenPluginsManager: () -> Unit = {},
     onOpenAdminDashboard: () -> Unit = {},
+    onToggleServerClosed: (Boolean) -> Unit = {},
     onEditCommunity: () -> Unit = {},
     onLeaveCommunity: () -> Unit = {},
     onUserClick: () -> Unit,
@@ -70,6 +71,9 @@ fun ChannelListDrawer(
     val palette = ravenPalette()
     var isMenuOpen by remember { mutableStateOf(false) }
     val isOwner = remember(server, currentUser.id) { CommunityPermissions.isOwner(server, currentUser.id) }
+    val canToggleServerClosed = remember(server, currentUser.id) {
+        CommunityPermissions.canToggleServerClosed(server, currentUser.id)
+    }
     val canManageCommunity = remember(server, currentUser.id) {
         CommunityPermissions.hasPermission(server, currentUser.id, RolePermission.MANAGE_COMMUNITY)
     }
@@ -86,16 +90,27 @@ fun ChannelListDrawer(
         color = palette.sidebarBg
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Server Header (with optional Boosted or Customized theme gradient banner)
-            val themeAccentHex = server.customization.theme.accentColorHex
+            // Server Header (with optional Boosted or Customized theme gradient / background preview)
+            val theme = server.customization.theme
+            val themeAccentHex = theme.accentColorHex
             val boostHex = server.customBannerColorHex ?: themeAccentHex
+            val bgTheme = theme.toChatBackgroundTheme()
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(if (server.boostLevel > 0) 68.dp else 56.dp)
                     .then(
-                        if (server.boostLevel > 0 || themeAccentHex != 0xFF5865F2L) {
-                            Modifier.background(
+                        when {
+                            bgTheme != null && bgTheme.imageUrl.isNullOrBlank() -> Modifier.background(
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        Color(bgTheme.primaryColor).copy(alpha = 0.85f),
+                                        Color(bgTheme.secondaryColor ?: boostHex).copy(alpha = 0.55f),
+                                        palette.sidebarBg
+                                    )
+                                )
+                            )
+                            server.boostLevel > 0 || themeAccentHex != 0xFF5865F2L -> Modifier.background(
                                 Brush.horizontalGradient(
                                     listOf(
                                         Color(boostHex).copy(alpha = if (server.boostLevel > 0) 0.5f else 0.28f),
@@ -103,8 +118,7 @@ fun ChannelListDrawer(
                                     )
                                 )
                             )
-                        } else {
-                            Modifier.background(palette.sidebarBg)
+                            else -> Modifier.background(palette.sidebarBg)
                         }
                     )
                     .clickable { isMenuOpen = true }
@@ -117,14 +131,32 @@ fun ChannelListDrawer(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = server.name,
-                            color = palette.textPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = server.name,
+                                color = palette.textPrimary,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (server.isClosed) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = DiscordRed.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = "FERMÉ",
+                                        color = DiscordRed,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        }
                         if (server.boostLevel > 0) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
@@ -185,12 +217,13 @@ fun ChannelListDrawer(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("Assistant RAVEN AI", color = Color(0xFFA855F7), fontWeight = FontWeight.Bold) },
-                        leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Color(0xFFA855F7)) },
+                        text = { Text("Fond & thème du serveur", color = palette.textPrimary, fontWeight = FontWeight.SemiBold) },
+                        leadingIcon = { Icon(Icons.Default.Wallpaper, contentDescription = null, tint = DiscordBlurple) },
                         onClick = {
                             isMenuOpen = false
-                            onOpenAiAssistant()
-                        }
+                            onOpenServerBackground()
+                        },
+                        modifier = Modifier.testTag("drawer_server_background_btn")
                     )
                     DropdownMenuItem(
                         text = { Text("Sondages avancés", color = palette.textPrimary, fontWeight = FontWeight.SemiBold) },
@@ -228,6 +261,29 @@ fun ChannelListDrawer(
                                 isMenuOpen = false
                                 onOpenCategoriesManager()
                             }
+                        )
+                    }
+                    if (canToggleServerClosed) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = if (server.isClosed) "Ouvrir le serveur (tous les membres)" else "Fermer le serveur (admins uniquement)",
+                                    color = if (server.isClosed) DiscordGreen else DiscordRed,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (server.isClosed) Icons.Default.LockOpen else Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = if (server.isClosed) DiscordGreen else DiscordRed
+                                )
+                            },
+                            onClick = {
+                                isMenuOpen = false
+                                onToggleServerClosed(!server.isClosed)
+                            },
+                            modifier = Modifier.testTag("drawer_toggle_server_closed")
                         )
                     }
                     if (canManageCommunity || canManageRoles || canManageChannels || isOwner) {

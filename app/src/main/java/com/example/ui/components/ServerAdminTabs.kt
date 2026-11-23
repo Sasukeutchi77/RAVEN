@@ -429,7 +429,8 @@ fun AdminSecurityRulesAndPrivacyTab(
     isStrictAdmin: Boolean,
     onSaveRulesAndVerification: (rulesList: List<String>, guidelines: String, requireAcceptance: Boolean, level: ServerVerificationLevel) -> Unit,
     onSaveModeration: (ServerModerationConfig) -> Unit,
-    onSavePrivacy: (isPublic: Boolean, ServerPrivacyConfig) -> Unit
+    onSavePrivacy: (isPublic: Boolean, ServerPrivacyConfig) -> Unit,
+    onToggleServerClosed: (Boolean) -> Unit = {}
 ) {
     val palette = ravenPalette()
     val cust = server.customization
@@ -468,6 +469,57 @@ fun AdminSecurityRulesAndPrivacyTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // 0. WhatsApp-style Server Open / Close Control
+        item {
+            Surface(
+                color = palette.cardBg,
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (server.isClosed) DiscordRed.copy(alpha = 0.55f) else palette.border
+                )
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "OUVERTURE / FERMETURE DU SERVEUR (MODE WHATSAPP)",
+                        color = if (server.isClosed) DiscordRed else DiscordGreen,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (server.isClosed) "Serveur fermé (Admins uniquement)" else "Serveur ouvert à tous",
+                                color = palette.textPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (server.isClosed) {
+                                    "Seuls le créateur et les administrateurs peuvent envoyer des messages."
+                                } else {
+                                    "Tous les membres autorisés peuvent envoyer des messages dans les salons."
+                                },
+                                color = palette.textMuted,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = server.isClosed,
+                            enabled = isStrictAdmin,
+                            onCheckedChange = { closed -> onToggleServerClosed(closed) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = DiscordRed
+                            ),
+                            modifier = Modifier.testTag("admin_server_closed_switch")
+                        )
+                    }
+                }
+            }
+        }
+
         // 1. Rules & Verification Level
         item {
             Surface(color = palette.cardBg, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, palette.border)) {

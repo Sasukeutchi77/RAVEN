@@ -214,12 +214,14 @@ fun CommunityInvitesSheet(
 @Composable
 fun CommunityRolesMatrixSheet(
     server: Server,
+    currentUserId: String = "",
     canManageRoles: Boolean,
     onSaveRole: (name: String, colorHex: Long, secondaryHex: Long?, perms: Set<RolePermission>) -> Unit,
     onAssignMemberRole: (uid: String, role: UserRole, customRoleId: String?) -> Unit,
     onDismiss: () -> Unit
 ) {
     val palette = ravenPalette()
+    val isActorOwner = CommunityPermissions.isOwner(server, currentUserId)
     var roleName by remember { mutableStateOf("") }
     var colorHex by remember { mutableLongStateOf(0xFF5865F2L) }
     var selectedPerms by remember {
@@ -271,7 +273,9 @@ fun CommunityRolesMatrixSheet(
                                 }
                             }
                             RolePermission.entries.filter { it != RolePermission.DELETE_COMMUNITY }.forEach { perm ->
-                                val enabled = perm in selectedPerms
+                                val isAdminEquivalentPerm = perm == RolePermission.MANAGE_COMMUNITY || perm == RolePermission.MANAGE_ROLES
+                                val canToggleThisPerm = !isAdminEquivalentPerm || isActorOwner
+                                val enabled = perm in selectedPerms && canToggleThisPerm
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -279,10 +283,15 @@ fun CommunityRolesMatrixSheet(
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(perm.label, color = palette.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                        Text(perm.description, color = palette.textMuted, fontSize = 11.sp)
+                                        Text(
+                                            text = if (!canToggleThisPerm) "Réservé au créateur du serveur" else perm.description,
+                                            color = if (!canToggleThisPerm) DiscordAmber else palette.textMuted,
+                                            fontSize = 11.sp
+                                        )
                                     }
                                     Switch(
                                         checked = enabled,
+                                        enabled = canToggleThisPerm,
                                         onCheckedChange = { checked ->
                                             selectedPerms = if (checked) selectedPerms + perm else selectedPerms - perm
                                         },
@@ -339,6 +348,7 @@ fun CommunityRolesMatrixSheet(
                     var expanded by remember { mutableStateOf(false) }
                     val isOwner = CommunityPermissions.isOwner(server, member.id)
                     val curRole = CommunityPermissions.effectiveRole(server, member.id)
+                    val canEditTargetRole = !isOwner && (curRole != UserRole.ADMIN || isActorOwner)
                     Surface(color = palette.cardBg, shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, palette.border)) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -347,24 +357,43 @@ fun CommunityRolesMatrixSheet(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(member.name, color = palette.textPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Text(if (isOwner) "Propriétaire" else curRole.title, color = palette.textMuted, fontSize = 11.sp)
+                                Text(
+                                    text = when {
+                                        isOwner -> "Créateur"
+                                        curRole == UserRole.ADMIN && !isActorOwner -> "Admin (créateur requis)"
+                                        else -> curRole.title
+                                    },
+                                    color = if (isOwner || curRole == UserRole.ADMIN) DiscordRed else palette.textMuted,
+                                    fontSize = 11.sp
+                                )
                             }
-                            if (!isOwner) {
+                            if (canEditTargetRole) {
                                 Box {
                                     TextButton(onClick = { expanded = true }) {
                                         Text("Changer", color = palette.accent, fontWeight = FontWeight.Bold)
                                     }
                                     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                                        listOf(UserRole.ADMIN, UserRole.MODERATOR, UserRole.MEMBER).forEach { r ->
+                                        val assignableRoles = if (isActorOwner) {
+                                            listOf(UserRole.ADMIN, UserRole.MODERATOR, UserRole.MEMBER)
+                                        } else {
+                                            listOf(UserRole.MODERATOR, UserRole.MEMBER)
+                                        }
+                                        assignableRoles.forEach { r ->
                                             DropdownMenuItem(
-                                                text = { Text(r.title) },
+                                                text = {
+                                                    Text(
+                                                        text = if (r == UserRole.ADMIN && curRole != UserRole.ADMIN) "Nommer Admin"
+                                                        else if (curRole == UserRole.ADMIN && r != UserRole.ADMIN) "Retirer Admin → ${r.title}"
+                                                        else r.title
+                                                    )
+                                                },
                                                 onClick = {
                                                     onAssignMemberRole(member.id, r, null)
                                                     expanded = false
                                                 }
                                             )
                                         }
-                                        server.customRoles.forEach { cr ->
+                                        server.customRoles.filter { !it.isAdmin || isActorOwner }.forEach { cr ->
                                             DropdownMenuItem(
                                                 text = { Text("Personnalisé : ${cr.name}", color = Color(cr.colorHex)) },
                                                 onClick = {

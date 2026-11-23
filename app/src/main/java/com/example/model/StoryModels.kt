@@ -95,6 +95,8 @@ data class StoryItem(
     val viewCount: Int = 0,
     val viewerIds: List<String> = emptyList(),
     val viewers: List<StoryViewerEntry> = emptyList(),
+    val likesCount: Int = 0,
+    val likedByIds: List<String> = emptyList(),
     val reportCount: Int = 0,
     val moderatedHidden: Boolean = false,
     val moderationReason: String? = null,
@@ -104,6 +106,8 @@ data class StoryItem(
 
     fun hasBeenViewedBy(uid: String): Boolean =
         uid in viewerIds || viewers.any { it.viewerId == uid }
+
+    fun hasBeenLikedBy(uid: String): Boolean = uid in likedByIds
 
     fun canBeViewedBy(
         uid: String,

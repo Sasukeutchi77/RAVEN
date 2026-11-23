@@ -228,11 +228,41 @@ class CommunityViewModel(
         accentColorHex: Long,
         secondaryColorHex: Long,
         surfaceStyle: ServerThemeSurfaceStyle,
-        categoryTag: String
+        categoryTag: String,
+        backgroundThemeId: String? = null,
+        backgroundImageUrl: String? = null,
+        backgroundOpacity: Float = 0.50f
     ) = runCommunityAction("Identité & thème du serveur enregistrés !") {
         customizationRepo.updateIdentityAndTheme(
             serverId, name, uniqueHandle, description, iconText, iconPresetKey,
-            imageUrl, bannerUrl, accentColorHex, secondaryColorHex, surfaceStyle, categoryTag
+            imageUrl, bannerUrl, accentColorHex, secondaryColorHex, surfaceStyle, categoryTag,
+            backgroundThemeId, backgroundImageUrl, backgroundOpacity
+        )
+    }
+
+    fun updateServerOfficialBackground(
+        server: Server,
+        backgroundThemeId: String?,
+        backgroundImageUrl: String?,
+        backgroundOpacity: Float
+    ) = runCommunityAction("Fond officiel du serveur mis à jour !") {
+        val t = server.customization.theme
+        customizationRepo.updateIdentityAndTheme(
+            serverId = server.id,
+            name = server.name,
+            uniqueHandleRaw = server.uniqueHandle,
+            description = server.description,
+            iconText = server.iconText,
+            iconPresetKey = t.iconPresetKey,
+            imageUrl = server.imageUrl,
+            bannerUrl = server.bannerUrl,
+            accentColorHex = t.accentColorHex,
+            secondaryColorHex = t.secondaryColorHex,
+            surfaceStyle = t.surfaceStyle,
+            categoryTag = server.categoryTag,
+            backgroundThemeId = backgroundThemeId,
+            backgroundImageUrl = backgroundImageUrl,
+            backgroundOpacity = backgroundOpacity
         )
     }
 
@@ -333,6 +363,14 @@ class CommunityViewModel(
     fun updatePrivacyConfig(serverId: String, isPublic: Boolean, config: ServerPrivacyConfig) =
         runCommunityAction("Paramètres de confidentialité enregistrés !") {
             customizationRepo.updatePrivacyConfig(serverId, isPublic, config)
+        }
+
+    fun setServerClosed(serverId: String, closed: Boolean) =
+        runCommunityAction(
+            if (closed) "Serveur fermé : seuls les admins et le créateur peuvent écrire."
+            else "Serveur ouvert : tous les membres peuvent écrire."
+        ) {
+            communityRepo.setServerClosed(serverId, closed)
         }
 
     override fun onCleared() {

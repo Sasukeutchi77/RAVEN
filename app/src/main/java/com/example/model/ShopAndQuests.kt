@@ -64,14 +64,18 @@ data class Poll(
 
 object ShopCatalog {
     val initialChatThemes = listOf(
-        ChatBackgroundTheme("default", "Discord Slate (Défaut)", 0xFF313338, 0xFF2B2D31),
-        ChatBackgroundTheme("nebula", "Brouillard Magique", 0xFF1A102F, 0xFF4A154B, opacity = 0.45f),
-        ChatBackgroundTheme("infinity", "Tourbillon Infini", 0xFF0D2538, 0xFF1A365D, opacity = 0.45f),
-        ChatBackgroundTheme("cyberpunk", "Néon Cyberpunk", 0xFF2D124D, 0xFF791E88, opacity = 0.40f),
-        ChatBackgroundTheme("phoenix", "Fournaise Phénix", 0xFF350E04, 0xFF7C2D12, opacity = 0.45f),
-        ChatBackgroundTheme("sakura", "Jardin Zen Sakura", 0xFF2D0B24, 0xFF831843, opacity = 0.40f),
-        ChatBackgroundTheme("midnight", "Minuit Corbeau", 0xFF0B0D0F, 0xFF14171A, opacity = 0.50f),
-        ChatBackgroundTheme("emerald", "Forêt Mystique", 0xFF0A231C, 0xFF134E3F, opacity = 0.40f)
+        ChatBackgroundTheme("default", "Ardoise Raven (Défaut)", 0xFF313338, 0xFF2B2D31, opacity = 0.35f),
+        ChatBackgroundTheme("nebula", "Brouillard Magique", 0xFF1A102F, 0xFF4A154B, opacity = 0.55f),
+        ChatBackgroundTheme("infinity", "Tourbillon Infini", 0xFF0D2538, 0xFF1A365D, opacity = 0.55f),
+        ChatBackgroundTheme("cyberpunk", "Néon Cyberpunk", 0xFF2D124D, 0xFF791E88, opacity = 0.50f),
+        ChatBackgroundTheme("phoenix", "Fournaise Phénix", 0xFF350E04, 0xFF7C2D12, opacity = 0.55f),
+        ChatBackgroundTheme("sakura", "Jardin Zen Sakura", 0xFF2D0B24, 0xFF831843, opacity = 0.50f),
+        ChatBackgroundTheme("midnight", "Minuit Corbeau", 0xFF0B0D0F, 0xFF14171A, opacity = 0.60f),
+        ChatBackgroundTheme("emerald", "Forêt Mystique", 0xFF0A231C, 0xFF134E3F, opacity = 0.50f),
+        ChatBackgroundTheme("aurora", "Aurore Boréale", 0xFF042F2E, 0xFF312E81, opacity = 0.55f),
+        ChatBackgroundTheme("ocean_abyss", "Océan Abyssal", 0xFF082F49, 0xFF0F172A, opacity = 0.55f),
+        ChatBackgroundTheme("gold_carbon", "Or & Carbone", 0xFF1C1917, 0xFF78350F, opacity = 0.50f),
+        ChatBackgroundTheme("sunset_velvet", "Coucher de Soleil", 0xFF4C0519, 0xFF9A3412, opacity = 0.50f)
     )
 
     val initialShopItems = listOf(

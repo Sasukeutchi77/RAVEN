@@ -589,127 +589,6 @@ test("Raven Bots: owner isolation, token secret protection, handle ownership, se
   await assertSucceeds(aliceDb.collection("bots").doc("bot_alice_1").delete());
 });
 
-test("RAVEN AI conversations, immutable messages, server context access, and quota limits enforce owner isolation and anti-tamper", async () => {
-  await testEnv.withSecurityRulesDisabled(async (ctx) => {
-    const db = ctx.firestore();
-    await db.collection("servers").doc("ai_srv_priv").set({
-      name: "Secret Guild",
-      ownerId: ALICE_UID,
-      adminIds: [ALICE_UID],
-      moderatorIds: [],
-      isPublic: false,
-      memberIds: [ALICE_UID],
-    });
-  });
-
-  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
-
-  // 1. Alice can create her personal AI conversation & append immutable messages
-  await assertSucceeds(
-    aliceDb.collection("users").doc(ALICE_UID).collection("ai_conversations").doc("conv_1").set({
-      id: "conv_1",
-      userId: ALICE_UID,
-      title: "Assistant Personnel",
-      mode: "PERSONAL",
-      modelName: "gemini-3.8-flash",
-      lastMessagePreview: "Bonjour",
-      messageCount: 1,
-      createdAtMs: 1000,
-      updatedAtMs: 1000,
-    })
-  );
-  await assertSucceeds(
-    aliceDb.collection("users").doc(ALICE_UID).collection("ai_conversations").doc("conv_1")
-      .collection("messages").doc("m_1").set({
-        id: "m_1",
-        conversationId: "conv_1",
-        userId: ALICE_UID,
-        role: "USER",
-        content: "Bonjour RAVEN AI",
-        taskCategory: "CHAT",
-        timestampLabel: "10:00",
-        createdAtMs: 1000,
-      })
-  );
-
-  // Messages are immutable once written
-  await assertFails(
-    aliceDb.collection("users").doc(ALICE_UID).collection("ai_conversations").doc("conv_1")
-      .collection("messages").doc("m_1").update({ content: "Altéré" })
-  );
-
-  // 2. Alice can create a SERVER AI conversation on her own community, whereas Bob (outsider) CANNOT
-  await assertSucceeds(
-    aliceDb.collection("users").doc(ALICE_UID).collection("ai_conversations").doc("conv_srv").set({
-      id: "conv_srv",
-      userId: ALICE_UID,
-      title: "Serveur Secret Guild",
-      mode: "SERVER",
-      serverId: "ai_srv_priv",
-      serverName: "Secret Guild",
-      modelName: "gemini-3.8-flash",
-      messageCount: 0,
-      createdAtMs: 1100,
-      updatedAtMs: 1100,
-    })
-  );
-  await assertFails(
-    bobDb.collection("users").doc(BOB_UID).collection("ai_conversations").doc("conv_bob_hack").set({
-      id: "conv_bob_hack",
-      userId: BOB_UID,
-      title: "Intrusion",
-      mode: "SERVER",
-      serverId: "ai_srv_priv",
-      modelName: "gemini-3.8-flash",
-      messageCount: 0,
-      createdAtMs: 1200,
-      updatedAtMs: 1200,
-    })
-  );
-
-  // 3. Bob CANNOT read, update, or delete Alice's AI conversations, messages, or quota
-  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("ai_conversations").doc("conv_1").get());
-  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("ai_conversations").get());
-  await assertFails(bobDb.collection("users").doc(ALICE_UID).collection("ai_conversations").doc("conv_1").delete());
-  await assertFails(
-    bobDb.collection("users").doc(ALICE_UID).collection("ai_conversations").doc("conv_1")
-      .collection("messages").doc("m_1").get()
-  );
-
-  // 4. Quota creation succeeds within limits, and rejects tampering (inflating dailyLimit or decrementing same-day usage)
-  const quotaRef = aliceDb.collection("users").doc(ALICE_UID).collection("ai_usage").doc("daily_quota");
-  await assertSucceeds(
-    quotaRef.set({
-      userId: ALICE_UID,
-      dayKey: "2026-11-17",
-      requestsToday: 5,
-      dailyLimit: 40,
-      abuseStrikes: 0,
-      blockedUntilMs: 0,
-      estimatedCharsToday: 240,
-    })
-  );
-  await assertFails(
-    quotaRef.update({ dailyLimit: 500 })
-  );
-  await assertFails(
-    quotaRef.update({ requestsToday: 0 })
-  );
-  await assertFails(
-    bobDb.collection("users").doc(ALICE_UID).collection("ai_usage").doc("daily_quota").get()
-  );
-
-  // 5. Alice can delete her own messages and conversation
-  await assertSucceeds(
-    aliceDb.collection("users").doc(ALICE_UID).collection("ai_conversations").doc("conv_1")
-      .collection("messages").doc("m_1").delete()
-  );
-  await assertSucceeds(
-    aliceDb.collection("users").doc(ALICE_UID).collection("ai_conversations").doc("conv_1").delete()
-  );
-});
-
 test("Advanced Voice Channels: channel lock, capacity/role fields, kickedVoiceUids block, and staff voice peer kick", async () => {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
@@ -886,6 +765,8 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
       expiresAtMs: now + 24 * 3600000,
       viewCount: 0,
       viewerIds: [],
+      likesCount: 0,
+      likedByIds: [],
       reportCount: 0,
       moderatedHidden: false,
     })
@@ -946,9 +827,36 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
       textContent: "Contenu piraté",
     })
   );
-  // Bob CANNOT list viewers list of Alice's story; Alice CAN list viewers
+  // Bob AND Moderator Charlie CANNOT list viewers of Alice's story; ONLY author Alice CAN list viewers
   await assertFails(bobDb.collection("stories").doc("st_pub").collection("views").get());
+  await assertFails(charlieDb.collection("stories").doc("st_pub").collection("views").get());
   await assertSucceeds(aliceDb.collection("stories").doc("st_pub").collection("views").get());
+
+  // 4b. Story Likes: other users (Bob) CAN like and unlike Alice's story; author Alice CANNOT self-like; Bob cannot tamper likesCount
+  await assertSucceeds(
+    bobDb.collection("stories").doc("st_pub").update({
+      likedByIds: [BOB_UID],
+      likesCount: 1,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("stories").doc("st_pub").update({
+      likedByIds: [BOB_UID, ALICE_UID],
+      likesCount: 2,
+    })
+  );
+  await assertFails(
+    charlieDb.collection("stories").doc("st_pub").update({
+      likedByIds: [BOB_UID, CHARLIE_UID],
+      likesCount: 50,
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("stories").doc("st_pub").update({
+      likedByIds: [],
+      likesCount: 0,
+    })
+  );
 
   // 5. Reporting & Staff Moderation: Bob reports st_pub, non-mod Bob/Eve cannot moderate or resolve report, Moderator Charlie CAN
   await assertSucceeds(
@@ -2416,3 +2324,176 @@ test("17. RAVEN Account Security enforces owner isolation, rejects plaintext sec
     })
   );
 });
+
+// =========================================================================
+// Test 18: Creator-only Admin designation/revocation & WhatsApp-style server open/close
+// =========================================================================
+test("18. Creator-only admin role assignment/revocation and WhatsApp-style server closure", async () => {
+  const DANA_UID = "dana_admin_1";
+  const now = Date.now();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("servers").doc("srv_wa").set({
+      name: "Salon WhatsApp Style",
+      ownerId: ALICE_UID,
+      adminIds: [ALICE_UID, DANA_UID],
+      moderatorIds: [CHARLIE_UID],
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+      isPublic: false,
+      isClosed: false,
+    });
+    await db.collection("servers").doc("srv_wa").collection("channels").doc("ch_wa").set({
+      serverId: "srv_wa",
+      name: "general",
+      type: "TEXT",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    });
+    await db.collection("servers").doc("srv_wa").collection("members").doc(BOB_UID).set({
+      uid: BOB_UID,
+      serverId: "srv_wa",
+      name: "Bob",
+      role: "MEMBER",
+      isPublic: false,
+    });
+    await db.collection("servers").doc("srv_wa").collection("members").doc(DANA_UID).set({
+      uid: DANA_UID,
+      serverId: "srv_wa",
+      name: "Dana",
+      role: "ADMIN",
+      isPublic: false,
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+  const danaDb = testEnv.authenticatedContext(DANA_UID).firestore();
+
+  // 1. Non-creator admin (Dana) CANNOT promote Bob to ADMIN or demote an existing ADMIN
+  await assertFails(
+    danaDb.collection("servers").doc("srv_wa").update({
+      adminIds: [ALICE_UID, DANA_UID, BOB_UID],
+    })
+  );
+  await assertFails(
+    danaDb.collection("servers").doc("srv_wa").collection("members").doc(BOB_UID).update({
+      role: "ADMIN",
+    })
+  );
+  await assertFails(
+    danaDb.collection("servers").doc("srv_wa").collection("members").doc(DANA_UID).update({
+      role: "MEMBER",
+    })
+  );
+
+  // 2. Creator (Alice) CAN promote Bob to ADMIN and later revoke it
+  await assertSucceeds(
+    aliceDb.collection("servers").doc("srv_wa").collection("members").doc(BOB_UID).update({
+      role: "ADMIN",
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("servers").doc("srv_wa").update({
+      adminIds: [ALICE_UID, DANA_UID, BOB_UID],
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("servers").doc("srv_wa").collection("members").doc(BOB_UID).update({
+      role: "MEMBER",
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("servers").doc("srv_wa").update({
+      adminIds: [ALICE_UID, DANA_UID],
+    })
+  );
+
+  // 3. Regular member (Bob) and Moderator (Charlie) CANNOT close the server
+  await assertFails(
+    bobDb.collection("servers").doc("srv_wa").update({ isClosed: true })
+  );
+  await assertFails(
+    charlieDb.collection("servers").doc("srv_wa").update({ isClosed: true })
+  );
+
+  // 4. While open, regular member (Bob) CAN send messages
+  const msgsRef = (db) => db.collection("servers").doc("srv_wa").collection("channels").doc("ch_wa").collection("messages");
+  await assertSucceeds(
+    msgsRef(bobDb).doc("m_open").set({
+      senderId: BOB_UID,
+      senderName: "Bob",
+      text: "Serveur ouvert !",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    })
+  );
+
+  // 5. Admin (Dana) CAN close the server
+  await assertSucceeds(
+    danaDb.collection("servers").doc("srv_wa").update({
+      isClosed: true,
+      closedByUid: DANA_UID,
+      closedByName: "Dana",
+      closedAtMs: now,
+    })
+  );
+
+  // 6. When closed, Bob (member) and Charlie (non-admin mod) CANNOT send messages, while Dana (admin) and Alice (creator) CAN
+  await assertFails(
+    msgsRef(bobDb).doc("m_closed_bob").set({
+      senderId: BOB_UID,
+      senderName: "Bob",
+      text: "Blocked when closed",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    })
+  );
+  await assertFails(
+    msgsRef(charlieDb).doc("m_closed_mod").set({
+      senderId: CHARLIE_UID,
+      senderName: "Charlie",
+      text: "Mod blocked when closed",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    })
+  );
+  await assertSucceeds(
+    msgsRef(danaDb).doc("m_closed_dana").set({
+      senderId: DANA_UID,
+      senderName: "Dana",
+      text: "Annonce admin pendant fermeture",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    })
+  );
+  await assertSucceeds(
+    msgsRef(aliceDb).doc("m_closed_alice").set({
+      senderId: ALICE_UID,
+      senderName: "Alice",
+      text: "Message créateur pendant fermeture",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    })
+  );
+
+  // 7. Creator or Admin CAN reopen the server and Bob CAN send messages again
+  await assertSucceeds(
+    aliceDb.collection("servers").doc("srv_wa").update({
+      isClosed: false,
+      closedByUid: null,
+      closedByName: null,
+      closedAtMs: null,
+    })
+  );
+  await assertSucceeds(
+    msgsRef(bobDb).doc("m_reopened_bob").set({
+      senderId: BOB_UID,
+      senderName: "Bob",
+      text: "Serveur rouvert !",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    })
+  );
+});
+

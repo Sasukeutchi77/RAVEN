@@ -51,7 +51,6 @@ fun ServerRail(
     onExploreServersClick: () -> Unit = {},
     onOpenOrbsShop: () -> Unit = {},
     onOpenBotsDashboard: () -> Unit = {},
-    onOpenAiAssistant: () -> Unit = {},
     unseenStoriesCount: Int = 0,
     onOpenStories: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -321,25 +320,6 @@ fun ServerRail(
                         imageVector = Icons.Default.SmartToy,
                         contentDescription = "Bots & Automations RAVEN",
                         tint = palette.textSecondary,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(palette.inputBg)
-                        .clickable { onOpenAiAssistant() }
-                        .testTag("server_rail_ai_assistant"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = "Assistant RAVEN AI",
-                        tint = DiscordBlurple,
                         modifier = Modifier.size(19.dp)
                     )
                 }

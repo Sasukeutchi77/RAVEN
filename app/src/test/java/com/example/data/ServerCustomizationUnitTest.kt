@@ -333,4 +333,88 @@ class ServerCustomizationUnitTest {
         assertTrue(modThemeAttempt.isFailure)
         assertTrue(modThemeAttempt.exceptionOrNull() is SecurityException)
     }
+
+    @Test
+    fun `server backgrounds resolve channel override, server override, official theme preset or custom image, and clear cleanly`() = runTest {
+        val scope = TestScope(testScheduler)
+        val (chatRepo, commRepo, custRepo) = createRepos(scope)
+
+        val srv = commRepo.createCommunity("Wallpaper Guild", "Serveur visuel", "wallpaper-guild", isPublic = false).getOrThrow()
+        val channelId = srv.channels.first().id
+
+        // 1. Official admin preset theme + opacity clamped
+        val withPreset = custRepo.updateIdentityAndTheme(
+            serverId = srv.id,
+            name = srv.name,
+            uniqueHandleRaw = srv.uniqueHandle,
+            description = srv.description,
+            iconText = srv.iconText,
+            iconPresetKey = srv.customization.theme.iconPresetKey,
+            imageUrl = srv.imageUrl,
+            bannerUrl = srv.bannerUrl,
+            accentColorHex = srv.customization.theme.accentColorHex,
+            secondaryColorHex = srv.customization.theme.secondaryColorHex,
+            surfaceStyle = ServerThemeSurfaceStyle.ROYAL_PURPLE,
+            categoryTag = srv.categoryTag,
+            backgroundThemeId = "aurora",
+            backgroundImageUrl = null,
+            backgroundOpacity = 0.75f
+        ).getOrThrow()
+
+        val officialResolved = resolveServerBackgroundTheme(withPreset, channelId = channelId)
+        assertNotNull(officialResolved)
+        assertEquals("aurora", officialResolved?.id)
+        assertEquals(0.75f, officialResolved?.opacity ?: 0f, 0.001f)
+
+        // 2. Official custom gallery/image URL takes precedence over backgroundThemeId
+        val withCustomImage = custRepo.updateIdentityAndTheme(
+            serverId = srv.id,
+            name = srv.name,
+            uniqueHandleRaw = srv.uniqueHandle,
+            description = srv.description,
+            iconText = srv.iconText,
+            iconPresetKey = srv.customization.theme.iconPresetKey,
+            imageUrl = srv.imageUrl,
+            bannerUrl = srv.bannerUrl,
+            accentColorHex = srv.customization.theme.accentColorHex,
+            secondaryColorHex = srv.customization.theme.secondaryColorHex,
+            surfaceStyle = ServerThemeSurfaceStyle.ROYAL_PURPLE,
+            categoryTag = srv.categoryTag,
+            backgroundThemeId = "aurora",
+            backgroundImageUrl = "/data/user/0/com.example/files/backgrounds/bg_test.jpg",
+            backgroundOpacity = 1.5f // clamped to 0.90f
+        ).getOrThrow()
+
+        val customResolved = resolveServerBackgroundTheme(withCustomImage)
+        assertEquals("server_custom_image", customResolved?.id)
+        assertEquals("/data/user/0/com.example/files/backgrounds/bg_test.jpg", customResolved?.imageUrl)
+        assertEquals(0.90f, customResolved?.opacity ?: 0f, 0.001f)
+
+        // 3. User server-wide override beats official theme, and per-channel override beats server-wide
+        val serverKey = serverBackgroundTargetKey(srv.id)
+        val userServerTheme = ShopCatalog.initialChatThemes.first { it.id == "cyberpunk" }
+        val userChannelTheme = ChatBackgroundTheme(
+            id = "custom_gallery",
+            name = "Photo Galerie",
+            primaryColor = 0xFF1E1F22,
+            secondaryColor = 0xFF5865F2,
+            imageUrl = "/tmp/my_gallery_photo.jpg",
+            opacity = 0.60f
+        )
+
+        chatRepo.setChatBackground(serverKey, userServerTheme)
+        assertEquals("cyberpunk", resolveServerBackgroundTheme(withCustomImage, channelId = channelId, userBackgrounds = chatRepo.chatBackgrounds.value)?.id)
+
+        chatRepo.setChatBackground(channelId, userChannelTheme)
+        val chResolved = resolveServerBackgroundTheme(withCustomImage, channelId = channelId, userBackgrounds = chatRepo.chatBackgrounds.value)
+        assertEquals("custom_gallery", chResolved?.id)
+        assertEquals("/tmp/my_gallery_photo.jpg", chResolved?.imageUrl)
+
+        // 4. Clearing per-channel falls back to server-wide; clearing server-wide falls back to official server theme
+        chatRepo.clearChatBackground(channelId)
+        assertEquals("cyberpunk", resolveServerBackgroundTheme(withCustomImage, channelId = channelId, userBackgrounds = chatRepo.chatBackgrounds.value)?.id)
+
+        chatRepo.clearChatBackground(serverKey)
+        assertEquals("server_custom_image", resolveServerBackgroundTheme(withCustomImage, channelId = channelId, userBackgrounds = chatRepo.chatBackgrounds.value)?.id)
+    }
 }

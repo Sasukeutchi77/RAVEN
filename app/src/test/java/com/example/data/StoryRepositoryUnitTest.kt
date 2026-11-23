@@ -116,9 +116,46 @@ class StoryRepositoryUnitTest {
         assertFalse(unseenAfter.any { it.authorId == "user_thomas" })
         assertTrue(seenAfter.any { it.authorId == "user_thomas" })
 
-        // Author or moderator can inspect exact viewer list
-        val viewers = storyRepo.getStoryViewers(thomasStory.id).getOrThrow()
-        assertTrue(viewers.any { it.viewerId == chatRepo.currentUser.value.id })
+        // ONLY the story author can inspect exact viewer list (even moderators are blocked for others' stories)
+        val nonAuthorViewersResult = storyRepo.getStoryViewers(thomasStory.id)
+        assertTrue(nonAuthorViewersResult.isFailure)
+        assertTrue(nonAuthorViewersResult.exceptionOrNull() is SecurityException)
+
+        // Author CAN inspect viewers of their own story
+        val ownStory = storyRepo.publishTextStory(
+            textContent = "Ma propre story",
+            visibility = StoryVisibility.PUBLIC
+        ).getOrThrow()
+        assertTrue(storyRepo.getStoryViewers(ownStory.id).isSuccess)
+    }
+
+    @Test
+    fun `other users can like and unlike stories while author cannot self-like`() = runTest {
+        val clock = MutableClock()
+        val (chatRepo, storyRepo) = createEnv(TestScope(testScheduler), clock)
+        val meUid = chatRepo.currentUser.value.id
+
+        val thomasStory = storyRepo.stories.value.first { it.authorId == "user_thomas" }
+        val initialLikes = thomasStory.likesCount
+
+        // Non-author can like
+        val afterLike = storyRepo.toggleStoryLike(thomasStory.id).getOrThrow()
+        assertEquals(initialLikes + 1, afterLike.likesCount)
+        assertTrue(afterLike.hasBeenLikedBy(meUid))
+
+        // Non-author can unlike
+        val afterUnlike = storyRepo.toggleStoryLike(thomasStory.id).getOrThrow()
+        assertEquals(initialLikes, afterUnlike.likesCount)
+        assertFalse(afterUnlike.hasBeenLikedBy(meUid))
+
+        // Author cannot like their own story
+        val ownStory = storyRepo.publishTextStory(
+            textContent = "Story perso",
+            visibility = StoryVisibility.PUBLIC
+        ).getOrThrow()
+        val selfLikeRes = storyRepo.toggleStoryLike(ownStory.id)
+        assertTrue(selfLikeRes.isFailure)
+        assertTrue(selfLikeRes.exceptionOrNull() is SecurityException)
     }
 
     @Test

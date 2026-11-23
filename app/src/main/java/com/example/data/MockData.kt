@@ -145,6 +145,9 @@ object MockData {
                 )
             ),
             members = listOf(currentUser, friendThomas, friendEmma, friendLucas),
+            ownerId = currentUser.id,
+            adminIds = listOf(currentUser.id),
+            moderatorIds = listOf(friendThomas.id),
             isPublic = true,
             categoryTag = "Communauté",
             description = "Le QG officiel Raven : vocal HD, mini-jeux et entraide Kotlin.",
