@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,7 +35,8 @@ internal fun BotCommandsAndRulesTab(
     }
     var cmdTrigger by remember(bot.id) { mutableStateOf("/aide") }
     var cmdDesc by remember(bot.id) { mutableStateOf("Affiche l'aide rapide") }
-    var cmdReply by remember(bot.id) { mutableStateOf("Salut {user} ! Bienvenue dans {server} (#{channel}).") }
+    var cmdReply by remember(bot.id) { mutableStateOf("Salut {user} ! Bienvenue dans {server} ({time}).") }
+    var cmdActionType by remember(bot.id) { mutableStateOf(BotCommandActionType.STATIC_TEMPLATE) }
 
     var ruleName by remember(bot.id) { mutableStateOf("Salutation") }
     var rulePattern by remember(bot.id) { mutableStateOf("bonjour") }
@@ -46,11 +48,26 @@ internal fun BotCommandsAndRulesTab(
             item {
                 Surface(color = palette.cardBg, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("NOUVELLE COMMANDE SLASH (/)", color = palette.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("NOUVELLE COMMANDE BOT (/ OU !)", color = palette.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            items(BotCommandActionType.entries) { actionType ->
+                                FilterChip(
+                                    selected = cmdActionType == actionType,
+                                    onClick = { cmdActionType = actionType },
+                                    label = { Text(actionType.label, fontSize = 11.sp) },
+                                    modifier = Modifier.heightIn(min = 48.dp).testTag("bot_cmd_action_${actionType.name}")
+                                )
+                            }
+                        }
+                        Text(
+                            text = cmdActionType.hint,
+                            color = DiscordGreen,
+                            fontSize = 11.sp
+                        )
                         OutlinedTextField(
                             value = cmdTrigger,
                             onValueChange = { cmdTrigger = it },
-                            label = { Text("Commande (ex: /rules)") },
+                            label = { Text("Commande (ex: /rules ou !promo)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth().testTag("bot_cmd_trigger_input")
                         )
@@ -64,8 +81,13 @@ internal fun BotCommandsAndRulesTab(
                         OutlinedTextField(
                             value = cmdReply,
                             onValueChange = { cmdReply = it },
-                            label = { Text("Réponse ({user}, {server}, {channel}, {args})") },
+                            label = { Text("Réponse / Modèle") },
                             modifier = Modifier.fillMaxWidth().testTag("bot_cmd_reply_input")
+                        )
+                        Text(
+                            text = "Variables : {user}, {bot}, {server}, {time}, {date}, {random:1-6}, {pick:A|B}",
+                            color = palette.textMuted,
+                            fontSize = 10.sp
                         )
                         Button(
                             onClick = {
@@ -74,7 +96,8 @@ internal fun BotCommandsAndRulesTab(
                                     BotCommandSpec(
                                         trigger = cmdTrigger,
                                         description = cmdDesc,
-                                        responseTemplate = cmdReply
+                                        responseTemplate = cmdReply,
+                                        actionType = cmdActionType
                                     )
                                 )
                             },
@@ -93,7 +116,7 @@ internal fun BotCommandsAndRulesTab(
             Surface(color = palette.cardBg, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
                 Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("${cmd.trigger} • cooldown ${cmd.cooldownSeconds}s", color = DiscordBlurple, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text("${cmd.trigger} • ${cmd.actionType.label} • ${cmd.cooldownSeconds}s", color = DiscordBlurple, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         Text(cmd.description, color = palette.textSecondary, fontSize = 11.sp)
                         Text(cmd.responseTemplate, color = palette.textMuted, fontSize = 11.sp)
                     }

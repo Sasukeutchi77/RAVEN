@@ -245,4 +245,113 @@ class BotRepositoryUnitTest {
         assertTrue(botRepo.bots.value.none { it.id == bot.id })
         assertTrue(chatRepo.servers.value.first { it.id == srv.id }.members.none { it.id == "bot_${bot.id}" })
     }
+
+    @Test
+    fun `whatsapp style bot dm welcome numbered replies bang prefix and powerful actions work end to end`() = runTest {
+        val testScope = TestScope(testScheduler)
+        val (chatRepo, _, botRepo) = createEnv(testScope)
+
+        val bot = botRepo.createBot(
+            name = "WhatsRaven",
+            handleRaw = "whats-raven",
+            description = "Bot WhatsApp DM & Salons",
+            allowDirectMessages = true,
+            allowGroupMentions = true,
+            starterPresetId = "assistant_wa"
+        ).getOrThrow().bot
+
+        // Disable rate-limit / cooldown noise across back-to-back action assertions
+        botRepo.updateRateLimitConfig(
+            bot.id,
+            BotRateLimitConfig(maxActionsPerMinute = 60, duplicateWindowSeconds = 2, autoDisableOnAbuseStrikes = 10)
+        ).getOrThrow()
+
+        // 1. Open 1-on-1 DM with bot -> posts welcome message with interactive quickReplies
+        val dmConv = botRepo.openBotDirectChat(bot.id, selectAfterOpen = true).getOrThrow()
+        assertEquals("dm_bot_${bot.id}", dmConv.id)
+        assertTrue(dmConv.isBotChat)
+        assertEquals(bot.id, dmConv.botId)
+        assertEquals(dmConv.id, chatRepo.selectedDmId.value)
+
+        val welcomeMsgs = chatRepo.messages.value[dmConv.id].orEmpty()
+        assertEquals(1, welcomeMsgs.size)
+        assertTrue(welcomeMsgs.first().isBotMessage)
+        assertTrue(welcomeMsgs.first().botQuickReplies.isNotEmpty())
+
+        // 2. Numeric WhatsApp reply "2" maps to 2nd quickReply (/aide)
+        chatRepo.sendMessage(dmConv.id, "2")
+        val afterNum = chatRepo.messages.value[dmConv.id].orEmpty()
+        assertTrue(afterNum.any { it.isBotMessage && it.text.contains("Commandes") })
+
+        // 3. Plain greeting in DM triggers interactive /menu
+        chatRepo.sendMessage(dmConv.id, "Bonjour")
+        val afterGreet = chatRepo.messages.value[dmConv.id].orEmpty()
+        assertTrue(afterGreet.any { it.isBotMessage && it.botQuickReplies.any { qr -> qr.payload == "/calc 12*4+8" || qr.payload == "/aide" || qr.payload == "/quiz" } })
+
+        // 4. Calculator (/calc and !calc)
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "!calc (2+3)*4"))
+        assertTrue(chatRepo.messages.value[dmConv.id].orEmpty().any { it.isBotMessage && it.text.contains("20") })
+
+        // 5. Note Vault (/note add, list, del, clear)
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "/note add Acheter du café"))
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "/note list"))
+        assertTrue(chatRepo.messages.value[dmConv.id].orEmpty().any { it.isBotMessage && it.text.contains("Acheter du café") })
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "/note del 1"))
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "/note clear"))
+
+        // 6. Live Poll (/sondagebot)
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "/sondagebot Pizza ce soir ? | Oui | Non"))
+        val pollMsg = chatRepo.messages.value[dmConv.id].orEmpty().lastOrNull { it.poll != null }
+        assertNotNull(pollMsg)
+        assertEquals("Pizza ce soir ?", pollMsg!!.poll!!.question)
+        assertEquals(2, pollMsg.poll!!.options.size)
+
+        // 7. Mini-games (/roll, /choose, /8ball, /quiz)
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "/roll 2d6"))
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "/choose Kotlin | Compose"))
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "/8ball Va-t-on réussir ?"))
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "/quiz"))
+
+        // 8. Timed Reminder (/rappel 2s ...)
+        assertTrue(chatRepo.executeSlashCommand(dmConv.id, "/rappel 2s Vérifier le build"))
+        testScheduler.advanceTimeBy(2500L)
+        testScheduler.runCurrent()
+        assertTrue(chatRepo.messages.value[dmConv.id].orEmpty().any { it.isBotMessage && it.text.contains("Vérifier le build") })
+    }
+
+    @Test
+    fun `bot dm respects allowDirectMessages false and group mention isolation`() = runTest {
+        val testScope = TestScope(testScheduler)
+        val (chatRepo, _, botRepo) = createEnv(testScope)
+
+        val lockedBot = botRepo.createBot(
+            name = "PrivateOnlyBot",
+            handleRaw = "private-bot",
+            description = "Pas de DMs",
+            allowDirectMessages = false,
+            allowGroupMentions = false
+        ).getOrThrow().bot
+
+        val openRes = botRepo.openBotDirectChat(lockedBot.id)
+        assertTrue(openRes.isFailure)
+
+        // Normal Group DM should ignore bot when allowGroupMentions = false
+        val bob = User(id = "u_bob", name = "Bob", tag = "#0002", status = UserStatus.ONLINE)
+        val charlie = User(id = "u_charlie", name = "Charlie", tag = "#0003", status = UserStatus.ONLINE)
+        val normalDm = chatRepo.createGroupConversation("Groupe Test", listOf(bob, charlie))!!
+        chatRepo.sendMessage(normalDm.id, "@private-bot /ping")
+        assertTrue(chatRepo.messages.value[normalDm.id].orEmpty().none { it.isBotMessage })
+
+        // Enable group mentions + send @mention command inside friend/group DM -> works!
+        botRepo.updateBot(
+            botId = lockedBot.id,
+            name = lockedBot.name,
+            handleRaw = lockedBot.handle,
+            description = lockedBot.description,
+            allowGroupMentions = true
+        ).getOrThrow()
+        chatRepo.sendMessage(normalDm.id, "@private-bot /ping")
+        assertTrue(chatRepo.messages.value[normalDm.id].orEmpty().any { it.isBotMessage && it.text.contains("PrivateOnlyBot") })
+    }
 }
+

@@ -205,7 +205,7 @@ class StoryRepositoryUnitTest {
     }
 
     @Test
-    fun `privacy restricts friends and custom users stories while deletion and moderation enforce permissions`() = runTest {
+    fun `privacy restricts friends and custom users stories while deletion is strictly restricted to author`() = runTest {
         val clock = MutableClock()
         val (chatRepo, storyRepo) = createEnv(TestScope(testScheduler), clock)
 
@@ -228,49 +228,15 @@ class StoryRepositoryUnitTest {
         assertFalse(vipStory.canBeViewedBy("user_emma"))
         assertFalse(vipStory.canBeViewedBy("user_thomas", blockedAuthorIds = setOf(vipStory.authorId)))
 
-        // Non-owner non-moderator CANNOT delete another user's story or call moderation actions
-        // Downgrade Jarvis role on servers to regular MEMBER temporarily to verify permission denial
+        // Non-author (even current user who may be admin on servers) CANNOT delete another user's story
         val thomasStory = storyRepo.stories.value.first { it.authorId == "user_thomas" }
-        val nonModDeleteCheck = StoryItem(
-            id = "foreign_only",
-            authorId = "stranger_99",
-            authorName = "Stranger",
-            mediaType = StoryMediaType.TEXT,
-            textContent = "Hi",
-            visibility = StoryVisibility.PUBLIC,
-            createdAtMs = clock.currentMs,
-            expiresAtMs = clock.currentMs + 3600_000L
-        )
-        assertFalse(nonModDeleteCheck.canBeViewedBy("blocked_reader", blockedAuthorIds = setOf("stranger_99")))
+        val deleteOtherResult = storyRepo.deleteStory(thomasStory.id)
+        assertTrue(deleteOtherResult.isFailure)
+        assertTrue(deleteOtherResult.exceptionOrNull() is SecurityException)
+        assertTrue(storyRepo.stories.value.any { it.id == thomasStory.id })
 
         // Owner CAN delete their own story
         assertTrue(storyRepo.deleteStory(vipStory.id).isSuccess)
         assertFalse(storyRepo.stories.value.any { it.id == vipStory.id })
-
-        // Viewer reports Thomas's story -> moderation sheet receives report -> moderator hides story
-        val report = storyRepo.reportStory(
-            storyId = thomasStory.id,
-            reason = StoryReportReason.SPAM,
-            details = "Contenu publicitaire"
-        ).getOrThrow()
-        assertEquals(StoryReportStatus.PENDING, report.status)
-
-        assertTrue(
-            storyRepo.moderateStory(
-                storyId = thomasStory.id,
-                hideOnly = true,
-                reason = "Spam confirmé",
-                reportId = report.id
-            ).isSuccess
-        )
-
-        val moderatedStory = storyRepo.stories.value.first { it.id == thomasStory.id }
-        assertTrue(moderatedStory.moderatedHidden)
-        assertFalse(moderatedStory.canBeViewedBy("user_lucas", isModerator = false))
-        assertTrue(moderatedStory.canBeViewedBy(chatRepo.currentUser.value.id, isModerator = true))
-        assertEquals(
-            StoryReportStatus.REMOVED,
-            storyRepo.reports.value.first { it.id == report.id }.status
-        )
     }
 }

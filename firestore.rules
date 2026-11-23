@@ -114,7 +114,12 @@ service cloud.firestore {
              (!('subscribedEvents' in data) || (data.subscribedEvents is list && data.subscribedEvents.size() <= 30)) &&
              (!('autoResponses' in data) || (data.autoResponses is list && data.autoResponses.size() <= 50)) &&
              (!('webhooksPublicMeta' in data) || (data.webhooksPublicMeta is list && data.webhooksPublicMeta.size() <= 20)) &&
-             (!('enabledPluginIds' in data) || (data.enabledPluginIds is list && data.enabledPluginIds.size() <= 30));
+             (!('enabledPluginIds' in data) || (data.enabledPluginIds is list && data.enabledPluginIds.size() <= 30)) &&
+             (!('allowDirectMessages' in data) || data.allowDirectMessages is bool) &&
+             (!('allowGroupMentions' in data) || data.allowGroupMentions is bool) &&
+             (!('welcomeDmMessage' in data) || data.welcomeDmMessage == null || (data.welcomeDmMessage is string && data.welcomeDmMessage.size() <= 1000)) &&
+             (!('starterPresetId' in data) || data.starterPresetId == null || (data.starterPresetId is string && data.starterPresetId.size() <= 80)) &&
+             (!('rateLimit' in data) || data.rateLimit is map);
     }
 
     function isValidServerBotInstallation(data, serverId, botId) {
@@ -346,6 +351,8 @@ service cloud.firestore {
              (!('isBotMessage' in data) || data.isBotMessage is bool) &&
              (!('botId' in data) || data.botId == null || isValidId(data.botId)) &&
              (!('triggeredByUid' in data) || data.triggeredByUid == null || (data.triggeredByUid is string && data.triggeredByUid.size() <= 128)) &&
+             (!('poll' in data) || data.poll == null || data.poll is map) &&
+             (!('botQuickReplies' in data) || (data.botQuickReplies is list && data.botQuickReplies.size() <= 10)) &&
              (!('memberIds' in data) || (data.memberIds is list && data.memberIds.size() <= 200)) &&
              (!('participantIds' in data) || (data.participantIds is list && data.participantIds.size() <= 50));
     }
@@ -519,12 +526,14 @@ service cloud.firestore {
       return data.participantIds is list && data.participantIds.size() >= 1 && data.participantIds.size() <= 25 &&
              (!('id' in data) || isValidId(data.id)) &&
              (!('dmPairKey' in data) || data.dmPairKey == null || isValidId(data.dmPairKey)) &&
-             (!('isGroup' in data) || data.isGroup is bool) &&
-             (!('groupName' in data) || data.groupName == null || (data.groupName is string && data.groupName.size() <= 80)) &&
-             (!('participantNames' in data) || data.participantNames is map) &&
-             (!('updatedAtMs' in data) || data.updatedAtMs is int) &&
-             (!('lastMessage' in data) || data.lastMessage == null || (data.lastMessage is string && data.lastMessage.size() <= 500)) &&
-             (!('lastMessageTime' in data) || data.lastMessageTime == null || (data.lastMessageTime is string && data.lastMessageTime.size() <= 40));
+              (!('isGroup' in data) || data.isGroup is bool) &&
+              (!('isBotChat' in data) || data.isBotChat is bool) &&
+              (!('botId' in data) || data.botId == null || isValidId(data.botId)) &&
+              (!('groupName' in data) || data.groupName == null || (data.groupName is string && data.groupName.size() <= 80)) &&
+              (!('participantNames' in data) || data.participantNames is map) &&
+              (!('updatedAtMs' in data) || data.updatedAtMs is int) &&
+              (!('lastMessage' in data) || data.lastMessage == null || (data.lastMessage is string && data.lastMessage.size() <= 500)) &&
+              (!('lastMessageTime' in data) || data.lastMessageTime == null || (data.lastMessageTime is string && data.lastMessageTime.size() <= 40));
     }
 
     function storyDoc(storyId) {
@@ -535,19 +544,10 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/stories/$(storyId));
     }
 
-    function isStoryModerator(data) {
-      return (('moderationServerId' in data) && data.moderationServerId != null && isCommunityStaff(data.moderationServerId)) ||
-             ('moderatorIds' in data && request.auth.uid in data.moderatorIds);
-    }
-
     function canViewStoryDoc(data) {
       return data.authorId == request.auth.uid ||
-             isStoryModerator(data) ||
-             (
-               (!('moderatedHidden' in data) || data.moderatedHidden == false) &&
-               (data.visibility == 'PUBLIC' ||
-                (('allowedViewerIds' in data) && request.auth.uid in data.allowedViewerIds))
-             );
+             data.visibility == 'PUBLIC' ||
+             (('allowedViewerIds' in data) && request.auth.uid in data.allowedViewerIds);
     }
 
     function isValidStoryUrl(url) {
@@ -566,8 +566,6 @@ service cloud.firestore {
              data.durationHours is int && data.durationHours >= 1 && data.durationHours <= 168 &&
              data.createdAtMs is int && data.expiresAtMs is int && data.expiresAtMs > data.createdAtMs &&
              data.viewCount is int && data.viewCount >= 0 &&
-             data.reportCount is int && data.reportCount >= 0 &&
-             data.moderatedHidden is bool &&
              (
                (data.mediaType == 'TEXT' && 'textContent' in data && data.textContent is string && data.textContent.size() >= 1 && data.textContent.size() <= 500) ||
                (data.mediaType in ['IMAGE', 'VIDEO'] && 'mediaUrl' in data && isValidStoryUrl(data.mediaUrl))
@@ -581,13 +579,9 @@ service cloud.firestore {
              (!('textContent' in data) || (data.textContent is string && data.textContent.size() <= 500)) &&
              (!('caption' in data) || (data.caption is string && data.caption.size() <= 300)) &&
              (!('allowedViewerIds' in data) || (data.allowedViewerIds is list && data.allowedViewerIds.size() <= 200)) &&
-             (!('moderatorIds' in data) || (data.moderatorIds is list && data.moderatorIds.size() <= 100)) &&
              (!('viewerIds' in data) || (data.viewerIds is list && data.viewerIds.size() <= 500)) &&
              (!('likedByIds' in data) || (data.likedByIds is list && data.likedByIds.size() <= 1000)) &&
-             (!('likesCount' in data) || (data.likesCount is int && data.likesCount >= 0)) &&
-             (!('moderationServerId' in data) || data.moderationServerId == null || isValidId(data.moderationServerId)) &&
-             (!('moderationReason' in data) || data.moderationReason == null || (data.moderationReason is string && data.moderationReason.size() <= 240)) &&
-             (!('moderatedByUid' in data) || data.moderatedByUid == null || (data.moderatedByUid is string && data.moderatedByUid.size() <= 128));
+             (!('likesCount' in data) || (data.likesCount is int && data.likesCount >= 0));
     }
 
     function isValidStoryView(data, storyId) {
@@ -598,21 +592,6 @@ service cloud.firestore {
              (!('viewerAvatarUrl' in data) || data.viewerAvatarUrl == null || (data.viewerAvatarUrl is string && data.viewerAvatarUrl.size() <= 800)) &&
              (!('viewerAvatarColor' in data) || data.viewerAvatarColor is int) &&
              (!('viewedAtMs' in data) || data.viewedAtMs is int);
-    }
-
-    function isValidStoryReport(data) {
-      return data.storyId is string && isValidId(data.storyId) &&
-             data.storyAuthorId is string && data.storyAuthorId.size() >= 1 && data.storyAuthorId.size() <= 128 &&
-             data.reporterUid is string && data.reporterUid.size() >= 1 && data.reporterUid.size() <= 128 &&
-             data.reason is string && data.reason in ['SPAM', 'HARASSMENT', 'NSFW', 'MISINFORMATION', 'OTHER'] &&
-             data.status is string && data.status in ['PENDING', 'REMOVED', 'DISMISSED'] &&
-             (!('details' in data) || (data.details is string && data.details.size() <= 500)) &&
-             (!('storyPreview' in data) || (data.storyPreview is string && data.storyPreview.size() <= 300)) &&
-             (!('storyMediaType' in data) || (data.storyMediaType is string && data.storyMediaType in ['TEXT', 'IMAGE', 'VIDEO'])) &&
-             (!('storyMediaUrl' in data) || data.storyMediaUrl == null || isValidStoryUrl(data.storyMediaUrl)) &&
-             (!('moderatorIds' in data) || (data.moderatorIds is list && data.moderatorIds.size() <= 100)) &&
-             (!('moderationServerId' in data) || data.moderationServerId == null || isValidId(data.moderationServerId)) &&
-             (!('reviewedByUid' in data) || data.reviewedByUid == null || (data.reviewedByUid is string && data.reviewedByUid.size() <= 128));
     }
 
     function pollDoc(pollId) {
@@ -1482,9 +1461,25 @@ service cloud.firestore {
                       request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds;
         allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
         allow create: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
-                         incoming().senderId == request.auth.uid &&
                          request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds &&
-                         twoPartyDmNoBlock(get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds);
+                         twoPartyDmNoBlock(get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds) && (
+                           incoming().senderId == request.auth.uid ||
+                           (('isBotMessage' in incoming()) && incoming().isBotMessage == true &&
+                            ('triggeredByUid' in incoming()) && incoming().triggeredByUid == request.auth.uid &&
+                            ('botId' in incoming()) && isValidId(incoming().botId) &&
+                            botExists(incoming().botId) &&
+                            botDoc(incoming().botId).data.isActive == true &&
+                            (botDoc(incoming().botId).data.ownerUid == request.auth.uid || botDoc(incoming().botId).data.isPublicCatalog == true) &&
+                            (
+                              (('isBotChat' in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data) &&
+                               get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.isBotChat == true &&
+                               get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.botId == incoming().botId &&
+                               (!('allowDirectMessages' in botDoc(incoming().botId).data) || botDoc(incoming().botId).data.allowDirectMessages == true)) ||
+                              ((!('isBotChat' in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data) ||
+                                get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.isBotChat == false) &&
+                               (!('allowGroupMentions' in botDoc(incoming().botId).data) || botDoc(incoming().botId).data.allowGroupMentions == true))
+                            ))
+                         );
         allow update: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
                          incoming().senderId == existing().senderId &&
                          request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds;
@@ -1492,15 +1487,14 @@ service cloud.firestore {
       }
     }
 
-    // 7. RAVEN Stories, Audience Privacy, View Tracking & Moderation
+    // 7. RAVEN Stories, Audience Privacy, Author-Only View Tracking & Likes (Author-Only Deletion)
     match /stories/{storyId} {
       allow get: if isSignedIn() && isValidId(storyId) &&
                     (resource == null || canViewStoryDoc(existing()));
       allow list: if isSignedIn() && (
                      resource.data.visibility == 'PUBLIC' ||
                      resource.data.authorId == request.auth.uid ||
-                     request.auth.uid in resource.data.allowedViewerIds ||
-                     isStoryModerator(resource.data)
+                     request.auth.uid in resource.data.allowedViewerIds
                    );
       allow create: if isSignedIn() && isValidId(storyId) &&
                        isValidStoryDoc(incoming()) &&
@@ -1508,9 +1502,7 @@ service cloud.firestore {
                        incoming().viewCount == 0 &&
                        (!('viewerIds' in incoming()) || incoming().viewerIds.size() == 0) &&
                        (!('likesCount' in incoming()) || incoming().likesCount == 0) &&
-                       (!('likedByIds' in incoming()) || incoming().likedByIds.size() == 0) &&
-                       incoming().reportCount == 0 &&
-                       incoming().moderatedHidden == false;
+                       (!('likedByIds' in incoming()) || incoming().likedByIds.size() == 0);
       allow update: if isSignedIn() && isValidId(storyId) &&
                        incoming().authorId == existing().authorId &&
                        incoming().createdAtMs == existing().createdAtMs &&
@@ -1526,18 +1518,7 @@ service cloud.firestore {
                           incoming().viewCount <= existing().viewCount + 1 &&
                           (!('viewerIds' in incoming()) || (incoming().viewerIds is list && incoming().viewerIds.size() <= 500 && request.auth.uid in incoming().viewerIds)) &&
                           canViewStoryDoc(existing())) ||
-                         // 7c. Authorized viewer reporting the story (+1 reportCount)
-                         (incoming().diff(existing()).affectedKeys().hasOnly(['reportCount', 'updatedAt']) &&
-                          incoming().reportCount is int &&
-                          incoming().reportCount == existing().reportCount + 1 &&
-                          canViewStoryDoc(existing())) ||
-                         // 7d. Verified moderator moderating the story
-                         (incoming().diff(existing()).affectedKeys().hasOnly(['moderatedHidden', 'moderationReason', 'moderatedByUid', 'updatedAt']) &&
-                          incoming().moderatedHidden is bool &&
-                          (!('moderationReason' in incoming()) || incoming().moderationReason == null || (incoming().moderationReason is string && incoming().moderationReason.size() <= 240)) &&
-                          (!('moderatedByUid' in incoming()) || incoming().moderatedByUid == null || (incoming().moderatedByUid is string && incoming().moderatedByUid.size() <= 128)) &&
-                          isStoryModerator(existing())) ||
-                         // 7e. Non-author viewer liking or unliking the story (+1 / -1)
+                         // 7c. Non-author viewer liking or unliking the story (+1 / -1)
                          (incoming().diff(existing()).affectedKeys().hasOnly(['likedByIds', 'likesCount', 'updatedAt']) &&
                           existing().authorId != request.auth.uid &&
                           incoming().likedByIds is list &&
@@ -1559,7 +1540,7 @@ service cloud.firestore {
                           canViewStoryDoc(existing()))
                        );
       allow delete: if isSignedIn() && isValidId(storyId) &&
-                       (existing().authorId == request.auth.uid || isStoryModerator(existing()));
+                       existing().authorId == request.auth.uid;
 
       match /views/{viewerId} {
         allow get: if isSignedIn() && isValidId(viewerId) && storyExists(storyId) &&
@@ -1575,41 +1556,9 @@ service cloud.firestore {
         allow delete: if isSignedIn() && isValidId(viewerId) && (
                            viewerId == request.auth.uid ||
                            !storyExists(storyId) ||
-                           storyDoc(storyId).data.authorId == request.auth.uid ||
-                           isStoryModerator(storyDoc(storyId).data)
+                           storyDoc(storyId).data.authorId == request.auth.uid
                          );
       }
-    }
-
-    match /story_reports/{reportId} {
-      allow get: if isSignedIn() && isValidId(reportId) && (
-                    resource == null ||
-                    existing().reporterUid == request.auth.uid ||
-                    isStoryModerator(existing()) ||
-                    (storyExists(existing().storyId) && isStoryModerator(storyDoc(existing().storyId).data))
-                  );
-      allow list: if isSignedIn() && (
-                     resource.data.reporterUid == request.auth.uid ||
-                     isStoryModerator(resource.data)
-                   );
-      allow create: if isSignedIn() && isValidId(reportId) &&
-                       isValidStoryReport(incoming()) &&
-                       incoming().reporterUid == request.auth.uid &&
-                       incoming().status == 'PENDING' &&
-                       storyExists(incoming().storyId) &&
-                       canViewStoryDoc(storyDoc(incoming().storyId).data);
-      allow update: if isSignedIn() && isValidId(reportId) &&
-                       isValidStoryReport(incoming()) &&
-                       incoming().reporterUid == existing().reporterUid &&
-                       incoming().storyId == existing().storyId &&
-                       (isStoryModerator(existing()) ||
-                        (storyExists(existing().storyId) && isStoryModerator(storyDoc(existing().storyId).data)));
-      allow delete: if isSignedIn() && isValidId(reportId) && (
-                       existing().reporterUid == request.auth.uid ||
-                       existing().storyAuthorId == request.auth.uid ||
-                       isStoryModerator(existing()) ||
-                       (storyExists(existing().storyId) && isStoryModerator(storyDoc(existing().storyId).data))
-                     );
     }
 
     // 8. RAVEN Advanced Polls, Anonymous Voting, Role Restrictions & Anti-Fraud Tallies

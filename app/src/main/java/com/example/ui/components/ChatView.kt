@@ -132,6 +132,7 @@ fun ChatView(
     canBypassServerClosed: Boolean = false,
     serverClosedByName: String? = null,
     onToggleServerClosed: ((Boolean) -> Unit)? = null,
+    onBotQuickReplyClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -534,12 +535,13 @@ fun ChatView(
             ) {
                 TypingIndicatorBar(typingUserNames = typingUsers)
 
-                if (inputText.startsWith("/")) {
+                if (inputText.startsWith("/") || inputText.startsWith("!")) {
                     SlashCommandMenu(
                         query = inputText,
                         extraBotCommands = botSlashCommands,
                         onSelectCommand = { option ->
-                            if (option.command in listOf("/pileouface", "/xp", "/clear")) {
+                            val normalized = "/" + option.command.removePrefix("/").removePrefix("!").lowercase()
+                            if (normalized in listOf("/pileouface", "/xp", "/clear", "/menu", "/aide", "/ping", "/botinfo", "/quiz")) {
                                 onExecuteSlashCommand(option.command)
                                 inputText = ""
                             } else {
@@ -964,7 +966,8 @@ fun ChatView(
                             // Text Field
                             val dispatchChatInput = {
                                 if (canCompose && slowmodeRemainingSec == 0 && inputText.isNotBlank()) {
-                                    val handledSlash = if (inputText.trim().startsWith("/")) {
+                                    val trimmed = inputText.trim()
+                                    val handledSlash = if (trimmed.startsWith("/") || trimmed.startsWith("!")) {
                                         onExecuteSlashCommand(inputText)
                                     } else false
                                     if (!handledSlash) {
@@ -1211,6 +1214,14 @@ fun ChatView(
                             pollUiState = pollUiState,
                             onOpenAdvancedPollStats = { advPoll, startExport ->
                                 inspectAdvancedPollPair = advPoll to startExport
+                            },
+                            onBotQuickReplyClick = { payload ->
+                                if (onBotQuickReplyClick != null) {
+                                    onBotQuickReplyClick(payload)
+                                } else {
+                                    val executed = onExecuteSlashCommand(payload)
+                                    if (!executed) onSendMessage(payload, null, null, 0)
+                                }
                             }
                         )
                     }
@@ -1516,7 +1527,8 @@ fun MessageItem(
     onVotePoll: (String) -> Unit = {},
     pollViewModel: PollViewModel? = null,
     pollUiState: PollUiState? = null,
-    onOpenAdvancedPollStats: (AdvancedPoll, Boolean) -> Unit = { _, _ -> }
+    onOpenAdvancedPollStats: (AdvancedPoll, Boolean) -> Unit = { _, _ -> },
+    onBotQuickReplyClick: (String) -> Unit = {}
 ) {
     val palette = ravenPalette()
     val isMine = message.sender.id == currentUserId || message.sender.id == "user_me"
@@ -1916,6 +1928,50 @@ fun MessageItem(
                             currentUserId = currentUserId,
                             onVoteOption = onVotePoll
                         )
+                    }
+                }
+
+                // Interactive WhatsApp-style Quick Reply buttons on Bot messages
+                if (message.botQuickReplies.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FlowRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("bot_quick_replies_row_${message.id}"),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        message.botQuickReplies.forEachIndexed { idx, qr ->
+                            Surface(
+                                shape = RoundedCornerShape(18.dp),
+                                color = DiscordGreen.copy(alpha = 0.16f),
+                                border = BorderStroke(1.dp, DiscordGreen.copy(alpha = 0.65f)),
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .clickable { onBotQuickReplyClick(qr.payload) }
+                                    .testTag("bot_quick_reply_${message.id}_$idx")
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.Reply,
+                                        contentDescription = null,
+                                        tint = DiscordGreen,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = qr.label,
+                                        color = palette.textPrimary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 

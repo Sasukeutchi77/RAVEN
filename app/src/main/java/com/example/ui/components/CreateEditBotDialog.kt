@@ -49,7 +49,11 @@ fun CreateEditBotDialog(
         avatarColor: Long,
         isPublicCatalog: Boolean,
         defaultPermissions: Set<BotPermission>,
-        subscribedEvents: Set<BotEventTrigger>
+        subscribedEvents: Set<BotEventTrigger>,
+        allowDirectMessages: Boolean,
+        allowGroupMentions: Boolean,
+        welcomeDmMessage: String,
+        starterPresetId: String?
     ) -> Unit,
     onDeleteBot: (() -> Unit)? = null
 ) {
@@ -80,6 +84,17 @@ fun CreateEditBotDialog(
                 BotEventTrigger.ON_COMMAND_EXECUTED,
                 BotEventTrigger.ON_MESSAGE_CREATE
             )
+        )
+    }
+    var allowDirectMessages by remember(existingBot?.id) { mutableStateOf(existingBot?.allowDirectMessages ?: true) }
+    var allowGroupMentions by remember(existingBot?.id) { mutableStateOf(existingBot?.allowGroupMentions ?: true) }
+    var starterPresetId by remember(existingBot?.id) {
+        mutableStateOf(existingBot?.starterPresetId ?: com.example.model.BotStarterCatalog.presets.first().id)
+    }
+    var welcomeDmMessage by remember(existingBot?.id) {
+        mutableStateOf(
+            existingBot?.welcomeDmMessage
+                ?: com.example.model.BotStarterCatalog.presets.first().welcomeDmMessage
         )
     }
     var isUploadingAvatar by remember { mutableStateOf(false) }
@@ -141,6 +156,29 @@ fun CreateEditBotDialog(
                         color = palette.textMuted,
                         fontSize = 12.sp
                     )
+                }
+            }
+
+            if (!isEditing) {
+                Text("MODÈLE WHATSAPP PRÊT À L'EMPLOI", color = palette.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(com.example.model.BotStarterCatalog.presets, key = { it.id }) { preset ->
+                        val selected = preset.id == starterPresetId
+                        FilterChip(
+                            selected = selected,
+                            onClick = {
+                                starterPresetId = preset.id
+                                avatarColor = preset.defaultColor
+                                welcomeDmMessage = preset.welcomeDmMessage
+                                if (description.isBlank()) description = preset.subtitle
+                            },
+                            label = { Text(preset.title, fontSize = 12.sp) },
+                            leadingIcon = if (selected) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                            } else null,
+                            modifier = Modifier.heightIn(min = 48.dp).testTag("bot_preset_${preset.id}")
+                        )
+                    }
                 }
             }
 
@@ -238,6 +276,49 @@ fun CreateEditBotDialog(
                 }
             }
 
+            // WhatsApp DM & Group Mentions Configuration
+            Surface(
+                color = palette.cardBg,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("FONCTIONNEMENT WHATSAPP (DM & GROUPES)", color = DiscordGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Autoriser les messages privés (DM)", color = palette.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Permet aux membres de discuter en 1-à-1 avec ce bot dans l'onglet DM.", color = palette.textMuted, fontSize = 11.sp)
+                        }
+                        Switch(
+                            checked = allowDirectMessages,
+                            onCheckedChange = { allowDirectMessages = it },
+                            modifier = Modifier.testTag("bot_allow_dm_switch")
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Répondre dans les groupes & DMs (@handle)", color = palette.textPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Active l'invocation par @${handle.ifBlank { "bot" }} ou /commande dans les groupes privés.", color = palette.textMuted, fontSize = 11.sp)
+                        }
+                        Switch(
+                            checked = allowGroupMentions,
+                            onCheckedChange = { allowGroupMentions = it },
+                            modifier = Modifier.testTag("bot_allow_group_mentions_switch")
+                        )
+                    }
+                    if (allowDirectMessages) {
+                        OutlinedTextField(
+                            value = welcomeDmMessage,
+                            onValueChange = { welcomeDmMessage = it },
+                            label = { Text("Message d'accueil DM ({user}, {bot}, {handle})") },
+                            minLines = 2,
+                            maxLines = 4,
+                            modifier = Modifier.fillMaxWidth().testTag("bot_welcome_dm_input")
+                        )
+                    }
+                }
+            }
+
             Text("PERMISSIONS PAR DÉFAUT", color = palette.textMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             BotPermission.entries.forEach { perm ->
                 val checked = perm in defaultPerms
@@ -298,7 +379,11 @@ fun CreateEditBotDialog(
                             avatarColor,
                             isPublicCatalog,
                             defaultPerms,
-                            subscribedEvents
+                            subscribedEvents,
+                            allowDirectMessages,
+                            allowGroupMentions,
+                            welcomeDmMessage,
+                            if (isEditing) existingBot?.starterPresetId else starterPresetId
                         )
                         onDismiss()
                     },

@@ -228,7 +228,6 @@ fun RavenApp(
     var editingPollDraft by remember { mutableStateOf<AdvancedPoll?>(null) }
     var showCreateStoryDialog by remember { mutableStateOf(false) }
     var viewingStoryAuthorId by remember { mutableStateOf<String?>(null) }
-    var showStoryModerationSheet by remember { mutableStateOf(false) }
     var showCreateBotDialog by remember { mutableStateOf(false) }
     var editingBot by remember { mutableStateOf<RavenBot?>(null) }
     var editingCommunityServer by remember { mutableStateOf<Server?>(null) }
@@ -1006,7 +1005,6 @@ fun RavenApp(
                                 storyUiState = storyUiState,
                                 onCreateStoryClick = { showCreateStoryDialog = true },
                                 onOpenStoryGroup = { grp -> viewingStoryAuthorId = grp.authorId },
-                                onOpenStoryModeration = { showStoryModerationSheet = true },
                                 friends = friendUiState.friends,
                                 onOpenFriendDm = { user -> friendViewModel.openDm(user) },
                                 onOpenUserProfile = { user -> selectedUserProfile = user },
@@ -1015,7 +1013,11 @@ fun RavenApp(
                                 onCancelFriendRequest = { reqId -> friendViewModel.cancelRequest(reqId) },
                                 onOpenUserSearchSheet = { showUserDirectorySheet = true },
                                 onOpenFriendPrivacy = { showFriendPrivacySheet = true },
-                                isDesktopSidebarDocked = currentPlatform.useDesktopLayout
+                                isDesktopSidebarDocked = currentPlatform.useDesktopLayout,
+                                bots = bots.filter { (it.ownerUid == currentUser.id || it.isPublicCatalog) && it.allowDirectMessages },
+                                botSlashCommandsForConv = { conv -> botRepo.getSlashCommandsForDm(conv) },
+                                onExecuteDmCommand = { dmId, raw -> repository.executeSlashCommand(dmId, raw) },
+                                onOpenBotDm = { botId -> botViewModel.openBotDirectChat(botId) }
                             )
                         }
 
@@ -2372,6 +2374,12 @@ fun RavenApp(
             onTriggerTestWebhook = { botId, whId -> botViewModel.triggerTestWebhook(botId, whId) },
             onTogglePlugin = { botId, pid, en -> botViewModel.togglePlugin(botId, pid, en) },
             onUpdateRateLimit = { botId, cfg -> botViewModel.updateRateLimit(botId, cfg) },
+            onOpenBotDm = { bot ->
+                botViewModel.openBotDirectChat(bot.id) {
+                    repository.selectServer("dm_tab")
+                    showBotDashboardSheet = false
+                }
+            },
             onDismiss = { showBotDashboardSheet = false }
         )
     }
@@ -2381,8 +2389,21 @@ fun RavenApp(
         CreateEditBotDialog(
             existingBot = null,
             onDismiss = { showCreateBotDialog = false },
-            onSave = { name, handle, desc, avatar, color, pub, perms, events ->
-                botViewModel.createBot(name, handle, desc, avatar, color, pub, perms, events)
+            onSave = { name, handle, desc, avatar, color, pub, perms, events, allowDm, allowGrp, welcomeDm, presetId ->
+                botViewModel.createBot(
+                    name = name,
+                    handle = handle,
+                    description = desc,
+                    avatarUrl = avatar,
+                    avatarColor = color,
+                    isPublicCatalog = pub,
+                    defaultPermissions = perms,
+                    subscribedEvents = events,
+                    allowDirectMessages = allowDm,
+                    allowGroupMentions = allowGrp,
+                    welcomeDmMessage = welcomeDm,
+                    starterPresetId = presetId
+                )
             }
         )
     }
@@ -2392,8 +2413,21 @@ fun RavenApp(
         CreateEditBotDialog(
             existingBot = botToEdit,
             onDismiss = { editingBot = null },
-            onSave = { name, handle, desc, avatar, color, pub, perms, events ->
-                botViewModel.updateBot(botToEdit.id, name, handle, desc, avatar, color, pub, perms, events)
+            onSave = { name, handle, desc, avatar, color, pub, perms, events, allowDm, allowGrp, welcomeDm, _ ->
+                botViewModel.updateBot(
+                    botId = botToEdit.id,
+                    name = name,
+                    handle = handle,
+                    description = desc,
+                    avatarUrl = avatar,
+                    avatarColor = color,
+                    isPublicCatalog = pub,
+                    defaultPermissions = perms,
+                    subscribedEvents = events,
+                    allowDirectMessages = allowDm,
+                    allowGroupMentions = allowGrp,
+                    welcomeDmMessage = welcomeDm
+                )
             },
             onDeleteBot = {
                 botViewModel.deleteBot(botToEdit.id)
@@ -2480,13 +2514,10 @@ fun RavenApp(
                 groups = viewerGroups,
                 initialAuthorId = startAuthor,
                 currentUserId = currentUser.id,
-                isModerator = storyUiState.isModerator,
                 loadedViewers = storyUiState.activeStoryViewers,
                 onMarkStoryViewed = { storyId -> storyViewModel.markStoryViewed(storyId) },
                 onLoadViewers = { storyId -> storyViewModel.loadStoryViewers(storyId) },
                 onDeleteStory = { storyId -> storyViewModel.deleteStory(storyId) },
-                onReportStory = { storyId, reason, details -> storyViewModel.reportStory(storyId, reason, details) },
-                onModerateHideStory = { storyId, reason -> storyViewModel.moderateStory(storyId, true, reason) },
                 onReplyToStory = { storyId, reply -> storyViewModel.replyToStory(storyId, reply) },
                 onToggleLike = { storyId -> storyViewModel.toggleStoryLike(storyId) },
                 onDismiss = { viewingStoryAuthorId = null }
@@ -2494,20 +2525,6 @@ fun RavenApp(
         } else {
             viewingStoryAuthorId = null
         }
-    }
-
-    // Story Moderation & Cleanup Sheet
-    if (showStoryModerationSheet) {
-        StoryModerationSheet(
-            pendingReports = storyUiState.pendingReports,
-            allReports = storyUiState.allReports,
-            onModerateStory = { storyId, hideOnly, reason, reportId ->
-                storyViewModel.moderateStory(storyId, hideOnly, reason, reportId)
-            },
-            onDismissReport = { reportId -> storyViewModel.dismissReport(reportId) },
-            onRunCleanup = { storyViewModel.runManualCleanup() },
-            onDismiss = { showStoryModerationSheet = false }
-        )
     }
 
     // Complete Server Customization & Administration Dashboard

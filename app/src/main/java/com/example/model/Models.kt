@@ -83,7 +83,9 @@ data class Message(
     val mentions: List<String> = emptyList(),
     val poll: Poll? = null,
     val isEdited: Boolean = false,
-    val threadCount: Int = 0
+    val threadCount: Int = 0,
+    val isBotMessage: Boolean = false,
+    val botQuickReplies: List<BotQuickReply> = emptyList()
 )
 
 data class Channel(
@@ -165,5 +167,7 @@ data class DirectConversation(
     val groupMembers: List<User> = emptyList(),
     val groupIconColor: Long = 0xFF5865F2,
     val participantIds: List<String> = emptyList(),
-    val dmPairKey: String? = null
+    val dmPairKey: String? = null,
+    val isBotChat: Boolean = false,
+    val botId: String? = null
 )

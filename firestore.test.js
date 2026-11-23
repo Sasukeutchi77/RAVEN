@@ -572,6 +572,52 @@ test("Raven Bots: owner isolation, token secret protection, handle ownership, se
     })
   );
 
+  // 7b. WhatsApp-style Bot DM: Alice creates DM conversation with Sentinel, posts interactive bot message with quickReplies, while Bob CANNOT spoof Alice's private DM bot message
+  await assertSucceeds(
+    aliceDb.collection("bots").doc("bot_alice_1").update({
+      allowDirectMessages: true,
+      allowGroupMentions: true,
+      welcomeDmMessage: "Bienvenue {user} !",
+      starterPresetId: "assistant_wa",
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("direct_conversations").doc("dm_bot_bot_alice_1").set({
+      id: "dm_bot_bot_alice_1",
+      participantIds: [ALICE_UID, "bot_bot_alice_1"],
+      isGroup: false,
+      isBotChat: true,
+      botId: "bot_alice_1",
+      lastMessage: "Bienvenue !",
+      lastMessageTime: "Maintenant",
+      updatedAtMs: Date.now(),
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("direct_conversations").doc("dm_bot_bot_alice_1").collection("messages").doc("dm_bot_msg_1").set({
+      senderId: "bot_bot_alice_1",
+      senderName: "Sentinel",
+      text: "Menu WhatsApp prêt !",
+      isBotMessage: true,
+      botId: "bot_alice_1",
+      triggeredByUid: ALICE_UID,
+      botQuickReplies: [{ label: "1. Aide", payload: "/aide" }],
+      participantIds: [ALICE_UID, "bot_bot_alice_1"],
+    })
+  );
+  // Bob CANNOT inject messages into Alice's private Bot DM
+  await assertFails(
+    bobDb.collection("direct_conversations").doc("dm_bot_bot_alice_1").collection("messages").doc("dm_bot_msg_spoof").set({
+      senderId: "bot_bot_alice_1",
+      senderName: "Sentinel",
+      text: "Spoofed DM",
+      isBotMessage: true,
+      botId: "bot_alice_1",
+      triggeredByUid: BOB_UID,
+      participantIds: [ALICE_UID, "bot_bot_alice_1"],
+    })
+  );
+
   // 8. Bob CANNOT remove the installed bot or read Alice's bot logs; Charlie (outsider from non-public bot) also blocked
   await assertFails(bobDb.collection("servers").doc("bot_srv").collection("bots").doc("bot_alice_1").delete());
   await assertFails(bobDb.collection("bots").doc("bot_alice_1").collection("logs").doc("log_1").get());
@@ -678,19 +724,7 @@ test("Advanced Voice Channels: channel lock, capacity/role fields, kickedVoiceUi
   );
 });
 
-test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, owner deletion, reporting, and staff moderation", async () => {
-  await testEnv.withSecurityRulesDisabled(async (ctx) => {
-    const db = ctx.firestore();
-    await db.collection("servers").doc("story_srv").set({
-      name: "Story Mod HQ",
-      ownerId: ALICE_UID,
-      adminIds: [ALICE_UID],
-      moderatorIds: [CHARLIE_UID],
-      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
-      isPublic: false,
-    });
-  });
-
+test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, likes, and strictly author-only deletion", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
   const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
@@ -711,8 +745,6 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
       expiresAtMs: now + 3600000,
       viewCount: 0,
       viewerIds: [],
-      reportCount: 0,
-      moderatedHidden: false,
     })
   );
   await assertFails(
@@ -727,8 +759,6 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
       expiresAtMs: now + 3600000,
       viewCount: 0,
       viewerIds: [],
-      reportCount: 0,
-      moderatedHidden: false,
     })
   );
   await assertFails(
@@ -743,8 +773,6 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
       expiresAtMs: now + 3600000,
       viewCount: 99,
       viewerIds: [],
-      reportCount: 0,
-      moderatedHidden: false,
     })
   );
 
@@ -758,8 +786,6 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
       caption: "Public 24h",
       visibility: "PUBLIC",
       allowedViewerIds: [],
-      moderatorIds: [CHARLIE_UID],
-      moderationServerId: "story_srv",
       durationHours: 24,
       createdAtMs: now,
       expiresAtMs: now + 24 * 3600000,
@@ -767,8 +793,6 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
       viewerIds: [],
       likesCount: 0,
       likedByIds: [],
-      reportCount: 0,
-      moderatedHidden: false,
     })
   );
   await assertSucceeds(
@@ -779,14 +803,11 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
       mediaUrl: "https://cdn.example.com/story_alice.jpg",
       visibility: "CUSTOM_USERS",
       allowedViewerIds: [ALICE_UID, BOB_UID],
-      moderatorIds: [],
       durationHours: 12,
       createdAtMs: now,
       expiresAtMs: now + 12 * 3600000,
       viewCount: 0,
       viewerIds: [],
-      reportCount: 0,
-      moderatedHidden: false,
     })
   );
 
@@ -827,7 +848,7 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
       textContent: "Contenu piraté",
     })
   );
-  // Bob AND Moderator Charlie CANNOT list viewers of Alice's story; ONLY author Alice CAN list viewers
+  // Bob AND Charlie CANNOT list viewers of Alice's story; ONLY author Alice CAN list viewers
   await assertFails(bobDb.collection("stories").doc("st_pub").collection("views").get());
   await assertFails(charlieDb.collection("stories").doc("st_pub").collection("views").get());
   await assertSucceeds(aliceDb.collection("stories").doc("st_pub").collection("views").get());
@@ -858,63 +879,20 @@ test("RAVEN Stories: publish validation, privacy isolation, self-view tracking, 
     })
   );
 
-  // 5. Reporting & Staff Moderation: Bob reports st_pub, non-mod Bob/Eve cannot moderate or resolve report, Moderator Charlie CAN
-  await assertSucceeds(
-    bobDb.collection("story_reports").doc("rep_1").set({
+  // 5. Story reporting is removed: creating story_reports is denied
+  await assertFails(
+    bobDb.collection("story_reports").doc("rep_removed").set({
       storyId: "st_pub",
-      storyAuthorId: ALICE_UID,
-      storyAuthorName: "Alice",
-      storyPreview: "Bonjour RAVEN !",
-      storyMediaType: "TEXT",
       reporterUid: BOB_UID,
-      reporterName: "Bob",
       reason: "SPAM",
-      details: "Test report",
-      status: "PENDING",
-      moderatorIds: [CHARLIE_UID],
-      moderationServerId: "story_srv",
-      createdAtMs: now + 2000,
-    })
-  );
-  await assertSucceeds(
-    bobDb.collection("stories").doc("st_pub").update({
-      reportCount: 1,
-    })
-  );
-  await assertFails(
-    bobDb.collection("stories").doc("st_pub").update({
-      moderatedHidden: true,
-      moderationReason: "Bob fake mod",
-      moderatedByUid: BOB_UID,
-    })
-  );
-  await assertFails(
-    bobDb.collection("story_reports").doc("rep_1").update({
-      status: "DISMISSED",
-      reviewedByUid: BOB_UID,
     })
   );
 
-  // Moderator Charlie CAN hide story & resolve report
-  await assertSucceeds(
-    charlieDb.collection("stories").doc("st_pub").update({
-      moderatedHidden: true,
-      moderationReason: "Spam vérifié",
-      moderatedByUid: CHARLIE_UID,
-    })
-  );
-  await assertSucceeds(
-    charlieDb.collection("story_reports").doc("rep_1").update({
-      status: "REMOVED",
-      reviewedByUid: CHARLIE_UID,
-    })
-  );
-  // Once hidden by moderator, Eve can no longer read st_pub
-  await assertFails(eveDb.collection("stories").doc("st_pub").get());
-
-  // 6. Non-owner Bob CANNOT delete st_priv; Owner Alice CAN delete her story and views cascade
+  // 6. Strictly Author-Only Deletion: Bob and Charlie CANNOT delete Alice's stories; ONLY author Alice CAN delete
   await assertFails(bobDb.collection("stories").doc("st_priv").delete());
+  await assertFails(charlieDb.collection("stories").doc("st_pub").delete());
   await assertSucceeds(aliceDb.collection("stories").doc("st_priv").delete());
+  await assertSucceeds(aliceDb.collection("stories").doc("st_pub").delete());
 });
 
 test("Advanced Server Customization: admin-only sensitive config, secret blockedWords isolation, channel order/icons, and invite privacy lock", async () => {

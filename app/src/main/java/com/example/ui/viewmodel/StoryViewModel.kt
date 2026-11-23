@@ -18,9 +18,6 @@ data class StoryUiState(
     val seenGroups: List<StoryAuthorGroup> = emptyList(),
     val allGroups: List<StoryAuthorGroup> = emptyList(),
     val activeStoryViewers: List<StoryViewerEntry> = emptyList(),
-    val pendingReports: List<StoryReport> = emptyList(),
-    val allReports: List<StoryReport> = emptyList(),
-    val isModerator: Boolean = false,
     val isBusy: Boolean = false,
     val feedbackMessage: String? = null,
     val errorMessage: String? = null
@@ -39,11 +36,10 @@ class StoryViewModel(private val repo: StoryRepository) : ViewModel() {
         viewModelScope.launch {
             combine(
                 repo.stories,
-                repo.reports,
                 _busy,
                 _viewers,
                 _feedback
-            ) { _, reports, busy, viewers, feedback ->
+            ) { _, busy, viewers, feedback ->
                 val (unseen, seen) = repo.groupedStories()
                 val (fb, err) = feedback
                 StoryUiState(
@@ -51,9 +47,6 @@ class StoryViewModel(private val repo: StoryRepository) : ViewModel() {
                     seenGroups = seen,
                     allGroups = unseen + seen,
                     activeStoryViewers = viewers,
-                    pendingReports = reports.filter { it.status == StoryReportStatus.PENDING },
-                    allReports = reports,
-                    isModerator = repo.isCurrentUserModerator(),
                     isBusy = busy,
                     feedbackMessage = fb,
                     errorMessage = err
@@ -177,39 +170,6 @@ class StoryViewModel(private val repo: StoryRepository) : ViewModel() {
         }
     }
 
-    fun reportStory(storyId: String, reason: StoryReportReason, details: String, onReported: () -> Unit = {}) {
-        viewModelScope.launch {
-            val res = repo.reportStory(storyId, reason, details)
-            res.onSuccess {
-                _feedback.value = "Signalement transmis aux modérateurs." to null
-                onReported()
-            }.onFailure { err ->
-                _feedback.value = null to (err.message ?: "Impossible d'envoyer le signalement.")
-            }
-        }
-    }
-
-    fun moderateStory(storyId: String, hideOnly: Boolean, reason: String, reportId: String? = null) {
-        viewModelScope.launch {
-            val res = repo.moderateStory(storyId, hideOnly, reason, reportId)
-            res.onSuccess {
-                _feedback.value = (if (hideOnly) "Story masquée." else "Story supprimée par la modération.") to null
-            }.onFailure { err ->
-                _feedback.value = null to (err.message ?: "Action de modération refusée.")
-            }
-        }
-    }
-
-    fun dismissReport(reportId: String) {
-        viewModelScope.launch {
-            val res = repo.dismissReport(reportId)
-            res.onSuccess {
-                _feedback.value = "Signalement classé sans suite." to null
-            }.onFailure { err ->
-                _feedback.value = null to (err.message ?: "Erreur lors du traitement du signalement.")
-            }
-        }
-    }
 
     fun replyToStory(storyId: String, text: String) {
         val res = repo.replyToStory(storyId, text)

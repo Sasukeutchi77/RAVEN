@@ -279,11 +279,84 @@ class ChatRepository(
 
     internal var botCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
     internal var botMessageHandler: ((serverId: String, channelId: String, message: Message) -> Unit)? = null
+    internal var botDmMessageHandler: ((dmId: String, message: Message) -> Unit)? = null
     internal var botCommunityEventHandler: ((serverId: String, eventType: String, actorUid: String, actorName: String, detail: String) -> Unit)? = null
     internal var pluginCommandHandler: ((targetId: String, rawInput: String) -> Boolean)? = null
     internal var pluginMessageHandler: ((serverId: String, channelId: String, message: Message) -> Unit)? = null
     internal var pluginEventHandler: ((RavenPluginEvent) -> Unit)? = null
     internal fun repoScope(): CoroutineScope = scope
+
+    internal fun openOrCreateBotDmConversation(bot: RavenBot): DirectConversation {
+        val dmId = "dm_bot_${bot.id}"
+        val uid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        val botUser = User(
+            id = "bot_${bot.id}",
+            name = bot.name,
+            tag = "#BOT",
+            avatarUrl = bot.avatarUrl,
+            avatarColor = bot.avatarColor,
+            bio = bot.description,
+            role = UserRole.BOT,
+            status = if (bot.isActive) UserStatus.ONLINE else UserStatus.OFFLINE,
+            customStatus = "Bot WhatsApp Raven • @${bot.handle}"
+        )
+        val existing = _directConversations.value.find { it.id == dmId || (!it.isGroup && it.botId == bot.id) }
+        val conv = if (existing != null) {
+            existing.copy(
+                friend = botUser,
+                isBotChat = true,
+                botId = bot.id,
+                participantIds = (existing.participantIds + listOf(uid, botUser.id)).distinct().sorted()
+            ).also { updated ->
+                _directConversations.value = _directConversations.value.map {
+                    if (it.id == updated.id) updated else it
+                }
+            }
+        } else {
+            val now = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+            DirectConversation(
+                id = dmId,
+                friend = botUser,
+                lastMessage = "Bot @${bot.handle} prêt — écrivez /menu",
+                lastMessageTime = now,
+                unreadCount = 0,
+                isGroup = false,
+                participantIds = listOf(uid, botUser.id).distinct().sorted(),
+                isBotChat = true,
+                botId = bot.id
+            ).also { created ->
+                _directConversations.value = listOf(created) + _directConversations.value
+            }
+        }
+
+        val db = firestore
+        val authUser = currentAuth()?.currentUser
+        if (db != null && authUser != null) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val meta = hashMapOf<String, Any>(
+                        "id" to conv.id,
+                        "participantIds" to conv.participantIds,
+                        "participantNames" to mapOf(
+                            authUser.uid to _currentUser.value.name,
+                            botUser.id to bot.name
+                        ),
+                        "isGroup" to false,
+                        "isBotChat" to true,
+                        "botId" to bot.id,
+                        "lastMessage" to conv.lastMessage,
+                        "lastMessageTime" to conv.lastMessageTime,
+                        "updatedAtMs" to System.currentTimeMillis(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    Tasks.await(db.collection("direct_conversations").document(conv.id).set(meta, SetOptions.merge()))
+                } catch (e: Exception) {
+                    Log.w("ChatRepo", "Bot DM metadata sync failed", e)
+                }
+            }
+        }
+        return conv
+    }
 
     internal fun postBotChannelMessage(
         targetId: String,
@@ -292,7 +365,9 @@ class ChatRepository(
         botAvatarUrl: String?,
         botAvatarColor: Long,
         text: String,
-        isAnnouncement: Boolean = false
+        isAnnouncement: Boolean = false,
+        quickReplies: List<BotQuickReply> = emptyList(),
+        poll: Poll? = null
     ) {
         val currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
         val botSender = User(
@@ -310,17 +385,26 @@ class ChatRepository(
             sender = botSender,
             text = text,
             timestamp = currentTime,
-            isSystemAnnouncement = isAnnouncement
+            isSystemAnnouncement = isAnnouncement,
+            poll = poll,
+            isBotMessage = true,
+            botQuickReplies = quickReplies
         )
         val currentList = _messages.value[targetId] ?: emptyList()
         _messages.value = _messages.value + (targetId to (currentList + botMsg))
 
+        val targetChannel = findChannelById(targetId)
+        if (targetChannel == null) {
+            val preview = text.lineSequence().firstOrNull()?.take(80) ?: "Message bot"
+            _directConversations.value = _directConversations.value.map {
+                if (it.id == targetId) it.copy(lastMessage = preview, lastMessageTime = currentTime) else it
+            }
+        }
+
         val db = firestore ?: return
         val user = currentAuth()?.currentUser ?: return
-        val targetChannel = findChannelById(targetId) ?: return
         scope.launch(Dispatchers.IO) {
             try {
-                val (isPublic, memberIds) = ensureServerAndChannelInFirestore(db, targetChannel.serverId, targetChannel, user.uid)
                 val payload = hashMapOf<String, Any>(
                     "senderId" to "bot_$botId",
                     "senderName" to botName.take(60),
@@ -331,17 +415,60 @@ class ChatRepository(
                     "isPinned" to false,
                     "isEdited" to false,
                     "threadCount" to 0,
-                    "isPublic" to isPublic,
-                    "memberIds" to memberIds,
                     "createdAtMs" to System.currentTimeMillis(),
                     "createdAt" to FieldValue.serverTimestamp()
                 )
-                Tasks.await(
-                    db.collection("servers").document(targetChannel.serverId)
-                        .collection("channels").document(targetId)
-                        .collection("messages").document(botMsg.id)
-                        .set(payload)
-                )
+                if (quickReplies.isNotEmpty()) {
+                    payload["botQuickReplies"] = quickReplies.take(8).map {
+                        mapOf("label" to it.label.take(40), "payload" to it.payload.take(120))
+                    }
+                }
+                poll?.let { p ->
+                    payload["poll"] = hashMapOf<String, Any>(
+                        "question" to p.question,
+                        "allowsMultiple" to p.allowsMultiple,
+                        "durationLabel" to p.durationLabel,
+                        "isClosed" to p.isClosed,
+                        "options" to p.options.map { opt ->
+                            mapOf("id" to opt.id, "text" to opt.text, "votes" to opt.votes)
+                        }
+                    )
+                }
+
+                if (targetChannel != null) {
+                    val (isPublic, memberIds) = ensureServerAndChannelInFirestore(db, targetChannel.serverId, targetChannel, user.uid)
+                    payload["isPublic"] = isPublic
+                    payload["memberIds"] = memberIds
+                    Tasks.await(
+                        db.collection("servers").document(targetChannel.serverId)
+                            .collection("channels").document(targetId)
+                            .collection("messages").document(botMsg.id)
+                            .set(payload)
+                    )
+                } else {
+                    val dmConv = _directConversations.value.find { it.id == targetId }
+                    val participantIds = when {
+                        dmConv == null -> listOf(user.uid, "bot_$botId").distinct().sorted()
+                        dmConv.isGroup -> (dmConv.groupMembers.map { it.id } + user.uid).filter { it.isNotBlank() }.distinct().sorted()
+                        else -> (dmConv.participantIds + listOf(user.uid, dmConv.friend.id)).filter { it.isNotBlank() }.distinct().sorted()
+                    }
+                    payload["participantIds"] = participantIds
+                    val dmDoc = db.collection("direct_conversations").document(targetId)
+                    val dmMeta = hashMapOf<String, Any>(
+                        "id" to targetId,
+                        "participantIds" to participantIds,
+                        "isGroup" to (dmConv?.isGroup == true),
+                        "isBotChat" to (dmConv?.isBotChat == true || targetId.startsWith("dm_bot_")),
+                        "lastMessage" to (text.lineSequence().firstOrNull()?.take(80) ?: "Réponse Bot"),
+                        "lastMessageTime" to currentTime,
+                        "updatedAtMs" to System.currentTimeMillis(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    (dmConv?.botId ?: if (targetId.startsWith("dm_bot_")) targetId.removePrefix("dm_bot_") else null)
+                        ?.let { dmMeta["botId"] = it }
+                    Tasks.await(dmDoc.set(dmMeta, SetOptions.merge()))
+                    Tasks.await(dmDoc.collection("messages").document(botMsg.id).set(payload))
+                }
             } catch (e: Exception) {
                 Log.w("ChatRepo", "Bot Firestore message write failed", e)
             }
@@ -980,10 +1107,23 @@ class ChatRepository(
             } else null
         }
 
+        val isBotMsg = doc.getBoolean("isBotMessage") ?: senderId.startsWith("bot_")
+        val parsedQuickReplies = (doc.get("botQuickReplies") as? List<Map<String, Any?>>).orEmpty().mapNotNull { qr ->
+            val label = (qr["label"] as? String)?.trim().orEmpty()
+            val payload = (qr["payload"] as? String)?.trim().orEmpty()
+            if (label.isNotEmpty() && payload.isNotEmpty()) BotQuickReply(label, payload) else null
+        }
+
         return Message(
             id = doc.id,
             channelId = targetId,
-            sender = User(id = senderId, name = senderName, avatarColor = 0xFF404249),
+            sender = User(
+                id = senderId,
+                name = senderName,
+                tag = if (isBotMsg) "#BOT" else "#0001",
+                avatarColor = if (isBotMsg) 0xFF25D366L else 0xFF404249L,
+                role = if (isBotMsg) UserRole.BOT else UserRole.MEMBER
+            ),
             text = text,
             timestamp = timeLabel,
             replyToText = replyToText,
@@ -997,7 +1137,9 @@ class ChatRepository(
             isPinned = isPinned,
             isEdited = isEdited,
             threadCount = threadCount,
-            poll = parsedPoll
+            poll = parsedPoll,
+            isBotMessage = isBotMsg,
+            botQuickReplies = parsedQuickReplies
         )
     }
 
@@ -1208,11 +1350,13 @@ class ChatRepository(
         friendBridgeHook?.touchCurrentUserActivity()
         syncNewMessageToFirestore(newMessage, targetId)
 
-        // Dispatch message event to installed Raven Bots and active sandboxed extensions
+        // Dispatch message event to installed Raven Bots (channels & DMs) and sandboxed extensions
         val ch = findChannelById(targetId)
         if (ch != null && newMessage.sender.role != UserRole.BOT) {
             botMessageHandler?.invoke(ch.serverId, targetId, newMessage)
             pluginMessageHandler?.invoke(ch.serverId, targetId, newMessage)
+        } else if (ch == null && newMessage.sender.role != UserRole.BOT) {
+            botDmMessageHandler?.invoke(targetId, newMessage)
         }
     }
 
@@ -3258,11 +3402,14 @@ class ChatRepository(
         syncNewMessageToFirestore(msg, targetId)
     }
 
-    // --- Slash Commands ---
+    // --- Slash & Bang Commands ---
     fun executeSlashCommand(targetId: String, rawInput: String): Boolean {
         val trimmed = rawInput.trim()
-        if (!trimmed.startsWith("/")) return false
+        if (!trimmed.startsWith("/") && !trimmed.startsWith("!")) return false
         if (!canPostInTarget(targetId, trimmed)) return false
+        if (trimmed.startsWith("!")) {
+            return botCommandHandler?.invoke(targetId, trimmed) == true
+        }
         val parts = trimmed.split(" ", limit = 2)
         val cmd = parts[0].lowercase()
         val arg = parts.getOrNull(1)?.trim().orEmpty()

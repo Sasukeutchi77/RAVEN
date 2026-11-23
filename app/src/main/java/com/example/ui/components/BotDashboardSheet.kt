@@ -61,6 +61,7 @@ fun BotDashboardSheet(
     onTriggerTestWebhook: (String, String) -> Unit,
     onTogglePlugin: (String, String, Boolean) -> Unit,
     onUpdateRateLimit: (String, BotRateLimitConfig) -> Unit,
+    onOpenBotDm: (RavenBot) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val palette = ravenPalette()
@@ -220,7 +221,8 @@ fun BotDashboardSheet(
                     onSelectBot = onSelectBot,
                     onToggleActive = onToggleBotActive,
                     onOpenEditBot = onOpenEditBot,
-                    onOpenCreateBot = onOpenCreateBot
+                    onOpenCreateBot = onOpenCreateBot,
+                    onOpenBotDm = onOpenBotDm
                 )
                 1 -> BotServerInstallTab(
                     activeServer = activeServer,
@@ -270,7 +272,8 @@ private fun BotListTab(
     onSelectBot: (String?) -> Unit,
     onToggleActive: (String, Boolean) -> Unit,
     onOpenEditBot: (RavenBot) -> Unit,
-    onOpenCreateBot: () -> Unit
+    onOpenCreateBot: () -> Unit,
+    onOpenBotDm: (RavenBot) -> Unit = {}
 ) {
     val palette = ravenPalette()
     if (bots.isEmpty()) {
@@ -360,16 +363,34 @@ private fun BotListTab(
                         Text(
                             text = "${bot.commands.size} cmd • ${bot.autoResponses.size} règles • ${bot.webhooks.size} webhooks",
                             color = palette.textMuted,
-                            fontSize = 11.sp
+                            fontSize = 11.sp,
+                            modifier = Modifier.weight(1f)
                         )
-                        if (isOwner) {
-                            TextButton(
-                                onClick = { onOpenEditBot(bot) },
-                                modifier = Modifier.heightIn(min = 48.dp).testTag("edit_bot_${bot.id}")
-                            ) {
-                                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Éditer / Supprimer", fontSize = 12.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (bot.isActive && bot.allowDirectMessages) {
+                                FilledTonalButton(
+                                    onClick = { onOpenBotDm(bot) },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    colors = ButtonDefaults.filledTonalButtonColors(
+                                        containerColor = DiscordGreen.copy(alpha = 0.2f),
+                                        contentColor = DiscordGreen
+                                    ),
+                                    modifier = Modifier.heightIn(min = 48.dp).testTag("open_bot_dm_${bot.id}")
+                                ) {
+                                    Icon(Icons.Default.Chat, contentDescription = "Discuter en DM", modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("DM", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            if (isOwner) {
+                                TextButton(
+                                    onClick = { onOpenEditBot(bot) },
+                                    modifier = Modifier.heightIn(min = 48.dp).testTag("edit_bot_${bot.id}")
+                                ) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Éditer", fontSize = 12.sp)
+                                }
                             }
                         }
                     }

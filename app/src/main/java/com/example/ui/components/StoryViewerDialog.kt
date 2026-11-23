@@ -50,13 +50,10 @@ fun StoryViewerDialog(
     groups: List<StoryAuthorGroup>,
     initialAuthorId: String,
     currentUserId: String,
-    isModerator: Boolean,
     loadedViewers: List<StoryViewerEntry>,
     onMarkStoryViewed: (String) -> Unit,
     onLoadViewers: (String) -> Unit,
     onDeleteStory: (String) -> Unit,
-    onReportStory: (storyId: String, StoryReportReason, String) -> Unit,
-    onModerateHideStory: (storyId: String, reason: String) -> Unit,
     onReplyToStory: (storyId: String, String) -> Unit,
     onToggleLike: (storyId: String) -> Unit = {},
     onDismiss: () -> Unit
@@ -83,7 +80,6 @@ fun StoryViewerDialog(
     var isVideoMuted by remember { mutableStateOf(false) }
     var progressFraction by remember(activeStory.id) { mutableStateOf(0f) }
     var showViewersSheet by remember { mutableStateOf(false) }
-    var showReportDialog by remember { mutableStateOf(false) }
     var replyText by remember(activeStory.id) { mutableStateOf("") }
 
     val goNext: () -> Unit = {
@@ -111,12 +107,12 @@ fun StoryViewerDialog(
     }
 
     // Timer for Text/Image stories (6s)
-    LaunchedEffect(activeStory.id, isPaused, showViewersSheet, showReportDialog) {
+    LaunchedEffect(activeStory.id, isPaused, showViewersSheet) {
         if (activeStory.mediaType != StoryMediaType.VIDEO) {
             val totalTicks = 60
             var tick = (progressFraction * totalTicks).toInt()
             while (tick < totalTicks) {
-                if (!isPaused && !showViewersSheet && !showReportDialog) {
+                if (!isPaused && !showViewersSheet) {
                     delay(100L)
                     tick++
                     progressFraction = tick / totalTicks.toFloat()
@@ -212,8 +208,8 @@ fun StoryViewerDialog(
                             exoPlayer.volume = if (isVideoMuted) 0f else 1f
                         }
 
-                        LaunchedEffect(isPaused, showViewersSheet, showReportDialog, exoPlayer) {
-                            if (isPaused || showViewersSheet || showReportDialog) {
+                        LaunchedEffect(isPaused, showViewersSheet, exoPlayer) {
+                            if (isPaused || showViewersSheet) {
                                 exoPlayer.pause()
                             } else {
                                 exoPlayer.play()
@@ -356,7 +352,7 @@ fun StoryViewerDialog(
                                 )
                             }
                         }
-                        if (activeStory.authorId == currentUserId || isModerator) {
+                        if (activeStory.authorId == currentUserId) {
                             IconButton(
                                 onClick = {
                                     onDeleteStory(activeStory.id)
@@ -367,33 +363,6 @@ fun StoryViewerDialog(
                                 Icon(
                                     imageVector = Icons.Default.Delete,
                                     contentDescription = "Supprimer cette story",
-                                    tint = DiscordRed
-                                )
-                            }
-                        }
-                        if (activeStory.authorId != currentUserId) {
-                            IconButton(
-                                onClick = { showReportDialog = true },
-                                modifier = Modifier.testTag("story_viewer_report_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Flag,
-                                    contentDescription = "Signaler cette story",
-                                    tint = DiscordAmber
-                                )
-                            }
-                        }
-                        if (isModerator && activeStory.authorId != currentUserId) {
-                            IconButton(
-                                onClick = {
-                                    onModerateHideStory(activeStory.id, "Masquée depuis le lecteur par un modérateur")
-                                    goNext()
-                                },
-                                modifier = Modifier.testTag("story_viewer_mod_hide_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.VisibilityOff,
-                                    contentDescription = "Masquer (Modération)",
                                     tint = DiscordRed
                                 )
                             }
@@ -604,56 +573,5 @@ fun StoryViewerDialog(
                 }
             }
         }
-    }
-
-    if (showReportDialog) {
-        var chosenReason by remember { mutableStateOf(StoryReportReason.SPAM) }
-        var reportDetails by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showReportDialog = false },
-            containerColor = DiscordDarkCard,
-            title = {
-                Text("Signaler cette story", color = DiscordTextWhite, fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    StoryReportReason.entries.forEach { reason ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { chosenReason = reason }
-                        ) {
-                            RadioButton(selected = chosenReason == reason, onClick = { chosenReason = reason })
-                            Text(reason.label, color = DiscordTextLight, fontSize = 13.sp)
-                        }
-                    }
-                    OutlinedTextField(
-                        value = reportDetails,
-                        onValueChange = { reportDetails = it.take(500) },
-                        label = { Text("Détails complémentaires", color = DiscordTextMuted, fontSize = 12.sp) },
-                        maxLines = 3,
-                        modifier = Modifier.fillMaxWidth().testTag("story_report_details_input")
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onReportStory(activeStory.id, chosenReason, reportDetails)
-                        showReportDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = DiscordRed),
-                    modifier = Modifier.testTag("story_report_submit_button")
-                ) {
-                    Text("Signaler", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showReportDialog = false }) {
-                    Text("Annuler", color = DiscordTextMuted)
-                }
-            }
-        )
     }
 }

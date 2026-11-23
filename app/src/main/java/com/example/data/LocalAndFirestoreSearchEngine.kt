@@ -223,7 +223,7 @@ class LocalAndFirestoreSearchEngine(
 
         // Active accessible stories
         context.stories
-            .filter { SearchPermissionGuard.canSeeStory(it, context.currentUid, context.blockedUserIds, context.isStoryModerator, now) }
+            .filter { SearchPermissionGuard.canSeeStory(it, context.currentUid, context.blockedUserIds, now) }
             .sortedByDescending { it.createdAtMs }
             .take(3)
             .forEach { story -> recent += mapStoryToResult(story, 100, now) }
@@ -689,7 +689,6 @@ class LocalAndFirestoreSearchEngine(
                     story = story,
                     uid = context.currentUid,
                     blockedIds = context.blockedUserIds,
-                    isModerator = context.isStoryModerator,
                     nowMs = context.nowMs
                 )
             ) return@mapNotNull null

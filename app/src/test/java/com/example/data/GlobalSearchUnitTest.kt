@@ -214,18 +214,16 @@ class GlobalSearchUnitTest {
                     expiresAtMs = now + 7_200_000L
                 ),
                 StoryItem(
-                    id = "st_mod",
-                    authorId = claire.id,
-                    authorName = "Claire",
+                    id = "st_blocked",
+                    authorId = blockedUser.id,
+                    authorName = "BlockedUser",
                     mediaType = StoryMediaType.TEXT,
-                    textContent = "Story Modérée Masquée",
+                    textContent = "Story Utilisateur Bloqué Masquée",
                     visibility = StoryVisibility.PUBLIC,
-                    moderatedHidden = true,
                     createdAtMs = now - 600_000L,
                     expiresAtMs = now + 7_200_000L
                 )
             ),
-            isStoryModerator = false,
             events = listOf(
                 RavenEvent(
                     id = "ev_ok",
@@ -291,7 +289,7 @@ class GlobalSearchUnitTest {
         listOf(
             "u_blocked_s", "srv_locked", "ch_secret_s", "ch_locked",
             "msg_sec", "msg_locked", "msg_blk", "dm_blocked",
-            "ev_secret", "st_expired", "st_priv", "st_mod",
+            "ev_secret", "st_expired", "st_priv", "st_blocked",
             "bot_priv", "sshop_locked"
         ).forEach { forbidden ->
             assertFalse("Forbidden entity $forbidden leaked!", allKeys.any { it.contains(forbidden) })

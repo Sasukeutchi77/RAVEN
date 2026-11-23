@@ -98,7 +98,6 @@ fun DirectMessagesView(
     storyUiState: StoryUiState = StoryUiState(),
     onCreateStoryClick: () -> Unit = {},
     onOpenStoryGroup: (StoryAuthorGroup) -> Unit = {},
-    onOpenStoryModeration: () -> Unit = {},
     friends: List<FriendRelationship> = emptyList(),
     onOpenFriendDm: (User) -> Unit = {},
     onOpenUserProfile: (User) -> Unit = {},
@@ -109,6 +108,10 @@ fun DirectMessagesView(
     onOpenFriendPrivacy: () -> Unit = {},
     useSplitPane: Boolean = LocalRavenPlatform.current.useSplitPaneDm,
     isDesktopSidebarDocked: Boolean = LocalRavenPlatform.current.useDesktopLayout,
+    bots: List<RavenBot> = emptyList(),
+    botSlashCommandsForConv: (DirectConversation) -> List<SlashCommandOption> = { emptyList() },
+    onExecuteDmCommand: (dmId: String, rawInput: String) -> Boolean = { _, _ -> false },
+    onOpenBotDm: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -192,6 +195,9 @@ fun DirectMessagesView(
     fun renderConversationPane(paneConversation: DirectConversation, paneModifier: Modifier, showBackNav: Boolean) {
         val activeConversation = paneConversation
         val conv = paneConversation
+        val isBotDm = activeConversation.isBotChat ||
+            activeConversation.id.startsWith("dm_bot_") ||
+            activeConversation.friend.role == UserRole.BOT
         Scaffold(
             modifier = paneModifier.fillMaxSize(),
             containerColor = palette.chatBg,
@@ -201,7 +207,7 @@ fun DirectMessagesView(
                     title = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable(enabled = !activeConversation.isGroup) {
+                            modifier = Modifier.clickable(enabled = !activeConversation.isGroup && !isBotDm) {
                                 onOpenUserProfile(activeConversation.friend)
                             }
                         ) {
@@ -283,14 +289,33 @@ fun DirectMessagesView(
                                 }
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = activeConversation.friend.name,
+                                            color = DiscordTextWhite,
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        if (isBotDm) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Surface(
+                                                color = DiscordGreen.copy(alpha = 0.22f),
+                                                shape = RoundedCornerShape(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "BOT",
+                                                    color = DiscordGreen,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                     Text(
-                                        text = activeConversation.friend.name,
-                                        color = DiscordTextWhite,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = activeConversation.friend.customStatus.ifBlank {
+                                        text = if (isBotDm) {
+                                            "Assistant WhatsApp Raven • /menu"
+                                        } else activeConversation.friend.customStatus.ifBlank {
                                             activeConversation.friend.lastActivityLabel.ifBlank { activeConversation.friend.status.label }
                                         },
                                         color = DiscordTextMuted,
@@ -347,33 +372,44 @@ fun DirectMessagesView(
                             )
                         }
 
-                        IconButton(
-                            onClick = {
-                                if (activeConversation.isGroup) {
-                                    onStartGroupCall(activeConversation)
-                                } else {
-                                    onStartCall(activeConversation.friend)
-                                }
-                            },
-                            modifier = Modifier.testTag("dm_call_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Call,
-                                contentDescription = "Appeler",
-                                tint = DiscordTextLight
-                            )
-                        }
-
-                        if (!activeConversation.isGroup) {
+                        if (isBotDm) {
+                            TextButton(
+                                onClick = { onExecuteDmCommand(activeConversation.id, "/menu") },
+                                modifier = Modifier.heightIn(min = 48.dp).testTag("dm_bot_menu_button")
+                            ) {
+                                Icon(Icons.Default.SmartToy, contentDescription = "Menu Bot", tint = DiscordGreen, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Menu", color = DiscordGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        } else {
                             IconButton(
-                                onClick = { onBlockUser(activeConversation.friend) },
-                                modifier = Modifier.testTag("dm_block_user_button")
+                                onClick = {
+                                    if (activeConversation.isGroup) {
+                                        onStartGroupCall(activeConversation)
+                                    } else {
+                                        onStartCall(activeConversation.friend)
+                                    }
+                                },
+                                modifier = Modifier.testTag("dm_call_button")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Block,
-                                    contentDescription = "Bloquer cet utilisateur",
-                                    tint = palette.textSecondary
+                                    imageVector = Icons.Default.Call,
+                                    contentDescription = "Appeler",
+                                    tint = DiscordTextLight
                                 )
+                            }
+
+                            if (!activeConversation.isGroup) {
+                                IconButton(
+                                    onClick = { onBlockUser(activeConversation.friend) },
+                                    modifier = Modifier.testTag("dm_block_user_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Block,
+                                        contentDescription = "Bloquer cet utilisateur",
+                                        tint = palette.textSecondary
+                                    )
+                                }
                             }
                         }
                     },
@@ -481,7 +517,35 @@ fun DirectMessagesView(
                                         modifier = Modifier.testTag("dm_sticker_button")
                                     )
                                 }
+                                item {
+                                    AssistChip(
+                                        onClick = {
+                                            isAttachmentTrayOpen = false
+                                            dmInputText = "/"
+                                        },
+                                        label = { Text("Commandes /", color = DiscordTextWhite, fontSize = 12.sp) },
+                                        leadingIcon = { Icon(Icons.Default.Terminal, contentDescription = null, tint = DiscordGreen, modifier = Modifier.size(16.dp)) },
+                                        modifier = Modifier.testTag("dm_slash_trigger_button")
+                                    )
+                                }
                             }
+                        }
+
+                        if (dmInputText.startsWith("/") || dmInputText.startsWith("!")) {
+                            SlashCommandMenu(
+                                query = dmInputText,
+                                extraBotCommands = botSlashCommandsForConv(conv),
+                                onSelectCommand = { option ->
+                                    val normalized = "/" + option.command.removePrefix("/").removePrefix("!").lowercase()
+                                    if (normalized in listOf("/menu", "/aide", "/ping", "/botinfo", "/quiz", "/pileouface", "/xp", "/clear")) {
+                                        val handled = onExecuteDmCommand(conv.id, option.command)
+                                        if (!handled) onSendMessage(conv.id, option.command, null, null, 0)
+                                        dmInputText = ""
+                                    } else {
+                                        dmInputText = "${option.command} "
+                                    }
+                                }
+                            )
                         }
 
                         Surface(
@@ -518,7 +582,13 @@ fun DirectMessagesView(
 
                                 val dispatchDmSend = {
                                     if (dmInputText.isNotBlank()) {
-                                        onSendMessage(conv.id, dmInputText, null, null, 0)
+                                        val trimmed = dmInputText.trim()
+                                        val handledCmd = if (trimmed.startsWith("/") || trimmed.startsWith("!")) {
+                                            onExecuteDmCommand(conv.id, dmInputText)
+                                        } else false
+                                        if (!handledCmd) {
+                                            onSendMessage(conv.id, dmInputText, null, null, 0)
+                                        }
                                         dmInputText = ""
                                     }
                                 }
@@ -527,13 +597,13 @@ fun DirectMessagesView(
                                     value = dmInputText,
                                     onValueChange = { dmInputText = it },
                                     placeholder = {
-                                        val destLabel = if (conv.isGroup) {
-                                            conv.groupName ?: "ce groupe"
-                                        } else {
-                                            "@${conv.friend.name}"
+                                        val placeholderMsg = when {
+                                            isBotDm -> "Écrire à ${conv.friend.name} (/menu, 1, 2...)"
+                                            conv.isGroup -> "Envoyer un message à ${conv.groupName ?: "ce groupe"} (@bot)"
+                                            else -> "Envoyer un message à @${conv.friend.name}"
                                         }
                                         Text(
-                                            text = "Envoyer un message à $destLabel",
+                                            text = placeholderMsg,
                                             color = palette.textMuted,
                                             fontSize = 14.sp,
                                             maxLines = 1,
@@ -777,7 +847,12 @@ fun DirectMessagesView(
                             onLongClick = { selectedDmMessageForActions = message },
                             onToggleReaction = { emoji -> onToggleReaction(activeConversation.id, message.id, emoji) },
                             onAddReactionClick = { dmMessageForEmojiPicker = message },
-                            onReplyClick = { selectedDmMessageForActions = message }
+                            onReplyClick = { selectedDmMessageForActions = message },
+                            onBotQuickReplyClick = { payload ->
+                                if (!onExecuteDmCommand(activeConversation.id, payload)) {
+                                    onSendMessage(activeConversation.id, payload, null, null, 0)
+                                }
+                            }
                         )
                     }
                 }
@@ -1043,7 +1118,15 @@ fun DirectMessagesView(
 
                     // Filter chips row
                     val onlineFriendsCount = friends.count { it.user.status != UserStatus.OFFLINE }
-                    val filters = listOf("En ligne", "Amis", "Tous", "En attente", "Bloqués", "+ Ajouter")
+                    val dmReadyBots = remember(bots, searchQuery) {
+                        bots.filter {
+                            it.isActive && it.allowDirectMessages &&
+                                (searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true) ||
+                                    it.handle.contains(searchQuery, ignoreCase = true) ||
+                                    it.description.contains(searchQuery, ignoreCase = true))
+                        }
+                    }
+                    val filters = listOf("En ligne", "Amis", "Bots", "Tous", "En attente", "Bloqués", "+ Ajouter")
                     LazyRow(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1056,6 +1139,7 @@ fun DirectMessagesView(
                             val displayLabel = when (filter) {
                                 "En ligne" -> if (onlineFriendsCount > 0) "En ligne ($onlineFriendsCount)" else "En ligne"
                                 "Amis" -> if (friends.isNotEmpty()) "Amis (${friends.size})" else "Amis"
+                                "Bots" -> if (dmReadyBots.isNotEmpty()) "Bots (${dmReadyBots.size})" else "Bots"
                                 "En attente" -> if (friendRequests.isNotEmpty()) "En attente (${friendRequests.size})" else "En attente"
                                 "Bloqués" -> if (blockedUsers.isNotEmpty()) "Bloqués (${blockedUsers.size})" else "Bloqués"
                                 else -> filter
@@ -1098,7 +1182,7 @@ fun DirectMessagesView(
                     val nameTarget = if (conv.isGroup) conv.groupName ?: "" else conv.friend.name
                     val matchesSearch = searchQuery.isBlank() || nameTarget.contains(searchQuery, ignoreCase = true)
                     val matchesFilter = when (selectedFilter) {
-                        "En ligne" -> conv.isGroup || conv.friend.status != UserStatus.OFFLINE
+                        "En ligne" -> conv.isGroup || conv.isBotChat || conv.friend.status != UserStatus.OFFLINE
                         "Tous" -> true
                         else -> false
                     }
@@ -1194,6 +1278,41 @@ fun DirectMessagesView(
                                         onBlockUser = onBlockUser
                                     )
                                 }
+                            }
+                        }
+                    }
+
+                    "Bots" -> {
+                        val availableBots = bots.filter {
+                            it.isActive && it.allowDirectMessages &&
+                                (searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true) ||
+                                    it.handle.contains(searchQuery, ignoreCase = true) ||
+                                    it.description.contains(searchQuery, ignoreCase = true))
+                        }
+                        item {
+                            Text(
+                                text = "BOTS WHATSAPP EN DM (${availableBots.size})",
+                                color = DiscordGreen,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                            )
+                        }
+                        if (availableBots.isEmpty()) {
+                            item {
+                                Text(
+                                    text = "Aucun bot disponible en message privé pour le moment. Créez-en un depuis le Dashboard Bots !",
+                                    color = palette.textMuted,
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+                                )
+                            }
+                        } else {
+                            items(availableBots, key = { "dm_bot_dir_${it.id}" }) { bot ->
+                                BotDmDirectoryCard(
+                                    bot = bot,
+                                    onOpenChat = { onOpenBotDm(bot.id) }
+                                )
                             }
                         }
                     }
@@ -1444,8 +1563,7 @@ fun DirectMessagesView(
                                 currentUser = currentUser,
                                 uiState = storyUiState,
                                 onCreateStoryClick = onCreateStoryClick,
-                                onOpenAuthorGroup = onOpenStoryGroup,
-                                onOpenModerationSheet = onOpenStoryModeration
+                                onOpenAuthorGroup = onOpenStoryGroup
                             )
                         }
 
@@ -1556,10 +1674,12 @@ fun DirectMessagesView(
                         }
                     }
 
-                    val desktopTabs = listOf("En ligne", "Tous", "En attente", "Bloqués")
+                    val desktopTabs = listOf("En ligne", "Tous", "Bots", "En attente", "Bloqués")
+                    val dmReadyBotsCount = bots.count { it.isActive && it.allowDirectMessages }
                     items(desktopTabs) { tab ->
                         val isSelected = selectedFilter == tab || (tab == "Tous" && selectedFilter == "Amis")
                         val countBadge = when (tab) {
+                            "Bots" -> dmReadyBotsCount
                             "En attente" -> friendRequests.size
                             "Bloqués" -> blockedUsers.size
                             else -> 0
@@ -1704,6 +1824,52 @@ fun DirectMessagesView(
                     ) {
                         val effectiveFilter = if (selectedFilter == "Amis") "Tous" else selectedFilter
                         when (effectiveFilter) {
+                            "Bots" -> {
+                                val availableBots = bots.filter {
+                                    it.isActive && it.allowDirectMessages &&
+                                        (searchQuery.isBlank() || it.name.contains(searchQuery, ignoreCase = true) ||
+                                            it.handle.contains(searchQuery, ignoreCase = true) ||
+                                            it.description.contains(searchQuery, ignoreCase = true))
+                                }
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    item {
+                                        Text(
+                                            text = "BOTS WHATSAPP DISPONIBLES EN DM (${availableBots.size})",
+                                            color = DiscordGreen,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(bottom = 6.dp)
+                                        )
+                                    }
+                                    if (availableBots.isEmpty()) {
+                                        item {
+                                            Box(
+                                                modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "Aucun bot actif compatible DM pour le moment.",
+                                                    color = palette.textMuted,
+                                                    fontSize = 14.sp,
+                                                    textAlign = TextAlign.Center
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        items(availableBots, key = { "desk_bot_${it.id}" }) { bot ->
+                                            BotDmDirectoryCard(
+                                                bot = bot,
+                                                onOpenChat = { onOpenBotDm(bot.id) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             "En ligne" -> {
                                 if (onlineFilteredFriends.isEmpty()) {
                                     Box(
@@ -2070,8 +2236,7 @@ fun DirectMessagesView(
                                     currentUser = currentUser,
                                     uiState = storyUiState,
                                     onCreateStoryClick = onCreateStoryClick,
-                                    onOpenAuthorGroup = onOpenStoryGroup,
-                                    onOpenModerationSheet = onOpenStoryModeration
+                                    onOpenAuthorGroup = onOpenStoryGroup
                                 )
                             }
 
@@ -2344,17 +2509,37 @@ fun DirectConversationRow(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = if (conversation.isGroup) {
-                        "${conversation.groupName ?: "Groupe"} (${conversation.groupMembers.size + 1})"
-                    } else conversation.friend.name,
-                    color = DiscordTextWhite,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
-                )
+                ) {
+                    Text(
+                        text = if (conversation.isGroup) {
+                            "${conversation.groupName ?: "Groupe"} (${conversation.groupMembers.size + 1})"
+                        } else conversation.friend.name,
+                        color = DiscordTextWhite,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (conversation.isBotChat || conversation.friend.role == UserRole.BOT) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            color = DiscordGreen.copy(alpha = 0.22f),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "BOT",
+                                color = DiscordGreen,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
                 Text(
                     text = conversation.lastMessageTime,
                     color = DiscordTextMuted,
@@ -2396,6 +2581,102 @@ fun DirectConversationRow(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BotDmDirectoryCard(
+    bot: RavenBot,
+    onOpenChat: () -> Unit
+) {
+    val palette = ravenPalette()
+    Surface(
+        color = palette.cardBg,
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, palette.border),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 4.dp)
+            .clickable(onClick = onOpenChat)
+            .testTag("dm_bot_card_${bot.id}")
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color(bot.avatarColor)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (!bot.avatarUrl.isNullOrBlank()) {
+                        AsyncImage(
+                            model = bot.avatarUrl,
+                            contentDescription = "Avatar ${bot.name}",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(Icons.Default.SmartToy, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                    }
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = bot.name,
+                            color = palette.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            color = DiscordGreen.copy(alpha = 0.22f),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "BOT",
+                                color = DiscordGreen,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "@${bot.handle} • ${bot.commands.size} commandes (/menu, /calc...)",
+                        color = palette.textMuted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = bot.description,
+                        color = palette.textSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = onOpenChat,
+                colors = ButtonDefaults.buttonColors(containerColor = DiscordGreen),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.heightIn(min = 48.dp).testTag("dm_open_bot_chat_${bot.id}")
+            ) {
+                Icon(Icons.Default.Chat, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Discuter", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

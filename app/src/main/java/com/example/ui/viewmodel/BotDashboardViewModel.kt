@@ -75,6 +75,10 @@ class BotDashboardViewModel(
         isPublicCatalog: Boolean,
         defaultPermissions: Set<BotPermission>,
         subscribedEvents: Set<BotEventTrigger>,
+        allowDirectMessages: Boolean = true,
+        allowGroupMentions: Boolean = true,
+        welcomeDmMessage: String? = null,
+        starterPresetId: String? = "assistant_wa",
         onCreated: () -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -87,7 +91,11 @@ class BotDashboardViewModel(
                 avatarColor = avatarColor,
                 isPublicCatalog = isPublicCatalog,
                 defaultPermissions = defaultPermissions,
-                subscribedEvents = subscribedEvents
+                subscribedEvents = subscribedEvents,
+                allowDirectMessages = allowDirectMessages,
+                allowGroupMentions = allowGroupMentions,
+                welcomeDmMessage = welcomeDmMessage,
+                starterPresetId = starterPresetId
             )
             res.onSuccess { created ->
                 _uiState.value = _uiState.value.copy(
@@ -114,7 +122,10 @@ class BotDashboardViewModel(
         avatarColor: Long,
         isPublicCatalog: Boolean,
         defaultPermissions: Set<BotPermission>,
-        subscribedEvents: Set<BotEventTrigger>
+        subscribedEvents: Set<BotEventTrigger>,
+        allowDirectMessages: Boolean = true,
+        allowGroupMentions: Boolean = true,
+        welcomeDmMessage: String? = null
     ) = runBotAction("Bot mis à jour.") {
         botRepo.updateBot(
             botId = botId,
@@ -125,8 +136,21 @@ class BotDashboardViewModel(
             avatarColor = avatarColor,
             isPublicCatalog = isPublicCatalog,
             defaultPermissions = defaultPermissions,
-            subscribedEvents = subscribedEvents
+            subscribedEvents = subscribedEvents,
+            allowDirectMessages = allowDirectMessages,
+            allowGroupMentions = allowGroupMentions,
+            welcomeDmMessage = welcomeDmMessage
         )
+    }
+
+    fun openBotDirectChat(botId: String, onOpened: (DirectConversation) -> Unit = {}) {
+        val res = botRepo.openBotDirectChat(botId, selectAfterOpen = true)
+        res.onSuccess { conv ->
+            _uiState.value = _uiState.value.copy(errorMessage = null)
+            onOpened(conv)
+        }.onFailure { err ->
+            _uiState.value = _uiState.value.copy(errorMessage = err.message)
+        }
     }
 
     fun toggleBotActive(botId: String, active: Boolean) = runBotAction(

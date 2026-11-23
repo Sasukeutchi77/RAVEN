@@ -10,6 +10,7 @@ import com.example.model.FriendRequestDirection
 import com.example.model.FriendRequestPolicy
 import com.example.model.User
 import com.example.model.UserDirectoryEntry
+import com.example.model.UserRole
 import com.example.model.UserStatus
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -322,6 +323,8 @@ object FriendFirestoreSync {
         val lastMessage = doc.getString("lastMessage") ?: ""
         val lastMessageTime = doc.getString("lastMessageTime") ?: ""
         val dmPairKey = doc.getString("dmPairKey")
+        val isBotChat = doc.getBoolean("isBotChat") ?: convId.startsWith("dm_bot_")
+        val botId = doc.getString("botId") ?: if (isBotChat) convId.removePrefix("dm_bot_") else null
         val participantNames = (doc.get("participantNames") as? Map<String, Any?>)
             ?.mapNotNull { (k, v) -> (v as? String)?.let { k to it } }
             ?.toMap()
@@ -329,12 +332,14 @@ object FriendFirestoreSync {
 
         val otherUids = participants.filter { it != viewerUid }
         val otherUsers = otherUids.map { uid ->
+            val isBotUser = uid.startsWith("bot_") || (isBotChat && !isGroup)
             knownUsers[uid] ?: User(
                 id = uid,
-                name = participantNames[uid] ?: "Membre Raven",
-                tag = "#0001",
+                name = participantNames[uid] ?: if (isBotUser) "Bot Raven" else "Membre Raven",
+                tag = if (isBotUser) "#BOT" else "#0001",
                 avatarColor = 0xFF5865F2L,
-                status = UserStatus.OFFLINE
+                role = if (isBotUser) UserRole.BOT else UserRole.MEMBER,
+                status = if (isBotUser) UserStatus.ONLINE else UserStatus.OFFLINE
             )
         }
         val primaryFriend = otherUsers.firstOrNull() ?: User(
@@ -352,7 +357,9 @@ object FriendFirestoreSync {
             groupName = groupName,
             groupMembers = if (isGroup) otherUsers else emptyList(),
             participantIds = participants.sorted(),
-            dmPairKey = dmPairKey
+            dmPairKey = dmPairKey,
+            isBotChat = isBotChat,
+            botId = botId
         )
     }
 }

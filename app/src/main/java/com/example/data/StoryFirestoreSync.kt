@@ -10,7 +10,6 @@ import com.google.firebase.firestore.SetOptions
 object StoryFirestoreSync {
     const val COLLECTION_STORIES = "stories"
     const val SUBCOLLECTION_VIEWS = "views"
-    const val COLLECTION_STORY_REPORTS = "story_reports"
 
     fun storyToCreateMap(story: StoryItem): Map<String, Any> = buildMap {
         put("authorId", story.authorId)
@@ -29,8 +28,6 @@ object StoryFirestoreSync {
         put("textColorHex", story.textColorHex)
         put("visibility", story.visibility.name)
         put("allowedViewerIds", story.allowedViewerIds.distinct().take(200))
-        put("moderatorIds", story.moderatorIds.distinct().take(100))
-        story.moderationServerId?.takeIf { it.isNotBlank() }?.let { put("moderationServerId", it.take(128)) }
         put("durationHours", story.durationHours.coerceIn(1, 168))
         put("createdAtMs", story.createdAtMs)
         put("expiresAtMs", story.expiresAtMs)
@@ -38,8 +35,6 @@ object StoryFirestoreSync {
         put("viewerIds", emptyList<String>())
         put("likesCount", 0)
         put("likedByIds", emptyList<String>())
-        put("reportCount", 0)
-        put("moderatedHidden", false)
         put("createdAt", FieldValue.serverTimestamp())
         put("updatedAt", FieldValue.serverTimestamp())
     }
@@ -50,7 +45,6 @@ object StoryFirestoreSync {
         val mediaType = StoryMediaType.fromRaw(data["mediaType"] as? String)
         val visibility = StoryVisibility.fromRaw(data["visibility"] as? String)
         val allowed = (data["allowedViewerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
-        val moderators = (data["moderatorIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
         val viewerIds = (data["viewerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
         val likedByIds = (data["likedByIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
         return StoryItem(
@@ -71,19 +65,13 @@ object StoryFirestoreSync {
             textColorHex = (data["textColorHex"] as? Number)?.toLong() ?: 0xFFFFFFFFL,
             visibility = visibility,
             allowedViewerIds = allowed,
-            moderatorIds = moderators,
-            moderationServerId = data["moderationServerId"] as? String,
             durationHours = (data["durationHours"] as? Number)?.toInt() ?: 24,
             createdAtMs = (data["createdAtMs"] as? Number)?.toLong() ?: 0L,
             expiresAtMs = (data["expiresAtMs"] as? Number)?.toLong() ?: 0L,
             viewCount = (data["viewCount"] as? Number)?.toInt() ?: viewerIds.size,
             viewerIds = viewerIds,
             likesCount = (data["likesCount"] as? Number)?.toInt() ?: likedByIds.size,
-            likedByIds = likedByIds,
-            reportCount = (data["reportCount"] as? Number)?.toInt() ?: 0,
-            moderatedHidden = (data["moderatedHidden"] as? Boolean) ?: false,
-            moderationReason = data["moderationReason"] as? String,
-            moderatedByUid = data["moderatedByUid"] as? String
+            likedByIds = likedByIds
         )
     }
 
@@ -110,48 +98,6 @@ object StoryFirestoreSync {
         )
     }
 
-    fun reportToCreateMap(report: StoryReport): Map<String, Any> = buildMap {
-        put("storyId", report.storyId)
-        put("storyAuthorId", report.storyAuthorId)
-        put("storyAuthorName", report.storyAuthorName.take(64))
-        put("storyPreview", report.storyPreview.take(300))
-        put("storyMediaType", report.storyMediaType.name)
-        report.storyMediaUrl?.takeIf { it.isNotBlank() }?.let { put("storyMediaUrl", it.take(900)) }
-        put("reporterUid", report.reporterUid)
-        put("reporterName", report.reporterName.take(64))
-        put("reason", report.reason.name)
-        put("details", report.details.take(500))
-        put("status", StoryReportStatus.PENDING.name)
-        put("moderatorIds", report.moderatorIds.distinct().take(100))
-        report.moderationServerId?.takeIf { it.isNotBlank() }?.let { put("moderationServerId", it.take(128)) }
-        put("createdAtMs", report.createdAtMs)
-        put("createdAt", FieldValue.serverTimestamp())
-        put("updatedAt", FieldValue.serverTimestamp())
-    }
-
-    fun reportFromDoc(doc: DocumentSnapshot): StoryReport? {
-        val data = doc.data ?: return null
-        val storyId = (data["storyId"] as? String) ?: return null
-        val reporterUid = (data["reporterUid"] as? String) ?: return null
-        return StoryReport(
-            id = doc.id,
-            storyId = storyId,
-            storyAuthorId = (data["storyAuthorId"] as? String).orEmpty(),
-            storyAuthorName = (data["storyAuthorName"] as? String).orEmpty(),
-            storyPreview = (data["storyPreview"] as? String).orEmpty(),
-            storyMediaType = StoryMediaType.fromRaw(data["storyMediaType"] as? String),
-            storyMediaUrl = data["storyMediaUrl"] as? String,
-            reporterUid = reporterUid,
-            reporterName = (data["reporterName"] as? String).orEmpty(),
-            reason = StoryReportReason.fromRaw(data["reason"] as? String),
-            details = (data["details"] as? String).orEmpty(),
-            status = StoryReportStatus.fromRaw(data["status"] as? String),
-            moderatorIds = (data["moderatorIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList(),
-            moderationServerId = data["moderationServerId"] as? String,
-            reviewedByUid = data["reviewedByUid"] as? String,
-            createdAtMs = (data["createdAtMs"] as? Number)?.toLong() ?: 0L
-        )
-    }
 
     fun deleteStoryCascadeBlocking(db: FirebaseFirestore, storyId: String) {
         val storyRef = db.collection(COLLECTION_STORIES).document(storyId)

@@ -33,30 +33,6 @@ enum class StoryDurationOption(val hours: Int, val label: String) {
     SEVENTY_TWO_HOURS(72, "72 heures")
 }
 
-enum class StoryReportReason(val label: String) {
-    SPAM("Spam ou publicité"),
-    HARASSMENT("Harcèlement ou intimidation"),
-    NSFW("Contenu inapproprié"),
-    MISINFORMATION("Désinformation"),
-    OTHER("Autre motif");
-
-    companion object {
-        fun fromRaw(raw: String?): StoryReportReason =
-            entries.firstOrNull { it.name == raw } ?: OTHER
-    }
-}
-
-enum class StoryReportStatus(val label: String) {
-    PENDING("En attente"),
-    REMOVED("Supprimée / Masquée"),
-    DISMISSED("Ignoré");
-
-    companion object {
-        fun fromRaw(raw: String?): StoryReportStatus =
-            entries.firstOrNull { it.name == raw } ?: PENDING
-    }
-}
-
 @Keep
 @IgnoreExtraProperties
 data class StoryViewerEntry(
@@ -87,8 +63,6 @@ data class StoryItem(
     val textColorHex: Long = 0xFFFFFFFFL,
     val visibility: StoryVisibility = StoryVisibility.PUBLIC,
     val allowedViewerIds: List<String> = emptyList(),
-    val moderatorIds: List<String> = emptyList(),
-    val moderationServerId: String? = null,
     val durationHours: Int = 24,
     val createdAtMs: Long = 0L,
     val expiresAtMs: Long = 0L,
@@ -96,11 +70,7 @@ data class StoryItem(
     val viewerIds: List<String> = emptyList(),
     val viewers: List<StoryViewerEntry> = emptyList(),
     val likesCount: Int = 0,
-    val likedByIds: List<String> = emptyList(),
-    val reportCount: Int = 0,
-    val moderatedHidden: Boolean = false,
-    val moderationReason: String? = null,
-    val moderatedByUid: String? = null
+    val likedByIds: List<String> = emptyList()
 ) {
     fun isExpired(nowMs: Long): Boolean = expiresAtMs <= nowMs
 
@@ -111,13 +81,10 @@ data class StoryItem(
 
     fun canBeViewedBy(
         uid: String,
-        blockedAuthorIds: Set<String> = emptySet(),
-        isModerator: Boolean = false
+        blockedAuthorIds: Set<String> = emptySet()
     ): Boolean {
-        if (moderatedHidden && authorId != uid && !isModerator) return false
         if (authorId == uid) return true
-        if (authorId in blockedAuthorIds && !isModerator) return false
-        if (isModerator) return true
+        if (authorId in blockedAuthorIds) return false
         return when (visibility) {
             StoryVisibility.PUBLIC -> true
             StoryVisibility.FRIENDS -> uid in allowedViewerIds
@@ -151,31 +118,9 @@ data class StoryAuthorGroup(
     val isCurrentUser: Boolean
 )
 
-@Keep
-@IgnoreExtraProperties
-data class StoryReport(
-    val id: String = "",
-    val storyId: String = "",
-    val storyAuthorId: String = "",
-    val storyAuthorName: String = "",
-    val storyPreview: String = "",
-    val storyMediaType: StoryMediaType = StoryMediaType.TEXT,
-    val storyMediaUrl: String? = null,
-    val reporterUid: String = "",
-    val reporterName: String = "",
-    val reason: StoryReportReason = StoryReportReason.SPAM,
-    val details: String = "",
-    val status: StoryReportStatus = StoryReportStatus.PENDING,
-    val moderatorIds: List<String> = emptyList(),
-    val moderationServerId: String? = null,
-    val reviewedByUid: String? = null,
-    val createdAtMs: Long = 0L
-)
-
 data class StoryCleanupStats(
     val removedExpiredStories: Int = 0,
-    val removedMediaFiles: Int = 0,
-    val removedExpiredReports: Int = 0
+    val removedMediaFiles: Int = 0
 )
 
 data class StoryPalettePreset(

@@ -42,6 +42,9 @@ internal object BotFirestoreSync {
         "description" to bot.description,
         "isActive" to bot.isActive,
         "isPublicCatalog" to bot.isPublicCatalog,
+        "allowDirectMessages" to bot.allowDirectMessages,
+        "allowGroupMentions" to bot.allowGroupMentions,
+        "welcomeDmMessage" to bot.welcomeDmMessage,
         "tokenPrefix" to bot.tokenPrefix,
         "tokenVersion" to bot.tokenVersion,
         "defaultPermissions" to bot.defaultPermissions.map { it.name },
@@ -54,7 +57,11 @@ internal object BotFirestoreSync {
                 "responseTemplate" to c.responseTemplate,
                 "cooldownSeconds" to c.cooldownSeconds,
                 "isEnabled" to c.isEnabled,
-                "webhookForward" to c.webhookForward
+                "webhookForward" to c.webhookForward,
+                "actionType" to c.actionType.name,
+                "quickReplies" to c.quickReplies.map { qr ->
+                    mapOf("label" to qr.label, "payload" to qr.payload)
+                }
             )
         },
         "subscribedEvents" to bot.subscribedEvents.map { it.name },
@@ -92,6 +99,7 @@ internal object BotFirestoreSync {
         "updatedAt" to FieldValue.serverTimestamp()
     ).apply {
         bot.avatarUrl?.takeIf { it.isNotBlank() }?.let { put("avatarUrl", it) }
+        bot.starterPresetId?.takeIf { it.isNotBlank() }?.let { put("starterPresetId", it) }
     }
 
     fun botSecretToMap(
@@ -158,6 +166,14 @@ internal object BotFirestoreSync {
         val commands = (doc.get("commands") as? List<Map<String, Any?>>).orEmpty().mapNotNull { m ->
             val cid = m["id"] as? String ?: return@mapNotNull null
             val trigger = m["trigger"] as? String ?: return@mapNotNull null
+            val actionName = m["actionType"] as? String
+            val actionType = BotCommandActionType.entries.find { it.name == actionName }
+                ?: BotCommandActionType.STATIC_TEMPLATE
+            val quickReplies = (m["quickReplies"] as? List<Map<String, Any?>>).orEmpty().mapNotNull { qr ->
+                val label = (qr["label"] as? String)?.trim().orEmpty()
+                val payload = (qr["payload"] as? String)?.trim().orEmpty()
+                if (label.isNotEmpty() && payload.isNotEmpty()) BotQuickReply(label, payload) else null
+            }
             BotCommandSpec(
                 id = cid,
                 trigger = trigger,
@@ -166,7 +182,9 @@ internal object BotFirestoreSync {
                 responseTemplate = m["responseTemplate"] as? String ?: "",
                 cooldownSeconds = (m["cooldownSeconds"] as? Number)?.toInt() ?: 3,
                 isEnabled = m["isEnabled"] as? Boolean ?: true,
-                webhookForward = m["webhookForward"] as? Boolean ?: false
+                webhookForward = m["webhookForward"] as? Boolean ?: false,
+                actionType = actionType,
+                quickReplies = quickReplies
             )
         }
 
@@ -226,6 +244,11 @@ internal object BotFirestoreSync {
             description = doc.getString("description") ?: "",
             isActive = doc.getBoolean("isActive") ?: true,
             isPublicCatalog = doc.getBoolean("isPublicCatalog") ?: false,
+            allowDirectMessages = doc.getBoolean("allowDirectMessages") ?: true,
+            allowGroupMentions = doc.getBoolean("allowGroupMentions") ?: true,
+            welcomeDmMessage = doc.getString("welcomeDmMessage")
+                ?: "Salut {user} ! Je suis {bot} ({handle}). Écris /menu, un chiffre (1, 2, 3...) ou choisis une action rapide ci-dessous.",
+            starterPresetId = doc.getString("starterPresetId"),
             tokenPrefix = doc.getString("tokenPrefix") ?: "rvnbot_live_••••••••",
             tokenVersion = doc.getLong("tokenVersion")?.toInt() ?: 1,
             defaultPermissions = defaultPerms,

@@ -346,12 +346,15 @@ fun SlashCommandMenu(
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
+    val usesBangPrefix = query.trimStart().startsWith("!")
     val matching = remember(query, extraBotCommands) {
-        val cmdPrefix = query.substringBefore(" ").lowercase()
+        val rawFirstToken = query.trimStart().substringBefore(" ").lowercase()
+        val bareQuery = rawFirstToken.removePrefix("/").removePrefix("!")
         (SlashCommandCatalog.commands + extraBotCommands)
             .distinctBy { it.command.lowercase() }
             .filter {
-                it.command.lowercase().startsWith(cmdPrefix) || cmdPrefix == "/"
+                bareQuery.isEmpty() ||
+                    it.command.removePrefix("/").removePrefix("!").lowercase().startsWith(bareQuery)
             }
     }
     if (matching.isEmpty()) return
@@ -365,19 +368,23 @@ fun SlashCommandMenu(
     ) {
         Column(modifier = Modifier.padding(vertical = 4.dp)) {
             Text(
-                text = "COMMANDES SLASH",
+                text = if (usesBangPrefix) "COMMANDES BOT (! OU /)" else "COMMANDES SLASH & BOT (/ OU !)",
                 color = palette.textMuted,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
             )
             matching.forEach { option ->
+                val displayCmd = if (usesBangPrefix) "!" + option.command.removePrefix("/").removePrefix("!") else option.command
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onSelectCommand(option) }
+                        .heightIn(min = 48.dp)
+                        .clickable {
+                            onSelectCommand(option.copy(command = displayCmd))
+                        }
                         .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .testTag("slash_option_${option.command.removePrefix("/")}"),
+                        .testTag("slash_option_${option.command.removePrefix("/").removePrefix("!")}"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -393,7 +400,7 @@ fun SlashCommandMenu(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "/",
+                                text = if (usesBangPrefix) "!" else "/",
                                 color = DiscordBlurple,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
@@ -402,7 +409,7 @@ fun SlashCommandMenu(
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Text(
-                                text = option.command,
+                                text = displayCmd,
                                 color = palette.textPrimary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold

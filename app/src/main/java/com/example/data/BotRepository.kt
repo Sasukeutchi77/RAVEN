@@ -37,6 +37,7 @@ class BotRepository(
     val logsByBot: StateFlow<Map<String, List<BotActivityLog>>> = _logsByBot.asStateFlow()
 
     internal val spamLimiter = BotSpamAndRateLimiter()
+    internal val notesVaultByScope = mutableMapOf<String, MutableList<String>>()
 
     // Ephemeral owner-scoped hashes and webhook secrets (never written to /bots/{botId} public docs)
     private val inMemoryTokenHashesByBot = mutableMapOf<String, String>()
@@ -66,6 +67,9 @@ class BotRepository(
         }
         chatRepo.botMessageHandler = { serverId, channelId, message ->
             handleChannelMessage(serverId, channelId, message)
+        }
+        chatRepo.botDmMessageHandler = { dmId, message ->
+            handleDirectMessage(dmId, message)
         }
         chatRepo.botCommunityEventHandler = { serverId, eventType, actorUid, actorName, detail ->
             val trigger = BotEventTrigger.entries.find { it.name == eventType }
@@ -111,7 +115,11 @@ class BotRepository(
         subscribedEvents: Set<BotEventTrigger> = setOf(
             BotEventTrigger.ON_COMMAND_EXECUTED,
             BotEventTrigger.ON_MESSAGE_CREATE
-        )
+        ),
+        allowDirectMessages: Boolean = true,
+        allowGroupMentions: Boolean = true,
+        welcomeDmMessage: String? = null,
+        starterPresetId: String? = "assistant_wa"
     ): Result<BotCreationResult> {
         val cleanName = name.trim()
         if (cleanName.length < 2) {
@@ -128,26 +136,11 @@ class BotRepository(
         val tokenHash = BotTokenManager.sha256Hex(rawToken)
         val tokenPrefix = BotTokenManager.maskTokenPrefix(rawToken)
 
-        val starterCommands = listOf(
-            BotCommandSpec(
-                id = "cmd_ping_$botId",
-                trigger = "/ping",
-                description = "Vérifie que $cleanName répond en direct",
-                usageHint = "/ping",
-                responseTemplate = "$cleanName est en ligne ! Latence OK pour {user} dans #{channel}.",
-                cooldownSeconds = 2,
-                isEnabled = true
-            ),
-            BotCommandSpec(
-                id = "cmd_info_$botId",
-                trigger = "/botinfo",
-                description = "Affiche le profil et le statut de $cleanName",
-                usageHint = "/botinfo",
-                responseTemplate = "Bot {bot} (@$normalizedHandle) actif sur {server}. Demandé par {user}.",
-                cooldownSeconds = 5,
-                isEnabled = true
-            )
-        )
+        val preset = BotStarterCatalog.presets.find { it.id == starterPresetId }
+            ?: BotStarterCatalog.presets.first()
+        val effectiveWelcome = welcomeDmMessage?.trim()?.takeIf { it.isNotBlank() } ?: preset.welcomeDmMessage
+        val starterCommands = BotStarterCatalog.starterCommandsFor(botId, cleanName, normalizedHandle, preset.id)
+        val starterAutoResponses = BotStarterCatalog.starterAutoResponsesFor(botId, cleanName, preset.id)
 
         val newBot = RavenBot(
             id = botId,
@@ -156,9 +149,13 @@ class BotRepository(
             handle = normalizedHandle,
             avatarUrl = avatarUrl?.trim()?.ifBlank { null },
             avatarColor = avatarColor,
-            description = description.trim().ifBlank { "Bot Raven automatisé @$normalizedHandle" },
+            description = description.trim().ifBlank { "Bot WhatsApp & Serveur Raven @$normalizedHandle" },
             isActive = true,
             isPublicCatalog = isPublicCatalog,
+            allowDirectMessages = allowDirectMessages,
+            allowGroupMentions = allowGroupMentions,
+            welcomeDmMessage = effectiveWelcome,
+            starterPresetId = preset.id,
             tokenPrefix = tokenPrefix,
             tokenVersion = 1,
             defaultPermissions = defaultPermissions.ifEmpty {
@@ -166,7 +163,8 @@ class BotRepository(
             },
             commands = starterCommands,
             subscribedEvents = subscribedEvents,
-            enabledPluginIds = setOf("plugin_welcome"),
+            autoResponses = starterAutoResponses,
+            enabledPluginIds = preset.defaultPlugins,
             createdAtMs = System.currentTimeMillis()
         )
 
@@ -242,7 +240,10 @@ class BotRepository(
         avatarColor: Long? = null,
         isPublicCatalog: Boolean? = null,
         defaultPermissions: Set<BotPermission>? = null,
-        subscribedEvents: Set<BotEventTrigger>? = null
+        subscribedEvents: Set<BotEventTrigger>? = null,
+        allowDirectMessages: Boolean? = null,
+        allowGroupMentions: Boolean? = null,
+        welcomeDmMessage: String? = null
     ): Result<RavenBot> {
         val bot = requireOwnedBot(botId).getOrElse { return Result.failure(it) }
         val cleanName = name.trim().ifBlank { bot.name }
@@ -258,6 +259,9 @@ class BotRepository(
             avatarUrl = avatarUrl?.trim()?.ifBlank { null },
             avatarColor = avatarColor ?: bot.avatarColor,
             isPublicCatalog = isPublicCatalog ?: bot.isPublicCatalog,
+            allowDirectMessages = allowDirectMessages ?: bot.allowDirectMessages,
+            allowGroupMentions = allowGroupMentions ?: bot.allowGroupMentions,
+            welcomeDmMessage = welcomeDmMessage?.trim()?.takeIf { it.isNotBlank() } ?: bot.welcomeDmMessage,
             defaultPermissions = defaultPermissions ?: bot.defaultPermissions,
             subscribedEvents = subscribedEvents ?: bot.subscribedEvents
         )
@@ -280,6 +284,56 @@ class BotRepository(
         syncBotIdentityInLocalServers(updated)
         recordLog(updated, null, currentUid(), currentUserName(), "BOT_UPDATED", "Métadonnées du bot mises à jour.", BotLogStatus.SUCCESS)
         return Result.success(updated)
+    }
+
+    fun openBotDirectChat(botId: String, selectAfterOpen: Boolean = true): Result<DirectConversation> {
+        val bot = _bots.value.find { it.id == botId }
+            ?: return Result.failure(IllegalArgumentException("Bot introuvable."))
+        val uid = currentUid()
+        if (bot.ownerUid != uid && !bot.isPublicCatalog) {
+            return Result.failure(SecurityException("Ce bot est privé et appartient à un autre créateur."))
+        }
+        if (!bot.isActive) {
+            return Result.failure(IllegalStateException("${bot.name} est actuellement désactivé."))
+        }
+        if (!bot.allowDirectMessages) {
+            return Result.failure(IllegalStateException("${bot.name} n'accepte pas les messages directs (DM)."))
+        }
+        val conv = chatRepo.openOrCreateBotDmConversation(bot)
+        if (chatRepo.messages.value[conv.id].isNullOrEmpty()) {
+            val welcome = renderBotTemplate(
+                template = bot.welcomeDmMessage,
+                bot = bot,
+                server = null,
+                channelName = "Message Privé",
+                actorName = currentUserName(),
+                args = ""
+            )
+            val menuReplies = bot.commands
+                .filter { it.isEnabled }
+                .take(5)
+                .mapIndexed { idx, cmd ->
+                    BotQuickReply(
+                        label = "${idx + 1}. ${cmd.trigger}",
+                        payload = cmd.trigger
+                    )
+                }
+                .ifEmpty { listOf(BotQuickReply("Menu", "/menu"), BotQuickReply("Aide", "/aide")) }
+            chatRepo.postBotChannelMessage(
+                targetId = conv.id,
+                botId = bot.id,
+                botName = bot.name,
+                botAvatarUrl = bot.avatarUrl,
+                botAvatarColor = bot.avatarColor,
+                text = welcome,
+                quickReplies = menuReplies
+            )
+        }
+        if (selectAfterOpen) {
+            chatRepo.selectDm(conv.id)
+        }
+        recordLog(bot, null, uid, currentUserName(), "BOT_DM_OPENED", "Discussion DM WhatsApp ouverte avec ${bot.name}.", BotLogStatus.SUCCESS)
+        return Result.success(conv)
     }
 
     suspend fun toggleBotActive(botId: String, active: Boolean): Result<RavenBot> {
@@ -650,17 +704,23 @@ class BotRepository(
 
     suspend fun saveBotCommand(botId: String, spec: BotCommandSpec): Result<RavenBot> {
         val bot = requireOwnedBot(botId).getOrElse { return Result.failure(it) }
-        val normalizedCmd = "/" + spec.trigger.trim().removePrefix("/").lowercase().replace(" ", "")
+        val normalizedCmd = "/" + spec.trigger.trim().removePrefix("/").removePrefix("!").lowercase().replace(" ", "")
         if (normalizedCmd.length < 2) {
-            return Result.failure(IllegalArgumentException("La commande doit commencer par / suivi d'au moins 1 caractère."))
+            return Result.failure(IllegalArgumentException("La commande doit commencer par / ou ! suivi d'au moins 1 caractère."))
         }
-        if (spec.responseTemplate.isBlank()) {
-            return Result.failure(IllegalArgumentException("Le message de réponse est requis."))
-        }
+        val effectiveTemplate = if (spec.responseTemplate.isBlank()) {
+            if (spec.actionType == BotCommandActionType.STATIC_TEMPLATE) {
+                return Result.failure(IllegalArgumentException("Le message de réponse est requis."))
+            } else {
+                "Action ${spec.actionType.label} exécutée par {bot}"
+            }
+        } else spec.responseTemplate
+
         val cleanSpec = spec.copy(
             id = spec.id.ifBlank { "cmd_${UUID.randomUUID().toString().take(8)}" },
             trigger = normalizedCmd,
             usageHint = spec.usageHint.ifBlank { normalizedCmd },
+            responseTemplate = effectiveTemplate,
             cooldownSeconds = spec.cooldownSeconds.coerceIn(0, 120)
         )
         val nextCommands = if (bot.commands.any { it.id == cleanSpec.id }) {
@@ -671,7 +731,7 @@ class BotRepository(
         val updated = bot.copy(commands = nextCommands)
         val res = persistBotDoc(updated)
         if (res.isFailure) return Result.failure(res.exceptionOrNull()!!)
-        recordLog(updated, null, currentUid(), currentUserName(), "CMD_SAVED", "Commande $normalizedCmd configurée.", BotLogStatus.SUCCESS)
+        recordLog(updated, null, currentUid(), currentUserName(), "CMD_SAVED", "Commande $normalizedCmd (${cleanSpec.actionType.label}) configurée.", BotLogStatus.SUCCESS)
         return Result.success(updated)
     }
 
@@ -835,6 +895,31 @@ class BotRepository(
             if (!bot.isActive || BotPermission.USE_SLASH_COMMANDS !in inst.grantedPermissions) {
                 return@flatMap emptyList()
             }
+            bot.commands.filter { it.isEnabled }.map { cmd ->
+                SlashCommandOption(
+                    command = cmd.trigger,
+                    description = "[${bot.name}] ${cmd.description}",
+                    usageHint = cmd.usageHint
+                )
+            }
+        }.distinctBy { it.command }
+    }
+
+    fun getSlashCommandsForDm(conv: DirectConversation?): List<SlashCommandOption> {
+        if (conv == null) return emptyList()
+        val uid = currentUid()
+        val targetBots = if (conv.isBotChat || conv.id.startsWith("dm_bot_")) {
+            val targetBotId = conv.botId ?: conv.id.removePrefix("dm_bot_")
+            _bots.value.filter { it.id == targetBotId && it.isActive && it.allowDirectMessages }
+        } else {
+            _bots.value.filter {
+                it.isActive &&
+                    it.allowGroupMentions &&
+                    (it.ownerUid == uid || it.isPublicCatalog)
+            }
+        }
+        return targetBots.flatMap { bot ->
+            if (BotPermission.USE_SLASH_COMMANDS !in bot.defaultPermissions) return@flatMap emptyList()
             bot.commands.filter { it.isEnabled }.map { cmd ->
                 SlashCommandOption(
                     command = cmd.trigger,

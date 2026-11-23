@@ -15,7 +15,6 @@ data class SearchExecutionContext(
     val friends: List<FriendRelationship>,
     val blockedUserIds: Set<String>,
     val stories: List<StoryItem>,
-    val isStoryModerator: Boolean,
     val events: List<RavenEvent>,
     val bots: List<RavenBot>,
     val botInstallationsByServer: Map<String, List<ServerBotInstallation>>,
@@ -279,11 +278,10 @@ object SearchPermissionGuard {
         story: StoryItem,
         uid: String,
         blockedIds: Set<String>,
-        isModerator: Boolean,
         nowMs: Long
     ): Boolean {
         if (story.isExpired(nowMs)) return false
-        return story.canBeViewedBy(uid = uid, blockedAuthorIds = blockedIds, isModerator = isModerator)
+        return story.canBeViewedBy(uid = uid, blockedAuthorIds = blockedIds)
     }
 
     fun canSeeEvent(

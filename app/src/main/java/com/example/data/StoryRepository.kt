@@ -27,17 +27,12 @@ class StoryRepository(
     private val _stories = MutableStateFlow<List<StoryItem>>(emptyList())
     val stories: StateFlow<List<StoryItem>> = _stories.asStateFlow()
 
-    private val _reports = MutableStateFlow<List<StoryReport>>(emptyList())
-    val reports: StateFlow<List<StoryReport>> = _reports.asStateFlow()
-
     private val _lastCleanupStats = MutableStateFlow(StoryCleanupStats())
     val lastCleanupStats: StateFlow<StoryCleanupStats> = _lastCleanupStats.asStateFlow()
 
     private var publicStoriesListener: ListenerRegistration? = null
     private var sharedStoriesListener: ListenerRegistration? = null
     private var ownStoriesListener: ListenerRegistration? = null
-    private var modStoriesListener: ListenerRegistration? = null
-    private var reportsListener: ListenerRegistration? = null
     private var expirationTickerJob: Job? = null
 
     private val cloudStoriesMap = mutableMapOf<String, StoryItem>()
@@ -64,34 +59,6 @@ class StoryRepository(
     internal fun blockedAuthorIds(): Set<String> =
         chatRepo.blockedUsers.value.map { it.id }.toSet()
 
-    internal fun communityStaffContext(): Pair<String?, List<String>> {
-        val activeSrv = chatRepo.servers.value.firstOrNull { srv ->
-            !srv.isDmTab && (srv.id == chatRepo.selectedServerId.value || currentUid() in srv.members.map { it.id })
-        } ?: chatRepo.servers.value.firstOrNull { !it.isDmTab }
-        val modIds = buildSet {
-            if (activeSrv != null) {
-                if (activeSrv.ownerId.isNotBlank()) add(activeSrv.ownerId)
-                addAll(activeSrv.adminIds)
-                addAll(activeSrv.moderatorIds)
-                activeSrv.members
-                    .filter { it.role == UserRole.ADMIN || it.role == UserRole.MODERATOR }
-                    .forEach { add(it.id) }
-            }
-            add("user_me")
-        }.toList()
-        return activeSrv?.id to modIds
-    }
-
-    fun isCurrentUserModerator(): Boolean {
-        val uid = currentUid()
-        if (uid == "user_me" && chatRepo.currentUser.value.role in listOf(UserRole.ADMIN, UserRole.MODERATOR)) {
-            return true
-        }
-        return chatRepo.servers.value.any { srv ->
-            !srv.isDmTab && CommunityPermissions.hasPermission(srv, uid, RolePermission.MODERATE_MEMBERS)
-        }
-    }
-
     private fun seedInitialDemoStoriesIfOffline() {
         val authUser = chatRepo.authInstance()?.currentUser
         if (authUser != null) return
@@ -99,7 +66,6 @@ class StoryRepository(
         val me = currentUid()
         val thomas = MockData.friendThomas
         val emma = MockData.friendEmma
-        val (_, modIds) = communityStaffContext()
         _stories.value = listOf(
             StoryItem(
                 id = "story_demo_thomas",
@@ -114,7 +80,6 @@ class StoryRepository(
                 secondaryColorHex = 0xFFEB459EL,
                 visibility = StoryVisibility.FRIENDS,
                 allowedViewerIds = listOf(me, thomas.id, emma.id),
-                moderatorIds = modIds,
                 durationHours = 24,
                 createdAtMs = now - 3600_000L * 2,
                 expiresAtMs = now + 3600_000L * 22,
@@ -137,7 +102,6 @@ class StoryRepository(
                 secondaryColorHex = 0xFF0284C7L,
                 visibility = StoryVisibility.PUBLIC,
                 allowedViewerIds = listOf(me, emma.id),
-                moderatorIds = modIds,
                 durationHours = 24,
                 createdAtMs = now - 3600_000L * 4,
                 expiresAtMs = now + 3600_000L * 20,
@@ -180,36 +144,15 @@ class StoryRepository(
             .addSnapshotListener { snap, _ ->
                 if (snap != null) mergeCloudSnapshot(snap.documents.mapNotNull { StoryFirestoreSync.storyFromDoc(it) })
             }
-
-        if (isCurrentUserModerator()) {
-            modStoriesListener = storiesCol.whereArrayContains("moderatorIds", uid)
-                .addSnapshotListener { snap, _ ->
-                    if (snap != null) mergeCloudSnapshot(snap.documents.mapNotNull { StoryFirestoreSync.storyFromDoc(it) })
-                }
-
-            reportsListener = db.collection(StoryFirestoreSync.COLLECTION_STORY_REPORTS)
-                .whereArrayContains("moderatorIds", uid)
-                .addSnapshotListener { snap, _ ->
-                    if (snap != null) {
-                        val cloudReports = snap.documents.mapNotNull { StoryFirestoreSync.reportFromDoc(it) }
-                            .sortedByDescending { it.createdAtMs }
-                        _reports.value = cloudReports
-                    }
-                }
-        }
     }
 
     fun stopRealtimeSync() {
         publicStoriesListener?.remove()
         sharedStoriesListener?.remove()
         ownStoriesListener?.remove()
-        modStoriesListener?.remove()
-        reportsListener?.remove()
         publicStoriesListener = null
         sharedStoriesListener = null
         ownStoriesListener = null
-        modStoriesListener = null
-        reportsListener = null
         expirationTickerJob?.cancel()
         expirationTickerJob = null
     }
@@ -243,9 +186,8 @@ class StoryRepository(
         val now = nowProvider()
         val uid = currentUid()
         val blocked = blockedAuthorIds()
-        val isMod = isCurrentUserModerator()
         return _stories.value
-            .filter { !it.isExpired(now) && it.canBeViewedBy(uid, blocked, isMod) }
+            .filter { !it.isExpired(now) && it.canBeViewedBy(uid, blocked) }
             .sortedByDescending { it.createdAtMs }
     }
 
@@ -394,7 +336,6 @@ class StoryRepository(
         val now = nowProvider()
         val expiresAt = now + safeHours * 3600_000L
         val user = chatRepo.currentUser.value
-        val (modServerId, modIds) = communityStaffContext()
 
         val resolvedAllowed = when (visibility) {
             StoryVisibility.PUBLIC -> emptyList()
@@ -421,8 +362,6 @@ class StoryRepository(
             textColorHex = textColorHex,
             visibility = visibility,
             allowedViewerIds = resolvedAllowed,
-            moderatorIds = modIds,
-            moderationServerId = modServerId,
             durationHours = safeHours,
             createdAtMs = now,
             expiresAtMs = expiresAt,
@@ -480,7 +419,7 @@ class StoryRepository(
         }
 
         val uid = currentUid()
-        if (!story.canBeViewedBy(uid, blockedAuthorIds(), isCurrentUserModerator())) {
+        if (!story.canBeViewedBy(uid, blockedAuthorIds())) {
             return Result.failure(SecurityException("Accès refusé à cette story."))
         }
 
@@ -586,7 +525,7 @@ class StoryRepository(
         if (story.authorId == uid) {
             return Result.failure(SecurityException("Vous ne pouvez pas liker votre propre story."))
         }
-        if (!story.canBeViewedBy(uid, blockedAuthorIds(), isCurrentUserModerator())) {
+        if (!story.canBeViewedBy(uid, blockedAuthorIds())) {
             return Result.failure(SecurityException("Accès refusé à cette story."))
         }
 
@@ -648,9 +587,8 @@ class StoryRepository(
         val story = _stories.value.find { it.id == storyId }
             ?: return Result.failure(NoSuchElementException("Story introuvable."))
         val uid = currentUid()
-        val isMod = isCurrentUserModerator()
-        if (story.authorId != uid && !isMod) {
-            return Result.failure(SecurityException("Vous n'êtes pas autorisé à supprimer cette story."))
+        if (story.authorId != uid) {
+            return Result.failure(SecurityException("Seul l'auteur de la story peut la supprimer."))
         }
 
         val db = chatRepo.firestoreDb()
@@ -673,219 +611,6 @@ class StoryRepository(
             cloudStoriesMap.remove(storyId)
         }
         _stories.value = _stories.value.filterNot { it.id == storyId }
-        _reports.value = _reports.value.map { r ->
-            if (r.storyId == storyId && r.status == StoryReportStatus.PENDING) {
-                r.copy(status = StoryReportStatus.REMOVED, reviewedByUid = uid)
-            } else r
-        }
-        return Result.success(Unit)
-    }
-
-    suspend fun reportStory(
-        storyId: String,
-        reason: StoryReportReason,
-        details: String = ""
-    ): Result<StoryReport> {
-        val story = _stories.value.find { it.id == storyId }
-            ?: return Result.failure(NoSuchElementException("Story introuvable."))
-        val uid = currentUid()
-        if (!story.canBeViewedBy(uid, blockedAuthorIds(), isCurrentUserModerator())) {
-            return Result.failure(SecurityException("Impossible de signaler une story inaccessible."))
-        }
-        val duplicatePending = _reports.value.any {
-            it.storyId == storyId && it.reporterUid == uid && it.status == StoryReportStatus.PENDING
-        }
-        if (duplicatePending) {
-            return Result.failure(IllegalStateException("Vous avez déjà signalé cette story."))
-        }
-
-        val now = nowProvider()
-        val reportId = "rep_${UUID.randomUUID().toString().replace("-", "").take(12)}"
-        val preview = story.textContent.ifBlank { story.caption }.ifBlank { "Story ${story.mediaType.label}" }
-        val report = StoryReport(
-            id = reportId,
-            storyId = storyId,
-            storyAuthorId = story.authorId,
-            storyAuthorName = story.authorName,
-            storyPreview = preview.take(300),
-            storyMediaType = story.mediaType,
-            storyMediaUrl = story.mediaUrl,
-            reporterUid = uid,
-            reporterName = currentUserName(),
-            reason = reason,
-            details = details.trim().take(500),
-            status = StoryReportStatus.PENDING,
-            moderatorIds = story.moderatorIds.ifEmpty { communityStaffContext().second },
-            moderationServerId = story.moderationServerId ?: communityStaffContext().first,
-            createdAtMs = now
-        )
-
-        val db = chatRepo.firestoreDb()
-        val authUser = chatRepo.authInstance()?.currentUser
-        if (db != null && authUser != null) {
-            val cloudReport = withContext(Dispatchers.IO) {
-                try {
-                    val savedReport = report.copy(reporterUid = authUser.uid)
-                    Tasks.await(
-                        db.collection(StoryFirestoreSync.COLLECTION_STORY_REPORTS)
-                            .document(reportId)
-                            .set(StoryFirestoreSync.reportToCreateMap(savedReport))
-                    )
-                    Tasks.await(
-                        db.collection(StoryFirestoreSync.COLLECTION_STORIES)
-                            .document(storyId)
-                            .update(
-                                mapOf(
-                                    "reportCount" to FieldValue.increment(1L),
-                                    "updatedAt" to FieldValue.serverTimestamp()
-                                )
-                            )
-                    )
-                    Result.success(savedReport)
-                } catch (e: Exception) {
-                    FirestoreErrorHandler.handleFirestoreError(e, OperationType.WRITE, "story_reports/$reportId")
-                    Result.failure(e)
-                }
-            }
-            if (cloudReport.isFailure) return cloudReport
-        }
-
-        _reports.value = listOf(report) + _reports.value
-        _stories.value = _stories.value.map {
-            if (it.id == storyId) it.copy(reportCount = it.reportCount + 1) else it
-        }
-        chatRepo.notifyCommunityEvent(
-            title = "Signalement envoyé",
-            body = "Votre signalement pour la story de ${story.authorName} (${reason.label}) a été transmis aux modérateurs.",
-            sourceLabel = "Modération Stories",
-            type = NotificationType.SYSTEM
-        )
-        return Result.success(report)
-    }
-
-    suspend fun moderateStory(
-        storyId: String,
-        hideOnly: Boolean,
-        reason: String,
-        reportId: String? = null
-    ): Result<Unit> {
-        if (!isCurrentUserModerator()) {
-            return Result.failure(SecurityException("Action réservée aux modérateurs ou administrateurs."))
-        }
-        val story = _stories.value.find { it.id == storyId }
-            ?: return Result.failure(NoSuchElementException("Story introuvable."))
-        val modUid = currentUid()
-        val cleanReason = reason.trim().ifBlank { "Non conforme aux règles de la communauté" }
-
-        if (!hideOnly) {
-            val delRes = deleteStory(storyId)
-            if (delRes.isFailure) return delRes
-        } else {
-            val db = chatRepo.firestoreDb()
-            val authUser = chatRepo.authInstance()?.currentUser
-            if (db != null && authUser != null) {
-                val res = withContext(Dispatchers.IO) {
-                    try {
-                        Tasks.await(
-                            db.collection(StoryFirestoreSync.COLLECTION_STORIES).document(storyId).update(
-                                mapOf(
-                                    "moderatedHidden" to true,
-                                    "moderationReason" to cleanReason.take(240),
-                                    "moderatedByUid" to authUser.uid,
-                                    "updatedAt" to FieldValue.serverTimestamp()
-                                )
-                            )
-                        )
-                        Result.success(Unit)
-                    } catch (e: Exception) {
-                        FirestoreErrorHandler.handleFirestoreError(e, OperationType.UPDATE, "stories/$storyId")
-                        Result.failure(e)
-                    }
-                }
-                if (res.isFailure) return res
-            }
-            val hiddenStory = story.copy(
-                moderatedHidden = true,
-                moderationReason = cleanReason,
-                moderatedByUid = modUid
-            )
-            synchronized(cloudStoriesMap) {
-                cloudStoriesMap[storyId] = hiddenStory
-            }
-            _stories.value = _stories.value.map { if (it.id == storyId) hiddenStory else it }
-        }
-
-        // Update matching reports status
-        val targetReportIds = _reports.value
-            .filter { it.id == reportId || (it.storyId == storyId && it.status == StoryReportStatus.PENDING) }
-            .map { it.id }
-
-        val db = chatRepo.firestoreDb()
-        val authUser = chatRepo.authInstance()?.currentUser
-        if (db != null && authUser != null) {
-            withContext(Dispatchers.IO) {
-                targetReportIds.forEach { rId ->
-                    try {
-                        Tasks.await(
-                            db.collection(StoryFirestoreSync.COLLECTION_STORY_REPORTS).document(rId).update(
-                                mapOf(
-                                    "status" to StoryReportStatus.REMOVED.name,
-                                    "reviewedByUid" to authUser.uid,
-                                    "updatedAt" to FieldValue.serverTimestamp()
-                                )
-                            )
-                        )
-                    } catch (_: Exception) {
-                    }
-                }
-            }
-        }
-
-        _reports.value = _reports.value.map { rep ->
-            if (rep.id in targetReportIds) {
-                rep.copy(status = StoryReportStatus.REMOVED, reviewedByUid = modUid)
-            } else rep
-        }
-        chatRepo.notifyCommunityEvent(
-            title = if (hideOnly) "Story masquée par la modération" else "Story supprimée par la modération",
-            body = "Story de ${story.authorName} modérée ($cleanReason).",
-            sourceLabel = "Modération Stories",
-            type = NotificationType.SYSTEM
-        )
-        return Result.success(Unit)
-    }
-
-    suspend fun dismissReport(reportId: String): Result<Unit> {
-        if (!isCurrentUserModerator()) {
-            return Result.failure(SecurityException("Action réservée aux modérateurs."))
-        }
-        val report = _reports.value.find { it.id == reportId }
-            ?: return Result.failure(NoSuchElementException("Signalement introuvable."))
-        val modUid = currentUid()
-        val db = chatRepo.firestoreDb()
-        val authUser = chatRepo.authInstance()?.currentUser
-        if (db != null && authUser != null) {
-            val res = withContext(Dispatchers.IO) {
-                try {
-                    Tasks.await(
-                        db.collection(StoryFirestoreSync.COLLECTION_STORY_REPORTS).document(reportId).update(
-                            mapOf(
-                                "status" to StoryReportStatus.DISMISSED.name,
-                                "reviewedByUid" to authUser.uid,
-                                "updatedAt" to FieldValue.serverTimestamp()
-                            )
-                        )
-                    )
-                    Result.success(Unit)
-                } catch (e: Exception) {
-                    Result.failure(e)
-                }
-            }
-            if (res.isFailure) return res
-        }
-        _reports.value = _reports.value.map {
-            if (it.id == report.id) it.copy(status = StoryReportStatus.DISMISSED, reviewedByUid = modUid) else it
-        }
         return Result.success(Unit)
     }
 
@@ -918,7 +643,7 @@ class StoryRepository(
         if (db != null && authUser != null) {
             withContext(Dispatchers.IO) {
                 expiredStories.forEach { expired ->
-                    if (expired.authorId == authUser.uid || isCurrentUserModerator()) {
+                    if (expired.authorId == authUser.uid) {
                         try {
                             StoryFirestoreSync.deleteStoryCascadeBlocking(db, expired.id)
                         } catch (_: Exception) {
@@ -936,13 +661,6 @@ class StoryRepository(
         }
         _stories.value = activeStories
 
-        val expiredIds = expiredStories.map { it.id }.toSet()
-        val beforeReportsCount = _reports.value.size
-        _reports.value = _reports.value.filterNot { rep ->
-            rep.storyId in expiredIds && rep.status != StoryReportStatus.PENDING
-        }
-        val removedReports = (beforeReportsCount - _reports.value.size).coerceAtLeast(0)
-
         var removedFiles = 0
         chatRepo.appContextOrNull()?.let { ctx ->
             val activeMediaPaths = activeStories.mapNotNull { it.mediaUrl }.toSet()
@@ -955,8 +673,7 @@ class StoryRepository(
 
         val stats = StoryCleanupStats(
             removedExpiredStories = expiredStories.size,
-            removedMediaFiles = removedFiles,
-            removedExpiredReports = removedReports
+            removedMediaFiles = removedFiles
         )
         _lastCleanupStats.value = stats
         return stats

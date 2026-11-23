@@ -108,7 +108,6 @@ class GlobalSearchRepository(
             friends = friendRepo.friends.value,
             blockedUserIds = chatRepo.blockedUsers.value.map { it.id }.toSet(),
             stories = storyRepo.stories.value,
-            isStoryModerator = storyRepo.isCurrentUserModerator(),
             events = eventRepo.events.value,
             bots = botRepo.bots.value,
             botInstallationsByServer = botRepo.installationsByServer.value,
