@@ -56,6 +56,7 @@ fun StoryViewerDialog(
     onDeleteStory: (String) -> Unit,
     onReplyToStory: (storyId: String, String) -> Unit,
     onToggleLike: (storyId: String) -> Unit = {},
+    onVoteQuickPoll: (storyId: String, option: String) -> Unit = { _, _ -> },
     onDismiss: () -> Unit
 ) {
     val startGroupIndex = remember(groups, initialAuthorId) {
@@ -369,6 +370,115 @@ fun StoryViewerDialog(
                         }
                         IconButton(onClick = onDismiss, modifier = Modifier.testTag("story_viewer_close_button")) {
                             Icon(Icons.Default.Close, contentDescription = "Fermer", tint = Color.White)
+                        }
+                    }
+                }
+            }
+
+            // Interactive Sticker, Music Tag & Quick Poll Overlay
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.Center)
+                    .padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Spacer(modifier = Modifier.height(110.dp))
+
+                if (!activeStory.stickerText.isNullOrBlank()) {
+                    val stickerBg = when (activeStory.stickerStyle) {
+                        "NEON" -> Color(0xFF00E5FF)
+                        "AMBER" -> Color(0xFFF0B232)
+                        else -> Color.White
+                    }
+                    Surface(
+                        color = stickerBg,
+                        shape = RoundedCornerShape(20.dp),
+                        shadowElevation = 6.dp,
+                        modifier = Modifier.testTag("story_viewer_sticker_pill")
+                    ) {
+                        Text(
+                            text = activeStory.stickerText,
+                            color = Color.Black,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+
+                if (!activeStory.musicTrackTitle.isNullOrBlank()) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.65f),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier.testTag("story_viewer_music_tag")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Default.MusicNote, contentDescription = null, tint = DiscordGreen, modifier = Modifier.size(16.dp))
+                            Text(
+                                text = "${activeStory.musicTrackTitle}${activeStory.musicTrackArtist?.let { " • $it" } ?: ""}",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                if (!activeStory.quickPollQuestion.isNullOrBlank() && activeStory.quickPollOptions.isNotEmpty()) {
+                    val totalVotes = activeStory.quickPollVotes.values.sum().coerceAtLeast(0)
+                    val alreadyVoted = currentUserId in activeStory.quickPollVotedByIds
+                    Surface(
+                        color = Color(0xFF141824).copy(alpha = 0.90f),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("story_viewer_quick_poll_card")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = activeStory.quickPollQuestion,
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            activeStory.quickPollOptions.forEach { opt ->
+                                val count = activeStory.quickPollVotes[opt] ?: 0
+                                val pct = if (totalVotes > 0) (count * 100 / totalVotes) else 0
+                                Surface(
+                                    color = if (alreadyVoted) DiscordBlurple.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.14f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable(enabled = !alreadyVoted) {
+                                            onVoteQuickPoll(activeStory.id, opt)
+                                        }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(opt, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                        if (alreadyVoted || activeStory.authorId == currentUserId) {
+                                            Text("$pct% ($count)", color = Color(0xFF9FB4FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

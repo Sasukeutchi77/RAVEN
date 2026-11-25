@@ -15,8 +15,9 @@ enum class StoryMediaType(val label: String) {
 }
 
 enum class StoryVisibility(val label: String, val subtitle: String) {
-    PUBLIC("Publique", "Visible par tous les membres de RAVEN"),
-    FRIENDS("Amis uniquement", "Visible uniquement par vos amis acceptés"),
+    PUBLIC("Tous les contacts", "Visible par tous les membres de RAVEN"),
+    FRIENDS("Amis proches", "Visible uniquement par vos amis acceptés"),
+    SERVER_MEMBERS("Membres d'un serveur", "Visible uniquement par les membres du serveur choisi"),
     CUSTOM_USERS("Utilisateurs choisis", "Visible uniquement par une liste personnalisée");
 
     companion object {
@@ -63,6 +64,7 @@ data class StoryItem(
     val textColorHex: Long = 0xFFFFFFFFL,
     val visibility: StoryVisibility = StoryVisibility.PUBLIC,
     val allowedViewerIds: List<String> = emptyList(),
+    val allowedServerId: String? = null,
     val durationHours: Int = 24,
     val createdAtMs: Long = 0L,
     val expiresAtMs: Long = 0L,
@@ -70,7 +72,15 @@ data class StoryItem(
     val viewerIds: List<String> = emptyList(),
     val viewers: List<StoryViewerEntry> = emptyList(),
     val likesCount: Int = 0,
-    val likedByIds: List<String> = emptyList()
+    val likedByIds: List<String> = emptyList(),
+    val stickerText: String? = null,
+    val stickerStyle: String = "GLASS",
+    val quickPollQuestion: String? = null,
+    val quickPollOptions: List<String> = emptyList(),
+    val quickPollVotes: Map<String, Int> = emptyMap(),
+    val quickPollVotedByIds: List<String> = emptyList(),
+    val musicTrackTitle: String? = null,
+    val musicTrackArtist: String? = null
 ) {
     fun isExpired(nowMs: Long): Boolean = expiresAtMs <= nowMs
 
@@ -81,13 +91,16 @@ data class StoryItem(
 
     fun canBeViewedBy(
         uid: String,
-        blockedAuthorIds: Set<String> = emptySet()
+        blockedAuthorIds: Set<String> = emptySet(),
+        memberServerIds: Set<String> = emptySet()
     ): Boolean {
         if (authorId == uid) return true
         if (authorId in blockedAuthorIds) return false
         return when (visibility) {
             StoryVisibility.PUBLIC -> true
             StoryVisibility.FRIENDS -> uid in allowedViewerIds
+            StoryVisibility.SERVER_MEMBERS ->
+                (allowedServerId != null && allowedServerId in memberServerIds) || uid in allowedViewerIds
             StoryVisibility.CUSTOM_USERS -> uid in allowedViewerIds
         }
     }

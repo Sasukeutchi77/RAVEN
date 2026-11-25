@@ -2475,3 +2475,310 @@ test("18. Creator-only admin role assignment/revocation and WhatsApp-style serve
   );
 });
 
+test("Gmail onboarding profile fields (onboardingCompleted, requireCodeOnAppLaunch, DND, avatarUrl) obey user rules", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      name: "Alice Gmail",
+      email: "alice@gmail.com",
+      tag: "#2026",
+      bio: "Nouvelle sur Raven",
+      status: "DND",
+      avatarUrl: "https://res.cloudinary.com/demo/image/upload/v1/avatar.jpg",
+      bannerUrl: "https://res.cloudinary.com/demo/image/upload/v1/banner.jpg",
+      onboardingCompleted: true,
+      requireCodeOnAppLaunch: true,
+    })
+  );
+
+  await assertSucceeds(
+    aliceDb.collection("public_profiles").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      name: "Alice Gmail",
+      tag: "#2026",
+      bio: "Nouvelle sur Raven",
+      status: "DND",
+      avatarUrl: "https://res.cloudinary.com/demo/image/upload/v1/avatar.jpg",
+      avatarColor: 0xFF5865F2,
+      isPublic: true,
+    })
+  );
+
+  // Invalid type for onboardingCompleted or requireCodeOnAppLaunch fails
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      name: "Alice Gmail",
+      onboardingCompleted: "yes",
+    })
+  );
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      name: "Alice Gmail",
+      requireCodeOnAppLaunch: 1,
+    })
+  );
+
+  // Cross-user write rejected
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).update({
+      onboardingCompleted: false,
+    })
+  );
+});
+
+test("20. Community leave/kick protections, handle immutability, safe URLs, DM/message sync, View-Once redaction, FORUM channels, and threads", async () => {
+  const DANA_UID = "dana_sec_1";
+  const now = Date.now();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.collection("servers").doc("srv_sec").set({
+      name: "Raven Sec Guild",
+      ownerId: ALICE_UID,
+      adminIds: [ALICE_UID, DANA_UID],
+      moderatorIds: [CHARLIE_UID],
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+      isPublic: false,
+      isClosed: false,
+    });
+    await db.collection("servers").doc("srv_sec").collection("channels").doc("ch_sec").set({
+      serverId: "srv_sec",
+      name: "general",
+      type: "TEXT",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    });
+    await db.collection("direct_conversations").doc("dm_sec_pair").set({
+      id: "dm_sec_pair",
+      participantIds: [ALICE_UID, BOB_UID],
+      isGroup: false,
+      isBotChat: false,
+      dmPairKey: `${ALICE_UID}__${BOB_UID}`,
+      lastMessage: "Init",
+      lastMessageTime: "10:00",
+      updatedAtMs: now,
+    });
+    await db.collection("bot_handles").doc("guardbot").set({
+      handle: "guardbot",
+      botId: "bot_1",
+      ownerUid: ALICE_UID,
+      name: "GuardBot",
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const charlieDb = testEnv.authenticatedContext(CHARLIE_UID).firestore();
+
+  // 1. Moderator Charlie CANNOT kick owner Alice or admin Dana; Member Bob leaving CANNOT wipe adminIds/moderatorIds
+  await assertFails(
+    charlieDb.collection("servers").doc("srv_sec").update({
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+    })
+  );
+  await assertFails(
+    bobDb.collection("servers").doc("srv_sec").update({
+      memberIds: [ALICE_UID, CHARLIE_UID, DANA_UID],
+      adminIds: [ALICE_UID],
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("servers").doc("srv_sec").update({
+      memberIds: [ALICE_UID, CHARLIE_UID, DANA_UID],
+    })
+  );
+  // Restore Bob for subsequent tests via Admin Alice
+  await assertSucceeds(
+    aliceDb.collection("servers").doc("srv_sec").update({
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    })
+  );
+
+  // 2. Bot/community handle update blocks non-owner hijacking and ownerUid changes
+  await assertFails(
+    bobDb.collection("bot_handles").doc("guardbot").update({
+      ownerUid: BOB_UID,
+    })
+  );
+  await assertFails(
+    aliceDb.collection("bot_handles").doc("guardbot").update({
+      handle: "renamed",
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("bot_handles").doc("guardbot").update({
+      name: "GuardBot v2",
+    })
+  );
+
+  // 3. FORUM channel creation allowed for staff, blocked for normal member
+  await assertFails(
+    bobDb.collection("servers").doc("srv_sec").collection("channels").doc("ch_forum_bad").set({
+      serverId: "srv_sec",
+      name: "aide",
+      type: "FORUM",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("servers").doc("srv_sec").collection("channels").doc("ch_forum_ok").set({
+      serverId: "srv_sec",
+      name: "entraide",
+      type: "FORUM",
+      topic: "Questions & astuces",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+    })
+  );
+
+  // 4. Direct conversation immutability & safe id merge
+  await assertFails(
+    bobDb.collection("direct_conversations").doc("dm_sec_pair").update({
+      isGroup: true,
+      participantIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("direct_conversations").doc("dm_sec_pair").set({
+      id: "dm_sec_pair",
+      lastMessage: "Salut Bob !",
+      lastMessageTime: "10:05",
+      updatedAtMs: now + 1000,
+    }, { merge: true })
+  );
+
+  // 5. Unsafe media URLs blocked on message create
+  const dmMsgsAlice = aliceDb.collection("direct_conversations").doc("dm_sec_pair").collection("messages");
+  const dmMsgsBob = bobDb.collection("direct_conversations").doc("dm_sec_pair").collection("messages");
+  const dmMsgsCharlie = charlieDb.collection("direct_conversations").doc("dm_sec_pair").collection("messages");
+
+  await assertFails(
+    dmMsgsAlice.doc("msg_xss").set({
+      senderId: ALICE_UID,
+      senderName: "Alice",
+      imageUrl: "javascript:alert(1)",
+      participantIds: [ALICE_UID, BOB_UID],
+    })
+  );
+  await assertFails(
+    dmMsgsAlice.doc("msg_content").set({
+      senderId: ALICE_UID,
+      senderName: "Alice",
+      audioUrl: "content://media/external/audio/1",
+      participantIds: [ALICE_UID, BOB_UID],
+    })
+  );
+
+  // 6. Extended message sync fields + poll + View-Once redaction + readByIds + threads
+  await assertSucceeds(
+    dmMsgsAlice.doc("msg_rich_vo").set({
+      senderId: ALICE_UID,
+      senderName: "Alice",
+      senderAvatarUrl: "https://res.cloudinary.com/demo/image/upload/v1/a.jpg",
+      text: "Photo éphémère",
+      imageUrl: "https://res.cloudinary.com/demo/image/upload/v1/secret.jpg",
+      waveformAmplitudes: [15, 45, 80, 35],
+      audioDurationSec: 5,
+      isViewOnce: true,
+      viewedByIds: [],
+      readByIds: [ALICE_UID],
+      ephemeralExpiresAtMs: now + 3600000,
+      totalOrbsTipped: 0,
+      threadCount: 0,
+      poll: {
+        question: "Prêt ?",
+        allowsMultiple: false,
+        options: [
+          { id: "opt_0", text: "Oui", votes: [] },
+          { id: "opt_1", text: "Non", votes: [] },
+        ],
+      },
+      participantIds: [ALICE_UID, BOB_UID],
+      createdAtMs: now,
+    })
+  );
+
+  // Bob CANNOT tamper with Alice's text/poll question or delete Alice's DM message
+  await assertFails(dmMsgsBob.doc("msg_rich_vo").update({ text: "Tampered" }));
+  await assertFails(
+    dmMsgsBob.doc("msg_rich_vo").update({
+      poll: { question: "Hacked?", allowsMultiple: false, options: [{ id: "opt_0", text: "X", votes: [] }] },
+    })
+  );
+  await assertFails(dmMsgsBob.doc("msg_rich_vo").delete());
+  await assertFails(dmMsgsCharlie.doc("msg_rich_vo").delete());
+
+  // Bob CAN update readByIds, poll votes (same question/options count), Orbs tip, and redact View-Once on open
+  await assertSucceeds(
+    dmMsgsBob.doc("msg_rich_vo").update({
+      readByIds: [ALICE_UID, BOB_UID],
+    })
+  );
+  await assertSucceeds(
+    dmMsgsBob.doc("msg_rich_vo").update({
+      poll: {
+        question: "Prêt ?",
+        allowsMultiple: false,
+        options: [
+          { id: "opt_0", text: "Oui", votes: [BOB_UID] },
+          { id: "opt_1", text: "Non", votes: [] },
+        ],
+      },
+    })
+  );
+  await assertSucceeds(
+    dmMsgsBob.doc("msg_rich_vo").update({
+      viewedByIds: [BOB_UID],
+      imageUrl: null,
+      text: "Photo vue unique déjà ouverte",
+    })
+  );
+
+  // Thread replies in DM & Channel
+  await assertSucceeds(
+    dmMsgsBob.doc("msg_rich_vo").collection("threads").doc("th_1").set({
+      senderId: BOB_UID,
+      senderName: "Bob",
+      text: "Réponse fil DM",
+      participantIds: [ALICE_UID, BOB_UID],
+      createdAtMs: now + 500,
+    })
+  );
+  await assertFails(
+    dmMsgsCharlie.doc("msg_rich_vo").collection("threads").doc("th_bad").set({
+      senderId: CHARLIE_UID,
+      senderName: "Charlie",
+      text: "Intrusion DM",
+      participantIds: [ALICE_UID, BOB_UID, CHARLIE_UID],
+    })
+  );
+
+  const chMsgsAlice = aliceDb.collection("servers").doc("srv_sec").collection("channels").doc("ch_sec").collection("messages");
+  await assertSucceeds(
+    chMsgsAlice.doc("cmsg_1").set({
+      senderId: ALICE_UID,
+      senderName: "Alice",
+      text: "Parent salon",
+      isPublic: false,
+      memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+      threadCount: 0,
+      createdAtMs: now,
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("servers").doc("srv_sec").collection("channels").doc("ch_sec").collection("messages")
+      .doc("cmsg_1").collection("threads").doc("cth_1").set({
+        senderId: BOB_UID,
+        senderName: "Bob",
+        text: "Réponse fil salon",
+        isPublic: false,
+        memberIds: [ALICE_UID, BOB_UID, CHARLIE_UID, DANA_UID],
+        createdAtMs: now + 200,
+      })
+  );
+});

@@ -22,17 +22,20 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.webrtc.EglBase
 import org.webrtc.VideoTrack
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 class ChatRepository(
     private val scope: CoroutineScope,
@@ -156,6 +159,9 @@ class ChatRepository(
     private val _firebaseUserEmail = MutableStateFlow<String?>(null)
     val firebaseUserEmail: StateFlow<String?> = _firebaseUserEmail.asStateFlow()
 
+    private val _onboardingCompleted = MutableStateFlow(false)
+    val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted.asStateFlow()
+
     private val _pendingLocalNotification = MutableStateFlow<InboxNotification?>(null)
     val pendingLocalNotification: StateFlow<InboxNotification?> = _pendingLocalNotification.asStateFlow()
 
@@ -205,6 +211,14 @@ class ChatRepository(
 
     private val _jukeboxVolume = MutableStateFlow(0.85f)
     val jukeboxVolume: StateFlow<Float> = _jukeboxVolume.asStateFlow()
+
+    private val advancedHelper = RavenAdvancedFeaturesHelper(this)
+    val ephemeralTimersByTarget: StateFlow<Map<String, Int>> get() = advancedHelper.ephemeralTimersByTarget
+    val forumPostsByChannel: StateFlow<Map<String, List<ForumPost>>> get() = advancedHelper.forumPostsByChannel
+    val activeDirectCall: StateFlow<DirectCallSession?> get() = advancedHelper.activeDirectCall
+    val callHistory: StateFlow<List<CallHistoryEntry>> get() = advancedHelper.callHistory
+    val pendingOfflineMessages: StateFlow<List<PendingOfflineMessage>> get() = advancedHelper.pendingOfflineMessages
+    val isDeviceOnline: StateFlow<Boolean> get() = advancedHelper.isDeviceOnline
 
     private var cachedFcmToken: String? = appContext?.let {
         try {
@@ -391,6 +405,7 @@ class ChatRepository(
             botQuickReplies = quickReplies
         )
         val currentList = _messages.value[targetId] ?: emptyList()
+        inFlightMessageTimestamps[botMsg.id] = System.currentTimeMillis()
         _messages.value = _messages.value + (targetId to (currentList + botMsg))
 
         val targetChannel = findChannelById(targetId)
@@ -401,8 +416,13 @@ class ChatRepository(
             }
         }
 
-        val db = firestore ?: return
-        val user = currentAuth()?.currentUser ?: return
+        val db = firestore
+        val user = currentAuth()?.currentUser
+        if (db == null || user == null) {
+            inFlightMessageTimestamps.remove(botMsg.id)
+            return
+        }
+        val createdAtMs = System.currentTimeMillis()
         scope.launch(Dispatchers.IO) {
             try {
                 val payload = hashMapOf<String, Any>(
@@ -415,9 +435,11 @@ class ChatRepository(
                     "isPinned" to false,
                     "isEdited" to false,
                     "threadCount" to 0,
-                    "createdAtMs" to System.currentTimeMillis(),
+                    "createdAtMs" to createdAtMs,
                     "createdAt" to FieldValue.serverTimestamp()
                 )
+                botAvatarUrl?.takeIf { it.startsWith("https://") || it.startsWith("http://") || it.startsWith("/") }
+                    ?.let { payload["senderAvatarUrl"] = it }
                 if (quickReplies.isNotEmpty()) {
                     payload["botQuickReplies"] = quickReplies.take(8).map {
                         mapOf("label" to it.label.take(40), "payload" to it.payload.take(120))
@@ -432,7 +454,9 @@ class ChatRepository(
                         "options" to p.options.map { opt ->
                             mapOf("id" to opt.id, "text" to opt.text, "votes" to opt.votes)
                         }
-                    )
+                    ).apply {
+                        p.advancedPollId?.takeIf { it.isNotBlank() }?.let { put("advancedPollId", it) }
+                    }
                 }
 
                 if (targetChannel != null) {
@@ -448,7 +472,7 @@ class ChatRepository(
                 } else {
                     val dmConv = _directConversations.value.find { it.id == targetId }
                     val participantIds = when {
-                        dmConv == null -> listOf(user.uid, "bot_$botId").distinct().sorted()
+                        dmConv == null -> (inferDmParticipants(targetId, user.uid, null) + "bot_$botId").distinct().sorted()
                         dmConv.isGroup -> (dmConv.groupMembers.map { it.id } + user.uid).filter { it.isNotBlank() }.distinct().sorted()
                         else -> (dmConv.participantIds + listOf(user.uid, dmConv.friend.id)).filter { it.isNotBlank() }.distinct().sorted()
                     }
@@ -461,7 +485,7 @@ class ChatRepository(
                         "isBotChat" to (dmConv?.isBotChat == true || targetId.startsWith("dm_bot_")),
                         "lastMessage" to (text.lineSequence().firstOrNull()?.take(80) ?: "Réponse Bot"),
                         "lastMessageTime" to currentTime,
-                        "updatedAtMs" to System.currentTimeMillis(),
+                        "updatedAtMs" to createdAtMs,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                     (dmConv?.botId ?: if (targetId.startsWith("dm_bot_")) targetId.removePrefix("dm_bot_") else null)
@@ -471,6 +495,8 @@ class ChatRepository(
                 }
             } catch (e: Exception) {
                 Log.w("ChatRepo", "Bot Firestore message write failed", e)
+            } finally {
+                inFlightMessageTimestamps.remove(botMsg.id)
             }
         }
     }
@@ -536,6 +562,7 @@ class ChatRepository(
     }
 
     private var activeListener: ListenerRegistration? = null
+    private var activeThreadListener: ListenerRegistration? = null
     private var activeChannelMetaListener: ListenerRegistration? = null
     private var activeVoiceChannelMetaListener: ListenerRegistration? = null
     private var activeWhiteboardListener: ListenerRegistration? = null
@@ -543,6 +570,7 @@ class ChatRepository(
     private var activeNotificationsListener: ListenerRegistration? = null
     private var activePublicProfilesListener: ListenerRegistration? = null
     private var lastSyncedRemotePeerIds: Set<String> = emptySet()
+    private val inFlightMessageTimestamps = ConcurrentHashMap<String, Long>()
 
     init {
         // Jukebox playback ticker (speaking state now comes from real WebRTC metering & peers)
@@ -620,6 +648,7 @@ class ChatRepository(
         if (existingAuth != null) {
             syncFirebaseUser()
         }
+        advancedHelper.initialize(appContext)
     }
 
     private fun mergeVoiceUsersWithRemotePeers(
@@ -777,6 +806,7 @@ class ChatRepository(
 
     fun releaseResources() {
         activeListener?.remove()
+        activeThreadListener?.remove()
         activeChannelMetaListener?.remove()
         activeVoiceChannelMetaListener?.remove()
         activeWhiteboardListener?.remove()
@@ -785,6 +815,7 @@ class ChatRepository(
         activePublicProfilesListener?.remove()
         jukeboxAudioEngine?.stopAndRelease()
         webRtcVoiceManager?.shutdown()
+        advancedHelper.release()
         _connectedVoiceChannel.value = null
         _localVideoTrack.value = null
         _remoteVideoTracks.value = emptyMap()
@@ -792,26 +823,117 @@ class ChatRepository(
             ?: WebRtcSessionState(isConnected = false)
     }
 
-    fun syncFirebaseUser() {
+    internal fun markOnboardingCompleted(completed: Boolean) {
+        _onboardingCompleted.value = completed
+    }
+
+    internal fun applyInitialAccountProfile(
+        uid: String,
+        email: String?,
+        name: String,
+        tag: String,
+        bio: String,
+        avatarUrl: String?,
+        avatarColor: Long,
+        status: UserStatus,
+        requireCodeOnAppLaunch: Boolean = false
+    ) {
+        val cleanTag = tag.trim().let { if (it.startsWith("#")) it else "#$it" }.take(12)
+        val curr = _currentUser.value
+        val updated = curr.copy(
+            id = uid,
+            name = name.trim().take(40),
+            tag = cleanTag.ifBlank { "#0001" },
+            bio = bio.trim().take(300),
+            avatarUrl = avatarUrl?.takeIf { it.isNotBlank() },
+            avatarColor = avatarColor,
+            status = status,
+            email = email ?: curr.email,
+            role = UserRole.ADMIN,
+            lastActiveAtMs = System.currentTimeMillis()
+        )
+        _currentUser.value = updated
+        _appSettings.value = _appSettings.value.copy(requireCodeOnAppLaunch = requireCodeOnAppLaunch)
+        _onboardingCompleted.value = true
+        _servers.value = _servers.value.map { srv ->
+            if (srv.ownerId == "user_me" || srv.ownerId == uid || "user_me" in srv.adminIds || srv.members.any { it.id == "user_me" || it.id == uid }) {
+                srv.copy(
+                    ownerId = if (srv.ownerId == "user_me") uid else srv.ownerId,
+                    adminIds = srv.adminIds.map { if (it == "user_me") uid else it }.distinct(),
+                    moderatorIds = srv.moderatorIds.map { if (it == "user_me") uid else it }.distinct(),
+                    members = srv.members.map { if (it.id == "user_me" || it.id == uid) updated else it }
+                )
+            } else srv
+        }
+        syncFullStateToFirestore()
+    }
+
+    suspend fun signOutCleanly() {
+        withContext(NonCancellable) {
+            activeListener?.remove()
+            activeListener = null
+            activeThreadListener?.remove()
+            activeThreadListener = null
+            activeChannelMetaListener?.remove()
+            activeChannelMetaListener = null
+            activeVoiceChannelMetaListener?.remove()
+            activeVoiceChannelMetaListener = null
+            activeWhiteboardListener?.remove()
+            activeWhiteboardListener = null
+            activeJukeboxListener?.remove()
+            activeJukeboxListener = null
+            activeNotificationsListener?.remove()
+            activeNotificationsListener = null
+            activePublicProfilesListener?.remove()
+            activePublicProfilesListener = null
+            inFlightMessageTimestamps.clear()
+            try {
+                currentAuth()?.signOut()
+            } catch (e: Exception) {
+                Log.w("ChatRepo", "Firebase signOut warning", e)
+            }
+            _isFirebaseSignedIn.value = false
+            _firebaseUserEmail.value = null
+            _onboardingCompleted.value = false
+            _currentUser.value = MockData.currentUser
+            _messages.value = emptyMap()
+            _threads.value = emptyMap()
+            _directConversations.value = emptyList()
+            _notifications.value = emptyList()
+            _typingUsersByTarget.value = emptyMap()
+            _draftsByTarget.value = emptyMap()
+            _replyingToMessage.value = null
+            _searchQuery.value = ""
+            _selectedDmId.value = null
+            friendBridgeHook?.syncWithAuthUid(null)
+        }
+    }
+
+    fun syncFirebaseUser(reloadFromCloud: Boolean = true) {
         val authUser = currentAuth()?.currentUser
         if (authUser == null) {
             _isFirebaseSignedIn.value = false
             _firebaseUserEmail.value = null
+            _onboardingCompleted.value = false
             activeListener?.remove()
+            activeThreadListener?.remove()
             activeChannelMetaListener?.remove()
             activeWhiteboardListener?.remove()
             activeJukeboxListener?.remove()
             activeNotificationsListener?.remove()
             activePublicProfilesListener?.remove()
+            friendBridgeHook?.syncWithAuthUid(null)
             return
         }
         _isFirebaseSignedIn.value = true
         _firebaseUserEmail.value = authUser.email
-        val updatedCurr = _currentUser.value.copy(
+        val curr = _currentUser.value
+        val hasCustomName = curr.id == authUser.uid && curr.name.isNotBlank() && curr.name != MockData.currentUser.name
+        val updatedCurr = curr.copy(
             id = authUser.uid,
-            name = authUser.displayName?.takeIf { it.isNotBlank() } ?: _currentUser.value.name,
-            avatarUrl = authUser.photoUrl?.toString() ?: _currentUser.value.avatarUrl,
-            email = authUser.email ?: _currentUser.value.email,
+            name = if (hasCustomName) curr.name else (authUser.displayName?.takeIf { it.isNotBlank() } ?: curr.name),
+            avatarUrl = curr.avatarUrl ?: authUser.photoUrl?.toString(),
+            email = authUser.email ?: curr.email,
             role = UserRole.ADMIN
         )
         _currentUser.value = updatedCurr
@@ -825,7 +947,9 @@ class ChatRepository(
                 )
             } else srv
         }
-        loadFullStateFromFirestore()
+        if (reloadFromCloud) {
+            loadFullStateFromFirestore()
+        }
         listenToUserNotifications(authUser.uid)
         listenToPublicProfiles()
         refreshPublicServersFromCloud()
@@ -860,6 +984,7 @@ class ChatRepository(
             _selectedChannelId.value = channel.id
             listenToChannelMessages(channel.id)
             listenToWhiteboard(channel.id)
+            advancedHelper.markTargetMessagesRead(channel.id)
             pluginEventHandler?.invoke(
                 RavenPluginEvent.ChannelChanged(
                     serverId = channel.serverId,
@@ -879,6 +1004,7 @@ class ChatRepository(
         }
         if (dmId.isNotBlank()) {
             listenToDmMessages(dmId)
+            advancedHelper.markTargetMessagesRead(dmId)
         }
     }
 
@@ -987,16 +1113,21 @@ class ChatRepository(
                 Log.w("ChatRepo", "Channel messages snapshot error", error)
                 return@addSnapshotListener
             }
-            if (snapshot != null && !snapshot.isEmpty) {
-                val sortedDocs = snapshot.documents.sortedBy { it.getLong("createdAtMs") ?: 0L }
-                val firestoreMsgs = sortedDocs.mapNotNull { doc ->
-                    mapFirestoreDocToMessage(doc, channelId, currentUserId)
-                }
-                val existing = _messages.value[channelId] ?: emptyList()
-                val byId = existing.associateBy { it.id }.toMutableMap()
-                firestoreMsgs.forEach { byId[it.id] = it }
-                _messages.value = _messages.value + (channelId to byId.values.toList())
+            if (snapshot == null) return@addSnapshotListener
+            val nowMs = System.currentTimeMillis()
+            val sortedDocs = snapshot.documents.sortedBy { it.getLong("createdAtMs") ?: 0L }
+            val firestoreMsgs = sortedDocs.mapNotNull { doc ->
+                mapFirestoreDocToMessage(doc, channelId, currentUserId)
             }
+            val existing = _messages.value[channelId] ?: emptyList()
+            val reconciled = reconcileTargetMessages(
+                existing = existing,
+                cloudMessages = firestoreMsgs,
+                hasPendingWrites = snapshot.metadata.hasPendingWrites(),
+                inFlightTimestamps = inFlightMessageTimestamps,
+                nowMs = nowMs
+            )
+            _messages.value = _messages.value + (channelId to reconciled)
         }
 
         activeChannelMetaListener = channelRef.addSnapshotListener { snap, err ->
@@ -1040,16 +1171,21 @@ class ChatRepository(
                     Log.w("ChatRepo", "DM messages snapshot error", error)
                     return@addSnapshotListener
                 }
-                if (snapshot != null && !snapshot.isEmpty) {
-                    val sortedDocs = snapshot.documents.sortedBy { it.getLong("createdAtMs") ?: 0L }
-                    val firestoreMsgs = sortedDocs.mapNotNull { doc ->
-                        mapFirestoreDocToMessage(doc, dmId, currentUser.uid)
-                    }
-                    val existing = _messages.value[dmId] ?: emptyList()
-                    val byId = existing.associateBy { it.id }.toMutableMap()
-                    firestoreMsgs.forEach { byId[it.id] = it }
-                    _messages.value = _messages.value + (dmId to byId.values.toList())
+                if (snapshot == null) return@addSnapshotListener
+                val nowMs = System.currentTimeMillis()
+                val sortedDocs = snapshot.documents.sortedBy { it.getLong("createdAtMs") ?: 0L }
+                val firestoreMsgs = sortedDocs.mapNotNull { doc ->
+                    mapFirestoreDocToMessage(doc, dmId, currentUser.uid)
                 }
+                val existing = _messages.value[dmId] ?: emptyList()
+                val reconciled = reconcileTargetMessages(
+                    existing = existing,
+                    cloudMessages = firestoreMsgs,
+                    hasPendingWrites = snapshot.metadata.hasPendingWrites(),
+                    inFlightTimestamps = inFlightMessageTimestamps,
+                    nowMs = nowMs
+                )
+                _messages.value = _messages.value + (dmId to reconciled)
             }
     }
 
@@ -1059,11 +1195,21 @@ class ChatRepository(
         targetId: String,
         currentUserId: String
     ): Message? {
-        val text = doc.getString("text") ?: ""
+        val nowMs = System.currentTimeMillis()
+        val ephemeralExpiresAtMs = doc.getLong("ephemeralExpiresAtMs")
+        if (ephemeralExpiresAtMs != null && ephemeralExpiresAtMs <= nowMs) {
+            return null
+        }
+        val rawText = doc.getString("text") ?: ""
         val senderName = doc.getString("senderName") ?: "Membre"
         val senderId = doc.getString("senderId") ?: ""
-        val imageUrl = doc.getString("imageUrl")
-        val audioUrl = doc.getString("audioUrl")
+        val senderAvatarUrl = doc.getString("senderAvatarUrl")?.takeIf { it.isNotBlank() }
+        val rawImageUrl = doc.getString("imageUrl")?.takeIf { it.isNotBlank() }
+        val audioUrl = doc.getString("audioUrl")?.takeIf { it.isNotBlank() }
+        val audioDurationSec = doc.getLong("audioDurationSec")?.toInt() ?: 0
+        val waveformAmplitudes = (doc.get("waveformAmplitudes") as? List<*>)
+            ?.mapNotNull { (it as? Number)?.toInt() }
+            ?: emptyList()
         val replyToText = doc.getString("replyToText")
         val stickerId = doc.getString("stickerId")
         val attachmentName = doc.getString("attachmentName")
@@ -1072,6 +1218,12 @@ class ChatRepository(
         val isPinned = doc.getBoolean("isPinned") ?: false
         val isEdited = doc.getBoolean("isEdited") ?: false
         val threadCount = doc.getLong("threadCount")?.toInt() ?: 0
+        val isViewOnce = doc.getBoolean("isViewOnce") ?: false
+        val viewedByIds = (doc.get("viewedByIds") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+        val readByIds = (doc.get("readByIds") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+        val forwardedFrom = doc.getString("forwardedFrom")?.takeIf { it.isNotBlank() }
+        val totalOrbsTipped = doc.getLong("totalOrbsTipped")?.toInt() ?: 0
+        val mentions = (doc.get("mentions") as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
         val reactions = parseReactionsFromDoc(doc, currentUserId)
         val createdAtMs = doc.getLong("createdAtMs")
         val timeLabel = if (createdAtMs != null && createdAtMs > 0L) {
@@ -1079,6 +1231,10 @@ class ChatRepository(
         } else {
             SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
         }
+
+        val redactedViewOnce = isViewOnce && senderId != currentUserId && currentUserId in viewedByIds
+        val finalImageUrl = if (redactedViewOnce) null else rawImageUrl
+        val finalText = if (redactedViewOnce) "Photo vue unique déjà ouverte" else rawText
 
         val rawPoll = doc.get("poll") as? Map<String, Any?>
         val parsedPoll = rawPoll?.let { pollMap ->
@@ -1121,25 +1277,35 @@ class ChatRepository(
                 id = senderId,
                 name = senderName,
                 tag = if (isBotMsg) "#BOT" else "#0001",
+                avatarUrl = senderAvatarUrl,
                 avatarColor = if (isBotMsg) 0xFF25D366L else 0xFF404249L,
                 role = if (isBotMsg) UserRole.BOT else UserRole.MEMBER
             ),
-            text = text,
+            text = finalText,
             timestamp = timeLabel,
             replyToText = replyToText,
             reactions = reactions,
-            imageUrl = imageUrl,
+            imageUrl = finalImageUrl,
             audioUrl = audioUrl,
-            stickerId = stickerId,
+            audioDurationSec = audioDurationSec,
+            waveformAmplitudes = waveformAmplitudes,
             attachmentName = attachmentName,
             attachmentType = attachmentType,
             attachmentSizeLabel = attachmentSizeLabel,
+            stickerId = stickerId,
             isPinned = isPinned,
+            mentions = mentions,
             isEdited = isEdited,
             threadCount = threadCount,
             poll = parsedPoll,
             isBotMessage = isBotMsg,
-            botQuickReplies = parsedQuickReplies
+            botQuickReplies = parsedQuickReplies,
+            ephemeralExpiresAtMs = ephemeralExpiresAtMs,
+            isViewOnce = isViewOnce,
+            viewedByIds = viewedByIds,
+            readByIds = readByIds,
+            forwardedFrom = forwardedFrom,
+            totalOrbsTipped = totalOrbsTipped
         )
     }
 
@@ -1156,13 +1322,15 @@ class ChatRepository(
                     if (count > 0) Reaction(emoji = emoji, count = count, userReacted = false) else null
                 }
                 is Map<*, *> -> {
-                    val count = (value["count"] as? Number)?.toInt() ?: 0
-                    val users = (value["users"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
-                    if (count > 0) {
+                    val users = (value["users"] as? List<*>)?.mapNotNull { it as? String }?.distinct() ?: emptyList()
+                    val rawCount = (value["count"] as? Number)?.toInt() ?: users.size
+                    val resolvedCount = maxOf(rawCount, users.size)
+                    if (resolvedCount > 0) {
                         Reaction(
                             emoji = emoji,
-                            count = count,
-                            userReacted = currentUserId in users
+                            count = resolvedCount,
+                            userReacted = currentUserId in users,
+                            reactedUserIds = users
                         )
                     } else null
                 }
@@ -1287,8 +1455,72 @@ class ChatRepository(
         attachmentName: String? = null,
         attachmentType: String? = null
     ) {
-        if (text.isBlank() && imageUrl == null && audioUrl == null && attachmentName == null) return
-        if (!canPostInTarget(targetId, text)) return
+        sendMessageInternal(
+            targetId = targetId,
+            text = text,
+            imageUrl = imageUrl,
+            audioUrl = audioUrl,
+            audioDurationSec = audioDurationSec,
+            attachmentName = attachmentName,
+            attachmentType = attachmentType
+        )
+    }
+
+    fun sendRichMessage(
+        targetId: String,
+        text: String,
+        imageUrl: String? = null,
+        audioUrl: String? = null,
+        audioDurationSec: Int = 0,
+        waveformAmplitudes: List<Int> = emptyList(),
+        isViewOnce: Boolean = false
+    ) {
+        sendMessageInternal(
+            targetId = targetId,
+            text = text,
+            imageUrl = imageUrl,
+            audioUrl = audioUrl,
+            audioDurationSec = audioDurationSec,
+            waveformAmplitudes = waveformAmplitudes,
+            isViewOnce = isViewOnce
+        )
+    }
+
+    internal fun sendMessageInternal(
+        targetId: String,
+        text: String,
+        imageUrl: String? = null,
+        audioUrl: String? = null,
+        audioDurationSec: Int = 0,
+        attachmentName: String? = null,
+        attachmentType: String? = null,
+        waveformAmplitudes: List<Int> = emptyList(),
+        isViewOnce: Boolean = false,
+        bypassOfflineQueue: Boolean = false
+    ): Boolean {
+        if (text.isBlank() && imageUrl == null && audioUrl == null && attachmentName == null) return false
+        if (!canPostInTarget(targetId, text)) return false
+
+        if (!bypassOfflineQueue && !advancedHelper.isEffectivelyOnline()) {
+            val label = findChannelById(targetId)?.let { "#${it.name}" }
+                ?: _directConversations.value.find { it.id == targetId }?.let { it.groupName ?: it.friend.name }
+                ?: targetId
+            advancedHelper.enqueueOfflineMessage(
+                targetId = targetId,
+                targetLabel = label,
+                text = text.trim(),
+                imageUrl = imageUrl,
+                audioUrl = audioUrl,
+                audioDurationSec = audioDurationSec,
+                waveformAmplitudes = waveformAmplitudes,
+                isViewOnce = isViewOnce
+            )
+            _replyingToMessage.value = null
+            if (_draftsByTarget.value.containsKey(targetId)) {
+                _draftsByTarget.value = _draftsByTarget.value - targetId
+            }
+            return true
+        }
 
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
         val currentTime = timeFormat.format(Date())
@@ -1302,6 +1534,14 @@ class ChatRepository(
             .filter { it.startsWith("@") && it.length > 1 }
             .map { it.removePrefix("@") }
 
+        val ephDurationSec = _ephemeralTimersByTargetValue(targetId)
+        val expiresAt = if (ephDurationSec > 0) System.currentTimeMillis() + ephDurationSec * 1000L else null
+        val resolvedWaveform = when {
+            waveformAmplitudes.isNotEmpty() -> waveformAmplitudes
+            audioUrl != null -> listOf(22, 48, 72, 38, 86, 64, 42, 78, 54, 90, 60, 35, 68, 44, 28)
+            else -> emptyList()
+        }
+
         val newMessage = Message(
             id = "msg_${UUID.randomUUID().toString().take(8)}",
             channelId = targetId,
@@ -1313,12 +1553,17 @@ class ChatRepository(
             imageUrl = imageUrl,
             audioUrl = audioUrl,
             audioDurationSec = audioDurationSec,
+            waveformAmplitudes = resolvedWaveform,
             attachmentName = attachmentName,
             attachmentType = attachmentType,
-            mentions = mentions
+            mentions = mentions,
+            ephemeralExpiresAtMs = expiresAt,
+            isViewOnce = isViewOnce,
+            readByIds = listOf(_currentUser.value.id)
         )
 
         // Optimistic local update & clear draft
+        inFlightMessageTimestamps[newMessage.id] = System.currentTimeMillis()
         val currentList = _messages.value[targetId] ?: emptyList()
         _messages.value = _messages.value + (targetId to (currentList + newMessage))
         _replyingToMessage.value = null
@@ -1329,6 +1574,7 @@ class ChatRepository(
         // Update DM last message
         if (_selectedServerId.value == "dm_tab" || targetId.startsWith("dm_") || targetId.startsWith("grp_")) {
             val preview = when {
+                isViewOnce -> "Photo vue unique"
                 text.isNotBlank() -> text
                 imageUrl != null -> "Image partagée"
                 audioUrl != null -> "Note vocale ($audioDurationSec s)"
@@ -1349,6 +1595,7 @@ class ChatRepository(
         // Sync with Firestore if available and authenticated
         friendBridgeHook?.touchCurrentUserActivity()
         syncNewMessageToFirestore(newMessage, targetId)
+        advancedHelper.refreshHomeWidget()
 
         // Dispatch message event to installed Raven Bots (channels & DMs) and sandboxed extensions
         val ch = findChannelById(targetId)
@@ -1358,27 +1605,59 @@ class ChatRepository(
         } else if (ch == null && newMessage.sender.role != UserRole.BOT) {
             botDmMessageHandler?.invoke(targetId, newMessage)
         }
+        return true
     }
 
+    private fun _ephemeralTimersByTargetValue(targetId: String): Int =
+        advancedHelper.ephemeralTimersByTarget.value[targetId] ?: 0
+
     private fun syncNewMessageToFirestore(newMessage: Message, targetId: String) {
-        val db = firestore ?: return
-        val user = currentAuth()?.currentUser ?: return
+        val db = firestore
+        val user = currentAuth()?.currentUser
+        if (db == null || user == null) {
+            inFlightMessageTimestamps.remove(newMessage.id)
+            return
+        }
+        inFlightMessageTimestamps[newMessage.id] = System.currentTimeMillis()
         val targetChannel = findChannelById(targetId)
+        val resolvedSenderName = _currentUser.value.name.takeIf { it.isNotBlank() }
+            ?: user.displayName?.takeIf { it.isNotBlank() }
+            ?: "Membre"
+        val resolvedReadBy = (newMessage.readByIds + user.uid)
+            .filter { it.isNotBlank() && it != "user_me" }
+            .distinct()
+        val createdAtMs = System.currentTimeMillis()
         val payload = hashMapOf<String, Any>(
             "senderId" to user.uid,
-            "senderName" to (user.displayName?.takeIf { it.isNotBlank() } ?: _currentUser.value.name),
-            "text" to newMessage.text,
+            "senderName" to resolvedSenderName.take(64),
+            "text" to newMessage.text.take(2000),
             "isPinned" to newMessage.isPinned,
             "isEdited" to newMessage.isEdited,
+            "isViewOnce" to newMessage.isViewOnce,
             "threadCount" to newMessage.threadCount,
-            "createdAtMs" to System.currentTimeMillis(),
+            "totalOrbsTipped" to newMessage.totalOrbsTipped,
+            "readByIds" to resolvedReadBy,
+            "createdAtMs" to createdAtMs,
             "createdAt" to FieldValue.serverTimestamp()
         )
-        newMessage.imageUrl?.let { payload["imageUrl"] = it }
-        newMessage.audioUrl?.let { payload["audioUrl"] = it }
-        newMessage.replyToText?.let { payload["replyToText"] = it }
-        newMessage.stickerId?.let { payload["stickerId"] = it }
-        newMessage.attachmentName?.let { payload["attachmentName"] = it }
+        newMessage.sender.avatarUrl?.takeIf {
+            it.isNotBlank() && (it.startsWith("https://") || it.startsWith("http://") || it.startsWith("/"))
+        }?.let { payload["senderAvatarUrl"] = it.take(900) }
+        newMessage.imageUrl?.takeIf { it.isNotBlank() }?.let { payload["imageUrl"] = it }
+        newMessage.audioUrl?.takeIf { it.isNotBlank() }?.let { payload["audioUrl"] = it }
+        if (newMessage.audioDurationSec > 0) payload["audioDurationSec"] = newMessage.audioDurationSec
+        if (newMessage.waveformAmplitudes.isNotEmpty()) {
+            payload["waveformAmplitudes"] = newMessage.waveformAmplitudes.take(128)
+        }
+        newMessage.replyToText?.takeIf { it.isNotBlank() }?.let { payload["replyToText"] = it.take(200) }
+        newMessage.stickerId?.takeIf { it.isNotBlank() }?.let { payload["stickerId"] = it.take(80) }
+        newMessage.attachmentName?.takeIf { it.isNotBlank() }?.let { payload["attachmentName"] = it.take(200) }
+        newMessage.attachmentType?.takeIf { it.isNotBlank() }?.let { payload["attachmentType"] = it.take(64) }
+        newMessage.attachmentSizeLabel?.takeIf { it.isNotBlank() }?.let { payload["attachmentSizeLabel"] = it.take(40) }
+        newMessage.forwardedFrom?.takeIf { it.isNotBlank() }?.let { payload["forwardedFrom"] = it.take(120) }
+        newMessage.ephemeralExpiresAtMs?.let { payload["ephemeralExpiresAtMs"] = it }
+        if (newMessage.mentions.isNotEmpty()) payload["mentions"] = newMessage.mentions.take(50)
+        if (newMessage.viewedByIds.isNotEmpty()) payload["viewedByIds"] = newMessage.viewedByIds.take(200)
         newMessage.poll?.let { poll ->
             payload["poll"] = hashMapOf<String, Any>(
                 "question" to poll.question,
@@ -1397,22 +1676,16 @@ class ChatRepository(
             try {
                 if (targetChannel == null) {
                     val dmConv = _directConversations.value.find { it.id == targetId }
-                    val participantIds = when {
-                        dmConv == null -> listOf(user.uid)
-                        dmConv.isGroup -> (dmConv.groupMembers.map { it.id } + user.uid)
-                            .filter { it.isNotBlank() }.distinct().sorted()
-                        else -> listOf(user.uid, dmConv.friend.id)
-                            .filter { it.isNotBlank() }.distinct().sorted()
-                    }
+                    val participantIds = inferDmParticipants(targetId, user.uid, dmConv)
                     payload["participantIds"] = participantIds
                     val dmDoc = db.collection("direct_conversations").document(targetId)
                     val dmMeta = hashMapOf<String, Any>(
                         "id" to targetId,
                         "participantIds" to participantIds,
                         "isGroup" to (dmConv?.isGroup == true),
-                        "lastMessage" to newMessage.text.ifBlank { newMessage.attachmentName ?: "Média" },
+                        "lastMessage" to newMessage.text.ifBlank { newMessage.attachmentName ?: "Média" }.take(500),
                         "lastMessageTime" to newMessage.timestamp,
-                        "updatedAtMs" to System.currentTimeMillis(),
+                        "updatedAtMs" to createdAtMs,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
                     dmConv?.groupName?.takeIf { it.isNotBlank() }?.let { dmMeta["groupName"] = it }
@@ -1430,6 +1703,8 @@ class ChatRepository(
                 }
             } catch (e: Exception) {
                 Log.w("ChatRepo", "Firestore message write failed", e)
+            } finally {
+                inFlightMessageTimestamps.remove(newMessage.id)
             }
         }
     }
@@ -1444,28 +1719,44 @@ class ChatRepository(
 
     fun toggleReaction(channelId: String, messageId: String, emoji: String) {
         val currentList = _messages.value[channelId] ?: return
-        var updatedMessageReactions: List<Reaction>? = null
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        var localAdded = false
         val updatedList = currentList.map { msg ->
             if (msg.id == messageId) {
                 val existing = msg.reactions.find { it.emoji == emoji }
                 val newReactions = if (existing != null) {
                     if (existing.userReacted) {
-                        if (existing.count <= 1) {
+                        localAdded = false
+                        val nextUsers = existing.reactedUserIds.filterNot { it == actorUid }
+                        val nextCount = maxOf(0, maxOf(nextUsers.size, existing.count - 1))
+                        if (nextCount <= 0) {
                             msg.reactions.filterNot { it.emoji == emoji }
                         } else {
                             msg.reactions.map {
-                                if (it.emoji == emoji) it.copy(count = it.count - 1, userReacted = false) else it
+                                if (it.emoji == emoji) {
+                                    it.copy(count = nextCount, userReacted = false, reactedUserIds = nextUsers)
+                                } else it
                             }
                         }
                     } else {
+                        localAdded = true
+                        val nextUsers = (existing.reactedUserIds + actorUid).distinct()
+                        val nextCount = maxOf(existing.count + 1, nextUsers.size)
                         msg.reactions.map {
-                            if (it.emoji == emoji) it.copy(count = it.count + 1, userReacted = true) else it
+                            if (it.emoji == emoji) {
+                                it.copy(count = nextCount, userReacted = true, reactedUserIds = nextUsers)
+                            } else it
                         }
                     }
                 } else {
-                    msg.reactions + Reaction(emoji = emoji, count = 1, userReacted = true)
+                    localAdded = true
+                    msg.reactions + Reaction(
+                        emoji = emoji,
+                        count = 1,
+                        userReacted = true,
+                        reactedUserIds = listOf(actorUid)
+                    )
                 }
-                updatedMessageReactions = newReactions
                 msg.copy(reactions = newReactions)
             } else {
                 msg
@@ -1476,17 +1767,46 @@ class ChatRepository(
 
         val db = firestore ?: return
         val authUser = currentAuth()?.currentUser ?: return
-        val reactionsSnapshot = updatedMessageReactions ?: return
-        val firestoreReactions = reactionsSnapshot.associate { r ->
-            r.emoji to mapOf(
-                "count" to r.count,
-                "users" to if (r.userReacted) listOf(authUser.uid) else emptyList()
-            )
-        }
+        val msgRef = resolveMessageDocRef(db, channelId, messageId)
         scope.launch(Dispatchers.IO) {
             try {
-                resolveMessageDocRef(db, channelId, messageId)
-                    .update(mapOf("reactions" to firestoreReactions, "updatedAt" to FieldValue.serverTimestamp()))
+                Tasks.await(
+                    db.runTransaction { tx ->
+                        val snap = tx.get(msgRef)
+                        if (!snap.exists()) return@runTransaction null
+                        @Suppress("UNCHECKED_CAST")
+                        val currentMap = (snap.get("reactions") as? Map<String, Any?>).orEmpty().toMutableMap()
+                        @Suppress("UNCHECKED_CAST")
+                        val existingEntry = currentMap[emoji] as? Map<String, Any?>
+                        val existingUsers = (existingEntry?.get("users") as? List<*>)
+                            ?.mapNotNull { it as? String }
+                            ?.toMutableList()
+                            ?: mutableListOf()
+                        val hasReacted = authUser.uid in existingUsers
+                        val shouldAdd = if (existingEntry != null) !hasReacted else localAdded
+                        if (shouldAdd) {
+                            if (authUser.uid !in existingUsers) existingUsers.add(authUser.uid)
+                        } else {
+                            existingUsers.removeAll { it == authUser.uid }
+                        }
+                        if (existingUsers.isEmpty()) {
+                            currentMap.remove(emoji)
+                        } else {
+                            currentMap[emoji] = mapOf(
+                                "count" to existingUsers.size,
+                                "users" to existingUsers.distinct()
+                            )
+                        }
+                        tx.update(
+                            msgRef,
+                            mapOf(
+                                "reactions" to currentMap,
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                        null
+                    }
+                )
             } catch (e: Exception) {
                 Log.w("ChatRepo", "Failed to sync reaction to Firestore", e)
             }
@@ -1495,6 +1815,19 @@ class ChatRepository(
 
     fun togglePinMessage(channelId: String, messageId: String) {
         val currentList = _messages.value[channelId] ?: return
+        val targetMsg = currentList.find { it.id == messageId } ?: return
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        val ch = findChannelById(channelId)
+        if (ch != null) {
+            val srv = _servers.value.find { it.id == ch.serverId }
+            val isSender = targetMsg.sender.id == actorUid || targetMsg.sender.id == "user_me"
+            val isStaff = srv != null && CommunityPermissions.effectiveRole(srv, actorUid) in setOf(UserRole.ADMIN, UserRole.MODERATOR)
+            if (!isSender && !isStaff) {
+                _lastSendBlockedReason.value = "Permission insuffisante pour épingler ou désépingler ce message."
+                return
+            }
+        }
+
         var nextPinned = false
         val updatedList = currentList.map { msg ->
             if (msg.id == messageId) {
@@ -1518,8 +1851,20 @@ class ChatRepository(
 
     fun deleteMessage(channelId: String, messageId: String) {
         val currentList = _messages.value[channelId] ?: return
+        val targetMsg = currentList.find { it.id == messageId } ?: return
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        val ch = findChannelById(channelId)
+        val srv = ch?.let { c -> _servers.value.find { it.id == c.serverId } }
+        val isStaff = srv != null && (CommunityPermissions.hasPermission(srv, actorUid, RolePermission.MODERATE_MEMBERS) || CommunityPermissions.isCreatorOrAdmin(srv, actorUid))
+        val isAuthor = targetMsg.sender.id == actorUid || targetMsg.sender.id == "user_me" || targetMsg.isBotMessage
+        if (!isAuthor && !isStaff) {
+            _lastSendBlockedReason.value = "Vous ne pouvez supprimer que vos propres messages."
+            return
+        }
+
         val updatedList = currentList.filterNot { it.id == messageId }
         _messages.value = _messages.value + (channelId to updatedList)
+        inFlightMessageTimestamps.remove(messageId)
 
         val db = firestore ?: return
         currentAuth()?.currentUser ?: return
@@ -1706,6 +2051,14 @@ class ChatRepository(
         slowmodeSeconds: Int = 0,
         isReadOnly: Boolean = false
     ) {
+        val srv = _servers.value.find { it.id == serverId }
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        if (srv != null && !CommunityPermissions.hasPermission(srv, actorUid, RolePermission.MANAGE_VOICE) &&
+            !CommunityPermissions.hasPermission(srv, actorUid, RolePermission.MANAGE_CHANNELS)
+        ) {
+            _lastSendBlockedReason.value = "Permission insuffisante pour modifier ce salon."
+            return
+        }
         val clampedMax = maxParticipants.coerceIn(0, 50)
         _servers.value = _servers.value.map { server ->
             if (server.id == serverId) {
@@ -1915,7 +2268,7 @@ class ChatRepository(
     }
 
     fun updateOrbsBalance(balance: Int) {
-        _currentUser.value = _currentUser.value.copy(orbsBalance = balance)
+        _currentUser.value = _currentUser.value.copy(orbsBalance = balance.coerceAtLeast(0))
         saveProfileToFirestore()
     }
 
@@ -1927,6 +2280,101 @@ class ChatRepository(
     fun equipProfileEffect(effectKey: String?) {
         _currentUser.value = _currentUser.value.copy(profileEffect = effectKey)
         saveProfileToFirestore()
+    }
+
+    fun toggleShopFavorite(itemId: String) {
+        val curr = _currentUser.value
+        val updated = if (curr.favoriteShopItemIds.contains(itemId)) {
+            curr.favoriteShopItemIds - itemId
+        } else {
+            curr.favoriteShopItemIds + itemId
+        }
+        _currentUser.value = curr.copy(favoriteShopItemIds = updated)
+        saveProfileToFirestore()
+    }
+
+    fun equipChatThemeFromShop(themeId: String?, targetChatId: String? = null) {
+        val curr = _currentUser.value
+        _currentUser.value = curr.copy(equippedChatThemeId = themeId)
+        if (!themeId.isNullOrBlank() && !targetChatId.isNullOrBlank()) {
+            val theme = ShopCatalog.initialChatThemes.find { it.id == themeId }
+            if (theme != null) {
+                _chatBackgrounds.value = _chatBackgrounds.value + (targetChatId to theme)
+            }
+        }
+        saveProfileToFirestore()
+    }
+
+    fun purchaseShopItem(
+        item: ShopItem,
+        targetChatId: String? = null
+    ): Boolean {
+        val curr = _currentUser.value
+        val alreadyOwned = curr.purchasedShopItemIds.contains(item.id)
+        if (!alreadyOwned && curr.orbsBalance < item.priceOrbs) return false
+
+        val newBalance = if (alreadyOwned) curr.orbsBalance else (curr.orbsBalance - item.priceOrbs)
+        val grantedIds = buildSet {
+            addAll(curr.purchasedShopItemIds)
+            add(item.id)
+            addAll(item.bundleItemIds)
+        }.toList()
+
+        val allGrantedCatalogItems = grantedIds.mapNotNull { id ->
+            ShopCatalog.initialShopItems.find { it.id == id }
+        }
+
+        val unlockedBadgeIds = buildSet {
+            addAll(curr.badges)
+            item.badgeId?.let { add(it) }
+            allGrantedCatalogItems.mapNotNull { it.badgeId }.forEach { add(it) }
+        }.toList()
+
+        val isDeco = item.category in ShopCatalog.avatarDecorationCategories ||
+            item.bundleItemIds.any { bId ->
+                ShopCatalog.initialShopItems.find { it.id == bId }?.category in ShopCatalog.avatarDecorationCategories
+            }
+        val grantedDecoKey = if (item.category in ShopCatalog.avatarDecorationCategories) {
+            item.decorationKey
+        } else {
+            item.bundleItemIds.firstNotNullOfOrNull { bId ->
+                ShopCatalog.initialShopItems.find { it.id == bId && it.category in ShopCatalog.avatarDecorationCategories }?.decorationKey
+            }
+        }
+
+        val grantedEffectKey = if (item.category == ShopCategory.PROFILE_EFFECT) {
+            item.decorationKey
+        } else {
+            item.bundleItemIds.firstNotNullOfOrNull { bId ->
+                ShopCatalog.initialShopItems.find { it.id == bId && it.category == ShopCategory.PROFILE_EFFECT }?.decorationKey
+            }
+        }
+
+        val grantedThemeKey = if (item.category == ShopCategory.CHAT_THEME) {
+            item.decorationKey
+        } else {
+            item.bundleItemIds.firstNotNullOfOrNull { bId ->
+                ShopCatalog.initialShopItems.find { it.id == bId && it.category == ShopCategory.CHAT_THEME }?.decorationKey
+            }
+        }
+
+        if (!grantedThemeKey.isNullOrBlank() && !targetChatId.isNullOrBlank()) {
+            ShopCatalog.initialChatThemes.find { it.id == grantedThemeKey }?.let { theme ->
+                _chatBackgrounds.value = _chatBackgrounds.value + (targetChatId to theme)
+            }
+        }
+
+        _currentUser.value = curr.copy(
+            orbsBalance = newBalance,
+            purchasedShopItemIds = grantedIds,
+            badges = unlockedBadgeIds,
+            avatarDecoration = if (isDeco && !grantedDecoKey.isNullOrBlank()) grantedDecoKey else curr.avatarDecoration,
+            profileEffect = grantedEffectKey ?: curr.profileEffect,
+            equippedChatThemeId = grantedThemeKey ?: curr.equippedChatThemeId
+        )
+        advanceQuest("q_profile")
+        saveProfileToFirestore()
+        return true
     }
 
     fun createPoll(
@@ -1957,7 +2405,7 @@ class ChatRepository(
 
     fun votePoll(targetId: String, messageId: String, optionId: String) {
         val currentList = _messages.value[targetId] ?: return
-        val userId = _currentUser.value.id
+        val userId = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
         var updatedPoll: Poll? = null
         val updatedList = currentList.map { msg ->
             if (msg.id == messageId && msg.poll != null) {
@@ -1986,21 +2434,66 @@ class ChatRepository(
         advanceQuest("q_poll")
 
         val db = firestore ?: return
-        currentAuth()?.currentUser ?: return
+        val authUser = currentAuth()?.currentUser ?: return
         val pollSnapshot = updatedPoll ?: return
+        val msgRef = resolveMessageDocRef(db, targetId, messageId)
         scope.launch(Dispatchers.IO) {
             try {
-                resolveMessageDocRef(db, targetId, messageId).update(
-                    mapOf(
-                        "poll" to mapOf(
-                            "question" to pollSnapshot.question,
-                            "allowsMultiple" to pollSnapshot.allowsMultiple,
-                            "options" to pollSnapshot.options.map { opt ->
+                Tasks.await(
+                    db.runTransaction { tx ->
+                        val snap = tx.get(msgRef)
+                        if (!snap.exists()) return@runTransaction null
+                        @Suppress("UNCHECKED_CAST")
+                        val rawPoll = snap.get("poll") as? Map<String, Any?>
+                        @Suppress("UNCHECKED_CAST")
+                        val rawOptions = rawPoll?.get("options") as? List<Map<String, Any?>>
+                        val allowsMultiple = (rawPoll?.get("allowsMultiple") as? Boolean) ?: pollSnapshot.allowsMultiple
+                        val question = (rawPoll?.get("question") as? String) ?: pollSnapshot.question
+                        val durationLabel = (rawPoll?.get("durationLabel") as? String) ?: pollSnapshot.durationLabel
+                        val isClosed = (rawPoll?.get("isClosed") as? Boolean) ?: pollSnapshot.isClosed
+                        val advId = (rawPoll?.get("advancedPollId") as? String) ?: pollSnapshot.advancedPollId
+
+                        val mergedOptions = if (rawOptions != null) {
+                            val currentlyVotedTarget = rawOptions.any { opt ->
+                                (opt["id"] as? String) == optionId &&
+                                    ((opt["votes"] as? List<*>)?.any { it == authUser.uid } == true)
+                            }
+                            rawOptions.mapIndexed { idx, opt ->
+                                val oid = (opt["id"] as? String) ?: "opt_$idx"
+                                val otext = (opt["text"] as? String) ?: ""
+                                val votes = ((opt["votes"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()).toMutableList()
+                                if (oid == optionId) {
+                                    if (currentlyVotedTarget) votes.removeAll { it == authUser.uid }
+                                    else if (authUser.uid !in votes) votes.add(authUser.uid)
+                                } else if (!allowsMultiple) {
+                                    votes.removeAll { it == authUser.uid }
+                                }
+                                mapOf("id" to oid, "text" to otext, "votes" to votes.distinct())
+                            }
+                        } else {
+                            pollSnapshot.options.map { opt ->
                                 mapOf("id" to opt.id, "text" to opt.text, "votes" to opt.votes)
                             }
-                        ),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
+                        }
+
+                        val newPollMap = hashMapOf<String, Any>(
+                            "question" to question,
+                            "allowsMultiple" to allowsMultiple,
+                            "durationLabel" to durationLabel,
+                            "isClosed" to isClosed,
+                            "options" to mergedOptions
+                        ).apply {
+                            advId?.takeIf { it.isNotBlank() }?.let { put("advancedPollId", it) }
+                        }
+                        tx.update(
+                            msgRef,
+                            mapOf(
+                                "poll" to newPollMap,
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                        null
+                    }
                 )
             } catch (e: Exception) {
                 Log.w("ChatRepo", "Failed to sync poll vote", e)
@@ -2108,6 +2601,8 @@ class ChatRepository(
             "level" to user.level,
             "badges" to user.badges,
             "unlockedStickers" to user.unlockedStickers,
+            "purchasedShopItemIds" to user.purchasedShopItemIds,
+            "favoriteShopItemIds" to user.favoriteShopItemIds,
             "themeMode" to settings.themeMode.name,
             "accentColorHex" to settings.accentColorHex,
             "chatDisplayStyle" to settings.chatDisplayStyle.name,
@@ -2119,6 +2614,8 @@ class ChatRepository(
             "voiceNoiseSuppression" to settings.voiceNoiseSuppression,
             "localNotificationsEnabled" to settings.localNotificationsEnabled,
             "platformLayoutOverride" to settings.platformLayoutOverride.name,
+            "requireCodeOnAppLaunch" to settings.requireCodeOnAppLaunch,
+            "onboardingCompleted" to _onboardingCompleted.value,
             "dailyStreak" to _dailyStreak.value,
             "streakClaimedToday" to _streakClaimedToday.value,
             "privateUserNotes" to _privateUserNotes.value,
@@ -2130,6 +2627,7 @@ class ChatRepository(
         user.email?.let { data["email"] = it }
         user.avatarDecoration?.let { data["avatarDecoration"] = it }
         user.profileEffect?.let { data["profileEffect"] = it }
+        user.equippedChatThemeId?.let { data["equippedChatThemeId"] = it }
         cachedFcmToken?.let { data["fcmToken"] = it }
 
         val publicProfile = hashMapOf<String, Any>(
@@ -2158,8 +2656,10 @@ class ChatRepository(
         _isCloudSyncing.value = true
         scope.launch(Dispatchers.IO) {
             try {
-                Tasks.await(db.collection("users").document(authUser.uid).set(data))
-                Tasks.await(db.collection("public_profiles").document(authUser.uid).set(publicProfile))
+                val profileBatch = db.batch()
+                profileBatch.set(db.collection("users").document(authUser.uid), data)
+                profileBatch.set(db.collection("public_profiles").document(authUser.uid), publicProfile)
+                Tasks.await(profileBatch.commit())
                 // Also sync user-owned custom servers (skip default shared mock server_main unless explicitly created in cloud)
                 _servers.value.filter {
                     !it.isDmTab && it.id != "server_main" &&
@@ -2261,10 +2761,25 @@ class ChatRepository(
                         ?: curr.unlockedStickers
                     val loadedBadges = (doc.get("badges") as? List<*>)?.mapNotNull { it as? String }
                         ?: curr.badges
+                    val loadedPurchasedShop = (doc.get("purchasedShopItemIds") as? List<*>)?.mapNotNull { it as? String }
+                        ?: curr.purchasedShopItemIds
+                    val loadedFavoriteShop = (doc.get("favoriteShopItemIds") as? List<*>)?.mapNotNull { it as? String }
+                        ?: curr.favoriteShopItemIds
+                    val statusStr = doc.getString("status")
+                    val restoredStatus = UserStatus.entries.firstOrNull { it.name == statusStr } ?: curr.status
+                    val restoredOnboarding = doc.getBoolean("onboardingCompleted") ?: _onboardingCompleted.value
+                    _onboardingCompleted.value = restoredOnboarding
                     _currentUser.value = curr.copy(
                         name = doc.getString("name") ?: curr.name,
+                        tag = doc.getString("tag") ?: curr.tag,
                         bio = doc.getString("bio") ?: curr.bio,
                         pronouns = doc.getString("pronouns") ?: curr.pronouns,
+                        avatarUrl = doc.getString("avatarUrl") ?: curr.avatarUrl,
+                        avatarColor = doc.getLong("avatarColor") ?: curr.avatarColor,
+                        bannerUrl = doc.getString("bannerUrl") ?: curr.bannerUrl,
+                        bannerColor = doc.getLong("bannerColor") ?: curr.bannerColor,
+                        status = restoredStatus,
+                        email = doc.getString("email") ?: curr.email,
                         customStatus = doc.getString("customStatus") ?: curr.customStatus,
                         customStatusEmoji = doc.getString("customStatusEmoji") ?: curr.customStatusEmoji,
                         activity = doc.getString("activity") ?: curr.activity,
@@ -2274,7 +2789,10 @@ class ChatRepository(
                         avatarDecoration = doc.getString("avatarDecoration") ?: curr.avatarDecoration,
                         profileEffect = doc.getString("profileEffect") ?: curr.profileEffect,
                         badges = loadedBadges,
-                        unlockedStickers = loadedStickers
+                        unlockedStickers = loadedStickers,
+                        purchasedShopItemIds = loadedPurchasedShop,
+                        favoriteShopItemIds = loadedFavoriteShop,
+                        equippedChatThemeId = doc.getString("equippedChatThemeId") ?: curr.equippedChatThemeId
                     )
                     doc.getLong("dailyStreak")?.toInt()?.let { _dailyStreak.value = it }
                     doc.getBoolean("streakClaimedToday")?.let { _streakClaimedToday.value = it }
@@ -2306,6 +2824,7 @@ class ChatRepository(
                         val layoutStr = doc.getString("platformLayoutOverride")
                         val layoutOverride = PlatformLayoutOverride.entries.find { it.name == layoutStr }
                             ?: _appSettings.value.platformLayoutOverride
+                        val requireCodeLaunch = doc.getBoolean("requireCodeOnAppLaunch") ?: _appSettings.value.requireCodeOnAppLaunch
                         _appSettings.value = _appSettings.value.copy(
                             themeMode = mode,
                             accentColorHex = accentHex,
@@ -2315,7 +2834,8 @@ class ChatRepository(
                             soundEffectsEnabled = soundOn,
                             voiceNoiseSuppression = noiseOn,
                             localNotificationsEnabled = notifOn,
-                            platformLayoutOverride = layoutOverride
+                            platformLayoutOverride = layoutOverride,
+                            requireCodeOnAppLaunch = requireCodeLaunch
                         )
                         jukeboxAudioEngine?.applyEqPreset(eqPreset)
                         com.example.util.SoundFxHelper.isSoundEnabled = soundOn
@@ -2479,6 +2999,14 @@ class ChatRepository(
         val trimmed = newText.trim()
         if (trimmed.isBlank()) return
         val currentList = _messages.value[channelId] ?: return
+        val targetMsg = currentList.find { it.id == messageId } ?: return
+        val firebaseUser = currentAuth()?.currentUser
+        val actorUid = firebaseUser?.uid ?: _currentUser.value.id
+        val isDemoSeedWithoutAuth = firebaseUser == null && targetMsg.id.startsWith("m_")
+        if (!isDemoSeedWithoutAuth && targetMsg.sender.id != actorUid && targetMsg.sender.id != "user_me") {
+            _lastSendBlockedReason.value = "Vous ne pouvez modifier que vos propres messages."
+            return
+        }
         val updated = currentList.map { msg ->
             if (msg.id == messageId) msg.copy(text = trimmed, isEdited = true) else msg
         }
@@ -2497,6 +3025,46 @@ class ChatRepository(
         }
     }
 
+    fun listenToMessageThreads(targetId: String, parentMessageId: String) {
+        val db = firestore ?: return
+        val authUser = currentAuth()?.currentUser ?: return
+        activeThreadListener?.remove()
+
+        val parentRef = resolveMessageDocRef(db, targetId, parentMessageId)
+        val ch = findChannelById(targetId)
+        val query = if (ch != null) {
+            val (isPublic, _) = serverScopeInfo(ch.serverId)
+            if (isPublic) {
+                parentRef.collection("threads").whereEqualTo("isPublic", true)
+            } else {
+                parentRef.collection("threads").whereArrayContains("memberIds", authUser.uid)
+            }
+        } else {
+            parentRef.collection("threads").whereArrayContains("participantIds", authUser.uid)
+        }
+
+        activeThreadListener = query.addSnapshotListener { snap, err ->
+            if (err != null || snap == null) return@addSnapshotListener
+            val cloudReplies = snap.documents
+                .sortedBy { it.getLong("createdAtMs") ?: 0L }
+                .mapNotNull { doc -> mapFirestoreDocToMessage(doc, targetId, authUser.uid) }
+            val existing = _threads.value[parentMessageId] ?: emptyList()
+            val reconciled = reconcileTargetMessages(
+                existing = existing,
+                cloudMessages = cloudReplies,
+                hasPendingWrites = snap.metadata.hasPendingWrites(),
+                inFlightTimestamps = inFlightMessageTimestamps,
+                nowMs = System.currentTimeMillis()
+            )
+            _threads.value = _threads.value + (parentMessageId to reconciled)
+        }
+    }
+
+    fun stopListeningToMessageThreads() {
+        activeThreadListener?.remove()
+        activeThreadListener = null
+    }
+
     fun sendThreadMessage(channelId: String, parentMessageId: String, text: String) {
         val trimmed = text.trim()
         if (trimmed.isBlank()) return
@@ -2509,15 +3077,146 @@ class ChatRepository(
             text = trimmed,
             timestamp = currentTime
         )
+        inFlightMessageTimestamps[replyMsg.id] = System.currentTimeMillis()
         val existing = _threads.value[parentMessageId] ?: emptyList()
         val updatedReplies = existing + replyMsg
         _threads.value = _threads.value + (parentMessageId to updatedReplies)
 
         val channelMessages = _messages.value[channelId] ?: emptyList()
         _messages.value = _messages.value + (channelId to channelMessages.map {
-            if (it.id == parentMessageId) it.copy(threadCount = updatedReplies.size) else it
+            if (it.id == parentMessageId) it.copy(threadCount = maxOf(it.threadCount + 1, updatedReplies.size)) else it
         })
         grantXp(10, "Réponse dans un fil")
+
+        val db = firestore
+        val authUser = currentAuth()?.currentUser
+        if (db == null || authUser == null) {
+            inFlightMessageTimestamps.remove(replyMsg.id)
+            return
+        }
+        val ch = findChannelById(channelId)
+        val createdAtMs = System.currentTimeMillis()
+        val resolvedSenderName = _currentUser.value.name.takeIf { it.isNotBlank() }
+            ?: authUser.displayName?.takeIf { it.isNotBlank() }
+            ?: "Membre"
+        scope.launch(Dispatchers.IO) {
+            try {
+                val payload = hashMapOf<String, Any>(
+                    "senderId" to authUser.uid,
+                    "senderName" to resolvedSenderName.take(64),
+                    "text" to trimmed.take(2000),
+                    "isEdited" to false,
+                    "createdAtMs" to createdAtMs,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+                _currentUser.value.avatarUrl?.takeIf {
+                    it.isNotBlank() && (it.startsWith("https://") || it.startsWith("http://") || it.startsWith("/"))
+                }?.let { payload["senderAvatarUrl"] = it.take(900) }
+                if (ch != null) {
+                    val (isPublic, memberIds) = ensureServerAndChannelInFirestore(db, ch.serverId, ch, authUser.uid)
+                    payload["isPublic"] = isPublic
+                    payload["memberIds"] = memberIds
+                } else {
+                    val dmConv = _directConversations.value.find { it.id == channelId }
+                    payload["participantIds"] = inferDmParticipants(channelId, authUser.uid, dmConv)
+                }
+                val parentRef = resolveMessageDocRef(db, channelId, parentMessageId)
+                Tasks.await(parentRef.collection("threads").document(replyMsg.id).set(payload))
+                Tasks.await(
+                    parentRef.update(
+                        mapOf(
+                            "threadCount" to FieldValue.increment(1),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w("ChatRepo", "Failed to sync thread reply", e)
+            } finally {
+                inFlightMessageTimestamps.remove(replyMsg.id)
+            }
+        }
+    }
+
+    internal fun syncViewOnceOpened(targetId: String, messageId: String, viewerUid: String, redactMedia: Boolean) {
+        val db = firestore ?: return
+        val authUser = currentAuth()?.currentUser ?: return
+        val msgRef = resolveMessageDocRef(db, targetId, messageId)
+        scope.launch(Dispatchers.IO) {
+            try {
+                val updates = hashMapOf<String, Any?>(
+                    "viewedByIds" to FieldValue.arrayUnion(viewerUid.ifBlank { authUser.uid }),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                if (redactMedia) {
+                    updates["imageUrl"] = null
+                    updates["text"] = "Photo vue unique déjà ouverte"
+                }
+                Tasks.await(msgRef.update(updates))
+            } catch (e: Exception) {
+                Log.w("ChatRepo", "Failed to sync view-once state", e)
+            }
+        }
+    }
+
+    internal fun syncMessagesRead(targetId: String, messageIds: List<String>, readerUid: String) {
+        if (messageIds.isEmpty()) return
+        val db = firestore ?: return
+        val authUser = currentAuth()?.currentUser ?: return
+        val uid = readerUid.ifBlank { authUser.uid }
+        scope.launch(Dispatchers.IO) {
+            messageIds.distinct().take(40).forEach { msgId ->
+                try {
+                    Tasks.await(
+                        resolveMessageDocRef(db, targetId, msgId).update(
+                            mapOf(
+                                "readByIds" to FieldValue.arrayUnion(uid),
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
+                        )
+                    )
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    internal fun syncForwardedMessage(copyMsg: Message, destId: String) {
+        syncNewMessageToFirestore(copyMsg, destId)
+    }
+
+    internal fun syncMessageOrbsTip(targetId: String, messageId: String, amountOrbs: Int) {
+        if (amountOrbs <= 0) return
+        val db = firestore ?: return
+        currentAuth()?.currentUser ?: return
+        scope.launch(Dispatchers.IO) {
+            try {
+                Tasks.await(
+                    resolveMessageDocRef(db, targetId, messageId).update(
+                        mapOf(
+                            "totalOrbsTipped" to FieldValue.increment(amountOrbs.toLong()),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                )
+            } catch (e: Exception) {
+                Log.w("ChatRepo", "Failed to sync Orbs tip", e)
+            }
+        }
+    }
+
+    internal fun deleteExpiredMessagesFromCloud(targetsAndMsgIds: List<Pair<String, String>>) {
+        if (targetsAndMsgIds.isEmpty()) return
+        val db = firestore ?: return
+        currentAuth()?.currentUser ?: return
+        scope.launch(Dispatchers.IO) {
+            targetsAndMsgIds.take(40).forEach { (targetId, msgId) ->
+                try {
+                    Tasks.await(resolveMessageDocRef(db, targetId, msgId).delete())
+                } catch (_: Exception) {
+                }
+            }
+        }
     }
 
     fun grantXp(amount: Int, reason: String) {
@@ -2559,7 +3258,7 @@ class ChatRepository(
         activeNotificationsListener = db.collection("users").document(uid)
             .collection("notifications")
             .addSnapshotListener { snap, err ->
-                if (err != null || snap == null || snap.isEmpty) return@addSnapshotListener
+                if (err != null || snap == null) return@addSnapshotListener
                 val cloudNotifs = snap.documents.sortedByDescending { it.getLong("createdAtMs") ?: 0L }
                     .mapNotNull { doc ->
                         val title = doc.getString("title") ?: return@mapNotNull null
@@ -2579,8 +3278,15 @@ class ChatRepository(
                             isRead = isRead
                         )
                     }
-                val merged = (cloudNotifs + _notifications.value).distinctBy { it.id }
-                _notifications.value = merged
+                if (snap.metadata.hasPendingWrites()) {
+                    _notifications.value = (cloudNotifs + _notifications.value).distinctBy { it.id }
+                } else {
+                    val cloudIds = cloudNotifs.map { it.id }.toSet()
+                    val retainedLocal = _notifications.value.filter { n ->
+                        n.id !in cloudIds && !n.id.startsWith("notif_")
+                    }
+                    _notifications.value = (cloudNotifs + retainedLocal).distinctBy { it.id }
+                }
             }
     }
 
@@ -2689,14 +3395,35 @@ class ChatRepository(
     }
 
     fun updateAppSettings(transform: (AppSettingsState) -> AppSettingsState) {
-        val next = transform(_appSettings.value)
+        val prev = _appSettings.value
+        val next = transform(prev)
         _appSettings.value = next
         com.example.util.SoundFxHelper.isSoundEnabled = next.soundEffectsEnabled
+        if (prev.simulateOfflineMode && !next.simulateOfflineMode) {
+            advancedHelper.flushOfflineQueue()
+        }
+    }
+
+    fun toggleLockedConversation(targetId: String) {
+        updateAppSettings { s ->
+            val nextSet = if (targetId in s.lockedConversationIds) {
+                s.lockedConversationIds - targetId
+            } else {
+                s.lockedConversationIds + targetId
+            }
+            s.copy(lockedConversationIds = nextSet)
+        }
     }
 
     fun renameServer(serverId: String, newName: String) {
         val clean = newName.trim()
         if (clean.isBlank()) return
+        val srv = _servers.value.find { it.id == serverId } ?: return
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        if (!CommunityPermissions.hasPermission(srv, actorUid, RolePermission.MANAGE_COMMUNITY)) {
+            _lastSendBlockedReason.value = "Permission insuffisante pour renommer ce serveur."
+            return
+        }
         _servers.value = _servers.value.map { server ->
             if (server.id == serverId) {
                 val log = AuditLogEntry(
@@ -2706,12 +3433,33 @@ class ChatRepository(
                     targetName = clean,
                     timestamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
                 )
-                server.copy(name = clean, auditLogs = listOf(log) + server.auditLogs)
+                server.copy(name = clean, iconText = clean.take(2).uppercase(), auditLogs = listOf(log) + server.auditLogs)
             } else server
+        }
+        val db = firestore
+        val authUser = currentAuth()?.currentUser
+        if (db != null && authUser != null && serverId != "server_main") {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    Tasks.await(
+                        db.collection("servers").document(serverId).update(
+                            mapOf("name" to clean, "iconText" to clean.take(2).uppercase(), "updatedAt" to FieldValue.serverTimestamp())
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w("ChatRepo", "Failed to sync server rename", e)
+                }
+            }
         }
     }
 
     fun regenerateInviteCode(serverId: String) {
+        val srv = _servers.value.find { it.id == serverId } ?: return
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        if (!CommunityPermissions.hasPermission(srv, actorUid, RolePermission.MANAGE_INVITES)) {
+            _lastSendBlockedReason.value = "Permission insuffisante pour régénérer le code d'invitation."
+            return
+        }
         val randomCode = "RAVEN-${(1000..9999).random()}"
         _servers.value = _servers.value.map { server ->
             if (server.id == serverId) {
@@ -2724,6 +3472,21 @@ class ChatRepository(
                 )
                 server.copy(inviteCode = randomCode, auditLogs = listOf(log) + server.auditLogs)
             } else server
+        }
+        val db = firestore
+        val authUser = currentAuth()?.currentUser
+        if (db != null && authUser != null && serverId != "server_main") {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    Tasks.await(
+                        db.collection("servers").document(serverId).update(
+                            mapOf("inviteCode" to randomCode, "updatedAt" to FieldValue.serverTimestamp())
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w("ChatRepo", "Failed to sync regenerated invite code", e)
+                }
+            }
         }
     }
 
@@ -2791,6 +3554,11 @@ class ChatRepository(
         if (isAdmin && !CommunityPermissions.isOwner(targetSrv, actorUid)) {
             _lastSendBlockedReason.value =
                 "Seul le créateur du serveur ou de la communauté peut créer un rôle administrateur."
+            return
+        }
+        if (!isAdmin && !CommunityPermissions.hasPermission(targetSrv, actorUid, RolePermission.MANAGE_ROLES)) {
+            _lastSendBlockedReason.value =
+                "Permission insuffisante pour créer un rôle personnalisé."
             return
         }
         val newRole = CustomRole(
@@ -2955,10 +3723,22 @@ class ChatRepository(
     }
 
     fun timeoutMember(serverId: String, userId: String) {
+        val srv = _servers.value.find { it.id == serverId } ?: return
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        if (!CommunityPermissions.hasPermission(srv, actorUid, RolePermission.MODERATE_MEMBERS)) {
+            _lastSendBlockedReason.value = "Permission insuffisante pour appliquer un timeout."
+            return
+        }
+        if (userId == srv.ownerId || (CommunityPermissions.effectiveRole(srv, userId) == UserRole.ADMIN && !CommunityPermissions.isOwner(srv, actorUid))) {
+            _lastSendBlockedReason.value = "Impossible d'appliquer un timeout au créateur ou à un administrateur."
+            return
+        }
+        var resultingTimeout = false
         _servers.value = _servers.value.map { server ->
             if (server.id == serverId) {
                 val target = server.members.find { it.id == userId } ?: return@map server
                 val nextTimedOut = !target.isTimedOut
+                resultingTimeout = nextTimedOut
                 val log = AuditLogEntry(
                     id = "log_${UUID.randomUUID().toString().take(6)}",
                     actorName = _currentUser.value.name,
@@ -2974,10 +3754,37 @@ class ChatRepository(
                 )
             } else server
         }
+        val db = firestore
+        val authUser = currentAuth()?.currentUser
+        if (db != null && authUser != null && serverId != "server_main") {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    Tasks.await(
+                        db.collection("servers").document(serverId)
+                            .collection("members").document(userId)
+                            .update(mapOf("isTimedOut" to resultingTimeout, "updatedAt" to FieldValue.serverTimestamp()))
+                    )
+                } catch (_: Exception) {
+                }
+            }
+        }
     }
 
     fun kickMember(serverId: String, userId: String) {
-        if (userId == _currentUser.value.id || userId == "user_me") return
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        if (userId == actorUid || userId == _currentUser.value.id || userId == "user_me") return
+        val srv = _servers.value.find { it.id == serverId } ?: return
+        if (!CommunityPermissions.hasPermission(srv, actorUid, RolePermission.MODERATE_MEMBERS)) {
+            _lastSendBlockedReason.value = "Permission insuffisante pour expulser un membre."
+            return
+        }
+        val targetRole = CommunityPermissions.effectiveRole(srv, userId)
+        val isActorOwner = CommunityPermissions.isOwner(srv, actorUid)
+        val isActorAdmin = CommunityPermissions.isCreatorOrAdmin(srv, actorUid)
+        if (userId == srv.ownerId || (targetRole == UserRole.ADMIN && !isActorOwner) || (targetRole == UserRole.MODERATOR && !isActorAdmin)) {
+            _lastSendBlockedReason.value = "Vous ne pouvez pas expulser un membre de rang supérieur ou égal."
+            return
+        }
         _servers.value = _servers.value.map { server ->
             if (server.id == serverId) {
                 val target = server.members.find { it.id == userId } ?: return@map server
@@ -2990,9 +3797,27 @@ class ChatRepository(
                 )
                 server.copy(
                     members = server.members.filterNot { it.id == userId },
+                    adminIds = server.adminIds - userId,
+                    moderatorIds = server.moderatorIds - userId,
                     auditLogs = listOf(log) + server.auditLogs
                 )
             } else server
+        }
+        val db = firestore
+        val authUser = currentAuth()?.currentUser
+        if (db != null && authUser != null && serverId != "server_main") {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val srvRef = db.collection("servers").document(serverId)
+                    val remainingMembers = _servers.value.find { it.id == serverId }
+                        ?.members?.map { it.id }?.filter { it.isNotBlank() && it != "user_me" }
+                        ?: emptyList()
+                    Tasks.await(srvRef.collection("members").document(userId).delete())
+                    Tasks.await(srvRef.update(mapOf("memberIds" to remainingMembers, "updatedAt" to FieldValue.serverTimestamp())))
+                } catch (e: Exception) {
+                    Log.w("ChatRepo", "Failed to sync member kick", e)
+                }
+            }
         }
     }
 
@@ -3575,6 +4400,14 @@ class ChatRepository(
         slowmodeSeconds: Int,
         isReadOnly: Boolean
     ) {
+        val srv = _servers.value.find { it.id == serverId }
+        val actorUid = currentAuth()?.currentUser?.uid ?: _currentUser.value.id
+        if (srv != null && !CommunityPermissions.hasPermission(srv, actorUid, RolePermission.MANAGE_CHANNELS) &&
+            !CommunityPermissions.hasPermission(srv, actorUid, RolePermission.MANAGE_VOICE)
+        ) {
+            _lastSendBlockedReason.value = "Permission insuffisante pour modifier ce salon."
+            return
+        }
         _servers.value = _servers.value.map { server ->
             if (server.id == serverId) {
                 var chName = ""
@@ -4338,5 +5171,116 @@ class ChatRepository(
             }
         }
         return reminder
+    }
+
+    // --- Advanced Features Delegates (Ephemeral, View-Once, Forwarding, Orbs, Forum, Rules, Calls, Offline) ---
+    fun setEphemeralTimer(targetId: String, durationSeconds: Int) =
+        advancedHelper.setEphemeralTimer(targetId, durationSeconds)
+
+    fun openViewOnceMessage(targetId: String, messageId: String): Message? =
+        advancedHelper.openViewOnceMessage(targetId, messageId)
+
+    fun markTargetMessagesRead(targetId: String) =
+        advancedHelper.markTargetMessagesRead(targetId)
+
+    fun forwardMessageToTargets(message: Message, targetIds: List<String>) =
+        advancedHelper.forwardMessageToTargets(message, targetIds)
+
+    fun tipOrbsOnMessage(targetId: String, messageId: String, amountOrbs: Int): Boolean =
+        advancedHelper.tipOrbsOnMessage(targetId, messageId, amountOrbs)
+
+    fun donateOrbsToServerTreasury(serverId: String, amountOrbs: Int): Boolean =
+        advancedHelper.donateOrbsToServerTreasury(serverId, amountOrbs)
+
+    fun setRequireRulesAcceptance(serverId: String, required: Boolean) =
+        advancedHelper.setRequireRulesAcceptance(serverId, required)
+
+    fun acceptServerRules(serverId: String) =
+        advancedHelper.acceptServerRules(serverId)
+
+    fun createForumPost(
+        channelId: String,
+        serverId: String,
+        title: String,
+        content: String,
+        tags: List<String>,
+        status: ForumPostStatus = ForumPostStatus.OPEN
+    ): ForumPost? = advancedHelper.createForumPost(channelId, serverId, title, content, tags, status)
+
+    fun toggleForumPostUpvote(channelId: String, postId: String) =
+        advancedHelper.toggleForumPostUpvote(channelId, postId)
+
+    fun addForumReply(channelId: String, postId: String, content: String) =
+        advancedHelper.addForumReply(channelId, postId, content)
+
+    fun updateForumPostStatus(channelId: String, postId: String, status: ForumPostStatus) =
+        advancedHelper.updateForumPostStatus(channelId, postId, status)
+
+    fun startDirectCall(
+        peerUser: User,
+        isVideo: Boolean,
+        isGroupCall: Boolean = false,
+        groupName: String? = null
+    ) = advancedHelper.startDirectCall(peerUser, isVideo, isGroupCall, groupName)
+
+    fun simulateIncomingCall(peerUser: User, isVideo: Boolean) =
+        advancedHelper.simulateIncomingCall(peerUser, isVideo)
+
+    fun answerDirectCall() = advancedHelper.answerDirectCall()
+    fun toggleCallMinimized(minimized: Boolean? = null) = advancedHelper.toggleCallMinimized(minimized)
+    fun toggleCallMute() = advancedHelper.toggleCallMute()
+    fun toggleCallCamera() = advancedHelper.toggleCallCamera()
+    fun toggleCallSpeaker() = advancedHelper.toggleCallSpeaker()
+    fun endDirectCall() = advancedHelper.endDirectCall()
+
+    fun flushOfflineQueue(): Int = advancedHelper.flushOfflineQueue()
+    fun isEffectivelyOnline(): Boolean = advancedHelper.isEffectivelyOnline()
+    fun refreshHomeWidget(activeStoriesCount: Int = 2) = advancedHelper.refreshHomeWidget(activeStoriesCount)
+
+    companion object {
+        private const val IN_FLIGHT_RETENTION_MS = 15_000L
+
+        internal fun inferDmParticipants(
+            targetId: String,
+            selfUid: String,
+            dmConv: DirectConversation?
+        ): List<String> {
+            val base = when {
+                dmConv == null -> {
+                    val raw = targetId.removePrefix("dm_")
+                    val splitParts = raw.split("__").filter { it.isNotBlank() && it != "user_me" }
+                    if (splitParts.size >= 2) {
+                        splitParts + selfUid
+                    } else if (raw.isNotBlank() && raw != selfUid && !targetId.startsWith("grp_")) {
+                        listOf(selfUid, raw)
+                    } else {
+                        listOf(selfUid)
+                    }
+                }
+                dmConv.isGroup -> dmConv.groupMembers.map { it.id } + dmConv.participantIds + selfUid
+                else -> dmConv.participantIds + listOf(selfUid, dmConv.friend.id)
+            }
+            return base.filter { it.isNotBlank() && it != "user_me" }.distinct().sorted()
+        }
+
+        internal fun reconcileTargetMessages(
+            existing: List<Message>,
+            cloudMessages: List<Message>,
+            hasPendingWrites: Boolean,
+            inFlightTimestamps: Map<String, Long>,
+            nowMs: Long
+        ): List<Message> {
+            val cloudById = cloudMessages.associateBy { it.id }
+            val result = cloudMessages.toMutableList()
+            existing.forEach { local ->
+                if (local.id in cloudById) return@forEach
+                val inFlightTs = inFlightTimestamps[local.id]
+                val isRecentInFlight = inFlightTs != null && (nowMs - inFlightTs) < IN_FLIGHT_RETENTION_MS
+                if (local.isOfflineQueued || hasPendingWrites || isRecentInFlight) {
+                    result.add(local)
+                }
+            }
+            return result.distinctBy { it.id }
+        }
     }
 }

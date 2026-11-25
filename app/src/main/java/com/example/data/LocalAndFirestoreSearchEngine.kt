@@ -476,6 +476,7 @@ class LocalAndFirestoreSearchEngine(
                     ChannelType.VOICE -> "🔊"
                     ChannelType.STAGE -> "🎙️"
                     ChannelType.ANNOUNCEMENT -> "📢"
+                    ChannelType.FORUM -> "💬"
                     ChannelType.TEXT -> "#"
                 }
                 results += UnifiedSearchResult(

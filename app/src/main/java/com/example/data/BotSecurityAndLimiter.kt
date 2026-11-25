@@ -61,17 +61,60 @@ object BotTokenManager {
 
     fun isValidHttpsWebhookUrl(rawUrl: String): Boolean {
         val trimmed = rawUrl.trim()
+        if (trimmed.length > 512) return false
         val parsed = trimmed.toHttpUrlOrNull() ?: return false
         if (!parsed.isHttps) return false
-        val host = parsed.host.lowercase()
+        if (parsed.username.isNotEmpty() || parsed.password.isNotEmpty()) return false
+        val host = parsed.host.lowercase().trimEnd('.')
         if (host.isBlank() || !host.contains('.')) return false
-        if (host == "localhost" || host.endsWith(".local") || host.endsWith(".internal")) return false
-        if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.") ||
-            host == "0.0.0.0" || host.startsWith("169.254.")
+        if (host.contains(':') || host.startsWith("[")) return false
+        if (host == "localhost" || host.endsWith(".localhost") ||
+            host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".arpa")
         ) {
             return false
         }
+        // Reject raw IPv4 literals pointing to private, loopback, link-local, or CGNAT space
+        val ipv4Parts = host.split('.')
+        if (ipv4Parts.size == 4 && ipv4Parts.all { part -> part.toIntOrNull() in 0..255 }) {
+            val b0 = ipv4Parts[0].toInt()
+            val b1 = ipv4Parts[1].toInt()
+            if (isPrivateOrReservedIpv4(b0, b1)) return false
+        }
         return true
+    }
+
+    fun isPublicInetAddress(addr: java.net.InetAddress): Boolean {
+        if (addr.isAnyLocalAddress ||
+            addr.isLoopbackAddress ||
+            addr.isLinkLocalAddress ||
+            addr.isSiteLocalAddress ||
+            addr.isMulticastAddress
+        ) {
+            return false
+        }
+        val bytes = addr.address
+        if (bytes.size == 4) {
+            val b0 = bytes[0].toInt() and 0xFF
+            val b1 = bytes[1].toInt() and 0xFF
+            if (isPrivateOrReservedIpv4(b0, b1)) return false
+        } else if (bytes.size == 16) {
+            val b0 = bytes[0].toInt() and 0xFF
+            // Block IPv6 unique local (fc00::/7)
+            if ((b0 and 0xFE) == 0xFC) return false
+        }
+        return true
+    }
+
+    private fun isPrivateOrReservedIpv4(b0: Int, b1: Int): Boolean {
+        return when {
+            b0 == 0 || b0 == 10 || b0 == 127 -> true
+            b0 == 100 && b1 in 64..127 -> true // CGNAT 100.64.0.0/10
+            b0 == 169 && b1 == 254 -> true // Link-local / metadata 169.254.0.0/16
+            b0 == 172 && b1 in 16..31 -> true
+            b0 == 192 && b1 == 168 -> true
+            b0 >= 224 -> true // Multicast / reserved
+            else -> false
+        }
     }
 
     private fun bytesToHex(bytes: ByteArray): String {

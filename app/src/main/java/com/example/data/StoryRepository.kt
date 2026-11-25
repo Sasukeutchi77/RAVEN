@@ -182,12 +182,16 @@ class StoryRepository(
         }
     }
 
+    internal fun memberServerIds(): Set<String> =
+        chatRepo.servers.value.filter { !it.isDmTab }.map { it.id }.toSet()
+
     fun activeVisibleStories(): List<StoryItem> {
         val now = nowProvider()
         val uid = currentUid()
         val blocked = blockedAuthorIds()
+        val srvIds = memberServerIds()
         return _stories.value
-            .filter { !it.isExpired(now) && it.canBeViewedBy(uid, blocked) }
+            .filter { !it.isExpired(now) && it.canBeViewedBy(uid, blocked, srvIds) }
             .sortedByDescending { it.createdAtMs }
     }
 
@@ -225,7 +229,14 @@ class StoryRepository(
         textColorHex: Long = 0xFFFFFFFFL,
         visibility: StoryVisibility = StoryVisibility.PUBLIC,
         customAllowedViewerIds: Set<String> = emptySet(),
-        durationHours: Int = 24
+        durationHours: Int = 24,
+        allowedServerId: String? = null,
+        stickerText: String? = null,
+        stickerStyle: String = "GLASS",
+        quickPollQuestion: String? = null,
+        quickPollOptions: List<String> = emptyList(),
+        musicTrackTitle: String? = null,
+        musicTrackArtist: String? = null
     ): Result<StoryItem> {
         val cleanText = textContent.trim()
         if (cleanText.isBlank()) {
@@ -246,7 +257,14 @@ class StoryRepository(
             textColorHex = textColorHex,
             visibility = visibility,
             customAllowedViewerIds = customAllowedViewerIds,
-            durationHours = durationHours
+            durationHours = durationHours,
+            allowedServerId = allowedServerId,
+            stickerText = stickerText,
+            stickerStyle = stickerStyle,
+            quickPollQuestion = quickPollQuestion,
+            quickPollOptions = quickPollOptions,
+            musicTrackTitle = musicTrackTitle,
+            musicTrackArtist = musicTrackArtist
         )
     }
 
@@ -257,7 +275,14 @@ class StoryRepository(
         caption: String = "",
         visibility: StoryVisibility = StoryVisibility.PUBLIC,
         customAllowedViewerIds: Set<String> = emptySet(),
-        durationHours: Int = 24
+        durationHours: Int = 24,
+        allowedServerId: String? = null,
+        stickerText: String? = null,
+        stickerStyle: String = "GLASS",
+        quickPollQuestion: String? = null,
+        quickPollOptions: List<String> = emptyList(),
+        musicTrackTitle: String? = null,
+        musicTrackArtist: String? = null
     ): Result<StoryItem> {
         if (mediaType == StoryMediaType.TEXT) {
             return Result.failure(IllegalArgumentException("Type média invalide."))
@@ -272,7 +297,14 @@ class StoryRepository(
                 caption = caption,
                 visibility = visibility,
                 customAllowedViewerIds = customAllowedViewerIds,
-                durationHours = durationHours
+                durationHours = durationHours,
+                allowedServerId = allowedServerId,
+                stickerText = stickerText,
+                stickerStyle = stickerStyle,
+                quickPollQuestion = quickPollQuestion,
+                quickPollOptions = quickPollOptions,
+                musicTrackTitle = musicTrackTitle,
+                musicTrackArtist = musicTrackArtist
             )
         }
     }
@@ -285,7 +317,14 @@ class StoryRepository(
         caption: String = "",
         visibility: StoryVisibility = StoryVisibility.PUBLIC,
         customAllowedViewerIds: Set<String> = emptySet(),
-        durationHours: Int = 24
+        durationHours: Int = 24,
+        allowedServerId: String? = null,
+        stickerText: String? = null,
+        stickerStyle: String = "GLASS",
+        quickPollQuestion: String? = null,
+        quickPollOptions: List<String> = emptyList(),
+        musicTrackTitle: String? = null,
+        musicTrackArtist: String? = null
     ): Result<StoryItem> {
         if (mediaType == StoryMediaType.TEXT) {
             return Result.failure(IllegalArgumentException("Utilisez publishTextStory pour une story texte."))
@@ -309,7 +348,14 @@ class StoryRepository(
             textColorHex = 0xFFFFFFFFL,
             visibility = visibility,
             customAllowedViewerIds = customAllowedViewerIds,
-            durationHours = durationHours
+            durationHours = durationHours,
+            allowedServerId = allowedServerId,
+            stickerText = stickerText,
+            stickerStyle = stickerStyle,
+            quickPollQuestion = quickPollQuestion,
+            quickPollOptions = quickPollOptions,
+            musicTrackTitle = musicTrackTitle,
+            musicTrackArtist = musicTrackArtist
         )
     }
 
@@ -325,11 +371,21 @@ class StoryRepository(
         textColorHex: Long,
         visibility: StoryVisibility,
         customAllowedViewerIds: Set<String>,
-        durationHours: Int
+        durationHours: Int,
+        allowedServerId: String? = null,
+        stickerText: String? = null,
+        stickerStyle: String = "GLASS",
+        quickPollQuestion: String? = null,
+        quickPollOptions: List<String> = emptyList(),
+        musicTrackTitle: String? = null,
+        musicTrackArtist: String? = null
     ): Result<StoryItem> {
         val safeHours = durationHours.coerceIn(1, 168)
         if (visibility == StoryVisibility.CUSTOM_USERS && customAllowedViewerIds.isEmpty()) {
             return Result.failure(IllegalArgumentException("Sélectionnez au moins un utilisateur pour une story personnalisée."))
+        }
+        if (visibility == StoryVisibility.SERVER_MEMBERS && allowedServerId.isNullOrBlank()) {
+            return Result.failure(IllegalArgumentException("Sélectionnez un serveur pour restreindre cette story."))
         }
 
         val uid = currentUid()
@@ -340,7 +396,22 @@ class StoryRepository(
         val resolvedAllowed = when (visibility) {
             StoryVisibility.PUBLIC -> emptyList()
             StoryVisibility.FRIENDS -> (friendIds() + uid).distinct().take(200)
+            StoryVisibility.SERVER_MEMBERS -> {
+                val srvMembers = chatRepo.servers.value
+                    .find { it.id == allowedServerId }
+                    ?.members
+                    ?.map { it.id }
+                    .orEmpty()
+                (srvMembers + uid - blockedAuthorIds()).distinct().take(200)
+            }
             StoryVisibility.CUSTOM_USERS -> (customAllowedViewerIds + uid - blockedAuthorIds()).distinct().take(200)
+        }
+
+        val cleanPollQ = quickPollQuestion?.trim()?.takeIf { it.isNotBlank() }?.take(120)
+        val cleanPollOpts = if (cleanPollQ != null) {
+            quickPollOptions.map { it.trim() }.filter { it.isNotBlank() }.distinct().take(4)
+        } else {
+            emptyList()
         }
 
         val storyId = "story_${UUID.randomUUID().toString().replace("-", "").take(12)}"
@@ -362,12 +433,20 @@ class StoryRepository(
             textColorHex = textColorHex,
             visibility = visibility,
             allowedViewerIds = resolvedAllowed,
+            allowedServerId = allowedServerId,
             durationHours = safeHours,
             createdAtMs = now,
             expiresAtMs = expiresAt,
             viewCount = 0,
             viewerIds = emptyList(),
-            viewers = emptyList()
+            viewers = emptyList(),
+            stickerText = stickerText?.trim()?.takeIf { it.isNotBlank() }?.take(100),
+            stickerStyle = stickerStyle.ifBlank { "GLASS" },
+            quickPollQuestion = cleanPollQ,
+            quickPollOptions = cleanPollOpts,
+            quickPollVotes = cleanPollOpts.associateWith { 0 },
+            musicTrackTitle = musicTrackTitle?.trim()?.takeIf { it.isNotBlank() },
+            musicTrackArtist = musicTrackArtist?.trim()?.takeIf { it.isNotBlank() }
         )
 
         val db = chatRepo.firestoreDb()
@@ -581,6 +660,45 @@ class StoryRepository(
         }
         _stories.value = _stories.value.map { if (it.id == storyId) updatedStory else it }
         return Result.success(updatedStory)
+    }
+
+    suspend fun voteOnStoryQuickPoll(storyId: String, option: String): Result<StoryItem> {
+        val story = _stories.value.find { it.id == storyId }
+            ?: return Result.failure(NoSuchElementException("Story introuvable."))
+        if (story.quickPollQuestion.isNullOrBlank() || option !in story.quickPollOptions) {
+            return Result.failure(IllegalArgumentException("Option de sondage invalide."))
+        }
+        val uid = currentUid()
+        if (uid in story.quickPollVotedByIds) {
+            return Result.success(story)
+        }
+        val nextVotes = story.quickPollVotes.toMutableMap().apply {
+            this[option] = (this[option] ?: 0) + 1
+        }
+        val nextVotedByIds = (story.quickPollVotedByIds + uid).distinct()
+        val updated = story.copy(
+            quickPollVotes = nextVotes,
+            quickPollVotedByIds = nextVotedByIds
+        )
+        val db = chatRepo.firestoreDb()
+        val authUser = chatRepo.authInstance()?.currentUser
+        if (db != null && authUser != null && !storyId.startsWith("story_demo_")) {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    StoryFirestoreSync.voteQuickPollBlocking(
+                        db = db,
+                        storyId = storyId,
+                        nextVotes = nextVotes,
+                        nextVotedByIds = (story.quickPollVotedByIds + authUser.uid).distinct()
+                    )
+                }
+            }
+        }
+        synchronized(cloudStoriesMap) {
+            cloudStoriesMap[storyId] = updated
+        }
+        _stories.value = _stories.value.map { if (it.id == storyId) updated else it }
+        return Result.success(updated)
     }
 
     suspend fun deleteStory(storyId: String): Result<Unit> {

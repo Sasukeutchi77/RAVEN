@@ -498,6 +498,7 @@ class ServerCustomizationRepository(
         val updated = srv.copy(
             rulesGuidelines = joinedGuidelines,
             serverRulesList = cleanRules.ifEmpty { joinedGuidelines.split("\n").map { it.trim() }.filter { it.isNotBlank() } },
+            requireRulesAcceptance = requireRulesAcceptance,
             customization = srv.customization.copy(
                 verificationLevel = verificationLevel,
                 requireRulesAcceptance = requireRulesAcceptance

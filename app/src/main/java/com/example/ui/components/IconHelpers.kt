@@ -121,6 +121,9 @@ object AppIconSets {
             "bug_hunter" -> Icons.Default.PestControl
             "voice_master" -> Icons.Default.RecordVoiceOver
             "community_leader" -> Icons.Default.WorkspacePremium
+            "orbs_neophyte" -> Icons.Default.Stars
+            "cyber_legend" -> Icons.Default.Memory
+            "void_monarch" -> Icons.Default.Flare
             else -> Icons.Default.Shield
         }
     }
@@ -450,36 +453,37 @@ fun AvatarDecorationOverlay(
                         style = Stroke(width = 3f)
                     )
 
+                    // Outer ethereal double-wing feather layers
                     rotate(wingFlap, pivot = Offset(center.x - baseRadius, center.y)) {
                         val leftWingPath = Path().apply {
                             val lx = center.x - baseRadius
                             val ly = center.y
-                            moveTo(lx, ly - 4f)
+                            moveTo(lx, ly - 5f)
                             cubicTo(
-                                lx - baseRadius * 0.5f, ly - baseRadius * 0.45f,
-                                lx - baseRadius * 0.6f, ly + baseRadius * 0.1f,
-                                lx - 4f, ly + 8f
+                                lx - baseRadius * 0.65f, ly - baseRadius * 0.55f,
+                                lx - baseRadius * 0.72f, ly + baseRadius * 0.12f,
+                                lx - 4f, ly + 10f
                             )
                             close()
                         }
-                        drawPath(leftWingPath, color = Color(0xFF2B2D31), style = Fill)
-                        drawPath(leftWingPath, color = Color(0xFF8B5CF6), style = Stroke(width = 2f))
+                        drawPath(leftWingPath, color = Color(0xFF1F2128), style = Fill)
+                        drawPath(leftWingPath, brush = Brush.linearGradient(listOf(Color(0xFF8B5CF6), Color(0xFF38BDF8))), style = Stroke(width = 2.2f))
                     }
 
                     rotate(-wingFlap, pivot = Offset(center.x + baseRadius, center.y)) {
                         val rightWingPath = Path().apply {
                             val rx = center.x + baseRadius
                             val ry = center.y
-                            moveTo(rx, ry - 4f)
+                            moveTo(rx, ry - 5f)
                             cubicTo(
-                                rx + baseRadius * 0.5f, ry - baseRadius * 0.45f,
-                                rx + baseRadius * 0.6f, ry + baseRadius * 0.1f,
-                                rx + 4f, ry + 8f
+                                rx + baseRadius * 0.65f, ry - baseRadius * 0.55f,
+                                rx + baseRadius * 0.72f, ry + baseRadius * 0.12f,
+                                rx + 4f, ry + 10f
                             )
                             close()
                         }
-                        drawPath(rightWingPath, color = Color(0xFF2B2D31), style = Fill)
-                        drawPath(rightWingPath, color = Color(0xFF8B5CF6), style = Stroke(width = 2f))
+                        drawPath(rightWingPath, color = Color(0xFF1F2128), style = Fill)
+                        drawPath(rightWingPath, brush = Brush.linearGradient(listOf(Color(0xFF8B5CF6), Color(0xFF38BDF8))), style = Stroke(width = 2.2f))
                     }
                 }
 
@@ -996,10 +1000,308 @@ fun AvatarDecorationOverlay(
                             val rad = Math.toRadians((s * 90.0) + 45.0)
                             val fx = center.x + (baseRadius + 4f) * cos(rad).toFloat()
                             val fy = center.y + (baseRadius + 4f) * sin(rad).toFloat()
-                            // Snowflake cross lines
                             drawLine(color = Color.White, start = Offset(fx - 4f, fy), end = Offset(fx + 4f, fy), strokeWidth = 1.8f)
                             drawLine(color = Color.White, start = Offset(fx, fy - 4f), end = Offset(fx, fy + 4f), strokeWidth = 1.8f)
                             drawLine(color = Color(0xFF38BDF8), start = Offset(fx - 2.5f, fy - 2.5f), end = Offset(fx + 2.5f, fy + 2.5f), strokeWidth = 1.5f)
+                        }
+                    }
+                }
+
+                "eclipse_crimson" -> {
+                    // Solar corona red-orange outer glow
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            listOf(Color(0xFFDC2626).copy(alpha = 0.62f), Color(0xFFF97316).copy(alpha = 0.25f), Color.Transparent),
+                            center = center,
+                            radius = baseRadius * 1.55f * pulse
+                        ),
+                        radius = baseRadius * 1.55f * pulse,
+                        center = center
+                    )
+                    // Dark eclipse rim + crimson plasma sweep
+                    rotate(rotation * 0.9f, pivot = center) {
+                        drawCircle(
+                            brush = Brush.sweepGradient(listOf(Color(0xFF09090B), Color(0xFFDC2626), Color(0xFFFDE047), Color(0xFFDC2626), Color(0xFF09090B))),
+                            radius = baseRadius + 2.5f,
+                            center = center,
+                            style = Stroke(width = 4.2f)
+                        )
+                    }
+                    // Erupted solar prominence flares
+                    rotate(counterRotation * 0.7f, pivot = center) {
+                        for (i in 0 until 2) {
+                            val startDeg = i * 180f
+                            drawArc(
+                                color = Color(0xFFF97316),
+                                startAngle = startDeg,
+                                sweepAngle = 50f,
+                                useCenter = false,
+                                topLeft = Offset(center.x - baseRadius - 6.5f, center.y - baseRadius - 6.5f),
+                                size = androidx.compose.ui.geometry.Size((baseRadius + 6.5f) * 2f, (baseRadius + 6.5f) * 2f),
+                                style = Stroke(width = 2.4f)
+                            )
+                            val moonRad = Math.toRadians((startDeg + 25.0))
+                            val mx = center.x + (baseRadius + 6.5f) * cos(moonRad).toFloat()
+                            val my = center.y + (baseRadius + 6.5f) * sin(moonRad).toFloat()
+                            drawCircle(color = Color(0xFF09090B), radius = 4.2f, center = Offset(mx, my))
+                            drawCircle(color = Color(0xFFFDE047), radius = 4.2f, center = Offset(mx, my), style = Stroke(width = 1.6f))
+                        }
+                    }
+                }
+
+                "quantum_vortex" -> {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            listOf(Color(0xFF06B6D4).copy(alpha = 0.45f), Color(0xFF3B82F6).copy(alpha = 0.18f), Color.Transparent),
+                            center = center,
+                            radius = baseRadius * 1.48f
+                        ),
+                        radius = baseRadius * 1.48f,
+                        center = center
+                    )
+                    // Three tilted intersecting atomic orbital rings
+                    for (orbit in 0 until 3) {
+                        val tilt = orbit * 60f + rotation * 0.55f
+                        rotate(tilt, pivot = center) {
+                            drawOval(
+                                brush = Brush.sweepGradient(listOf(Color(0xFF00F0FF), Color(0xFF3B82F6), Color(0xFFE0F2FE), Color(0xFF00F0FF))),
+                                topLeft = Offset(center.x - baseRadius - 6f, center.y - baseRadius * 0.52f),
+                                size = androidx.compose.ui.geometry.Size((baseRadius + 6f) * 2f, baseRadius * 1.04f),
+                                style = Stroke(width = 2.4f)
+                            )
+                            val particleX = center.x + (baseRadius + 6f) * cos(shimmer * Math.PI * 2.0 + orbit * 2.1).toFloat()
+                            val particleY = center.y + (baseRadius * 0.52f) * sin(shimmer * Math.PI * 2.0 + orbit * 2.1).toFloat()
+                            drawCircle(color = Color.White, radius = 3.2f, center = Offset(particleX, particleY))
+                            drawCircle(color = Color(0xFF00F0FF), radius = 5f, center = Offset(particleX, particleY), alpha = 0.45f)
+                        }
+                    }
+                }
+
+                "kitsune_spirit" -> {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            listOf(Color(0xFFF43F5E).copy(alpha = 0.42f), Color(0xFFFDE047).copy(alpha = 0.15f), Color.Transparent),
+                            center = center,
+                            radius = baseRadius * 1.45f
+                        ),
+                        radius = baseRadius * 1.45f,
+                        center = center
+                    )
+                    drawCircle(
+                        brush = Brush.sweepGradient(listOf(Color.White, Color(0xFFF43F5E), Color(0xFFFDE047), Color.White)),
+                        radius = baseRadius + 2f,
+                        center = center,
+                        style = Stroke(width = 3f)
+                    )
+                    // Sacred white & vermilion Kitsune fox ears
+                    val leftEar = Path().apply {
+                        val lx = center.x - baseRadius * 0.62f
+                        val ly = center.y - baseRadius * 0.72f
+                        moveTo(lx - 9f, ly + 4f)
+                        lineTo(lx - 5f, ly - baseRadius * 0.54f * pulse)
+                        lineTo(lx + 6f, ly - 1f)
+                        close()
+                    }
+                    drawPath(leftEar, color = Color(0xFFF8FAFC), style = Fill)
+                    drawPath(leftEar, color = Color(0xFFF43F5E), style = Stroke(width = 2.2f))
+
+                    val rightEar = Path().apply {
+                        val rx = center.x + baseRadius * 0.62f
+                        val ry = center.y - baseRadius * 0.72f
+                        moveTo(rx + 9f, ry + 4f)
+                        lineTo(rx + 5f, ry - baseRadius * 0.54f * pulse)
+                        lineTo(rx - 6f, ry - 1f)
+                        close()
+                    }
+                    drawPath(rightEar, color = Color(0xFFF8FAFC), style = Fill)
+                    drawPath(rightEar, color = Color(0xFFF43F5E), style = Stroke(width = 2.2f))
+
+                    // Spirit fox-fire (Kitsune-bi) floating orbs
+                    rotate(counterRotation * 0.85f, pivot = center) {
+                        for (k in 0 until 4) {
+                            val rad = Math.toRadians(k * 90.0 + 45.0)
+                            val fx = center.x + (baseRadius + 6f) * cos(rad).toFloat()
+                            val fy = center.y + (baseRadius + 6f) * sin(rad).toFloat()
+                            drawCircle(color = Color(0xFFF43F5E).copy(alpha = 0.55f), radius = 4.5f * pulse, center = Offset(fx, fy))
+                            drawCircle(color = Color(0xFFFDE047), radius = 2.2f, center = Offset(fx, fy))
+                        }
+                    }
+                }
+
+                "katana_slash" -> {
+                    drawCircle(
+                        brush = Brush.sweepGradient(listOf(Color(0xFFEC4899), Color(0xFF00F0FF), Color(0xFFEC4899))),
+                        radius = baseRadius + 1.5f,
+                        center = center,
+                        style = Stroke(width = 2.6f)
+                    )
+                    // Crossed anime dimensional sword slashes
+                    val slashProgress = (shimmer * 1.4f).coerceIn(0f, 1f)
+                    val offsetSpread = 6f * pulse
+                    drawLine(
+                        brush = Brush.linearGradient(listOf(Color.Transparent, Color(0xFFEC4899), Color.White)),
+                        start = Offset(center.x - baseRadius * 1.25f, center.y + baseRadius * 0.7f - offsetSpread),
+                        end = Offset(center.x + baseRadius * 1.25f, center.y - baseRadius * 0.75f - offsetSpread),
+                        strokeWidth = 3.6f * (0.7f + 0.3f * slashProgress)
+                    )
+                    drawLine(
+                        brush = Brush.linearGradient(listOf(Color.White, Color(0xFF00F0FF), Color.Transparent)),
+                        start = Offset(center.x - baseRadius * 1.2f, center.y - baseRadius * 0.65f + offsetSpread),
+                        end = Offset(center.x + baseRadius * 1.2f, center.y + baseRadius * 0.8f + offsetSpread),
+                        strokeWidth = 3.2f
+                    )
+                    // Impact sparks
+                    rotate(rotation * 1.4f, pivot = center) {
+                        for (s in 0 until 4) {
+                            val rad = Math.toRadians(s * 90.0)
+                            val sx = center.x + (baseRadius + 5f) * cos(rad).toFloat()
+                            val sy = center.y + (baseRadius + 5f) * sin(rad).toFloat()
+                            drawCircle(color = Color.White, radius = 2.3f, center = Offset(sx, sy))
+                        }
+                    }
+                }
+
+                "prism_hologram" -> {
+                    // Rotating holographic diamond polygon
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            listOf(Color(0xFF00F0FF).copy(alpha = 0.35f), Color(0xFFA855F7).copy(alpha = 0.18f), Color.Transparent),
+                            center = center,
+                            radius = baseRadius * 1.45f
+                        ),
+                        radius = baseRadius * 1.45f,
+                        center = center
+                    )
+                    rotate(rotation * 0.75f, pivot = center) {
+                        val hexPath = Path().apply {
+                            for (i in 0 until 6) {
+                                val rad = Math.toRadians(i * 60.0)
+                                val px = center.x + (baseRadius + 5f) * cos(rad).toFloat()
+                                val py = center.y + (baseRadius + 5f) * sin(rad).toFloat()
+                                if (i == 0) moveTo(px, py) else lineTo(px, py)
+                            }
+                            close()
+                        }
+                        drawPath(
+                            hexPath,
+                            brush = Brush.sweepGradient(listOf(Color(0xFF00F0FF), Color(0xFFA855F7), Color(0xFF34D399), Color(0xFF00F0FF))),
+                            style = Stroke(width = 3f)
+                        )
+                    }
+                    rotate(counterRotation * 0.75f, pivot = center) {
+                        val innerHex = Path().apply {
+                            for (i in 0 until 6) {
+                                val rad = Math.toRadians(i * 60.0 + 30.0)
+                                val px = center.x + (baseRadius + 2f) * cos(rad).toFloat()
+                                val py = center.y + (baseRadius + 2f) * sin(rad).toFloat()
+                                if (i == 0) moveTo(px, py) else lineTo(px, py)
+                            }
+                            close()
+                        }
+                        drawPath(innerHex, color = Color.White.copy(alpha = 0.65f), style = Stroke(width = 1.6f))
+                    }
+                }
+
+                "neural_cyber" -> {
+                    drawCircle(
+                        brush = Brush.sweepGradient(listOf(Color(0xFF10B981), Color(0xFF38BDF8), Color(0xFF818CF8), Color(0xFF10B981))),
+                        radius = baseRadius + 2f,
+                        center = center,
+                        style = Stroke(width = 2.8f)
+                    )
+                    // Circuit traces radiating out at 45-degree angles with glowing nodes
+                    rotate(rotation * 0.35f, pivot = center) {
+                        for (i in 0 until 8) {
+                            val rad = Math.toRadians(i * 45.0)
+                            val sx = center.x + (baseRadius + 2f) * cos(rad).toFloat()
+                            val sy = center.y + (baseRadius + 2f) * sin(rad).toFloat()
+                            val len = if (i % 2 == 0) 9f else 5.5f
+                            val ex = center.x + (baseRadius + len) * cos(rad).toFloat()
+                            val ey = center.y + (baseRadius + len) * sin(rad).toFloat()
+                            val nodeColor = if (i % 2 == 0) Color(0xFF00F0FF) else Color(0xFF10B981)
+                            drawLine(color = nodeColor, start = Offset(sx, sy), end = Offset(ex, ey), strokeWidth = 2f)
+                            drawCircle(color = Color.White, radius = 2.1f * pulse, center = Offset(ex, ey))
+                        }
+                    }
+                }
+
+                "starlight_crown" -> {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            listOf(Color(0xFFFDE047).copy(alpha = 0.42f), Color(0xFF38BDF8).copy(alpha = 0.16f), Color.Transparent),
+                            center = center,
+                            radius = baseRadius * 1.48f
+                        ),
+                        radius = baseRadius * 1.48f,
+                        center = center
+                    )
+                    drawCircle(
+                        brush = Brush.sweepGradient(listOf(Color(0xFFFDE047), Color(0xFF38BDF8), Color.White, Color(0xFFFDE047))),
+                        radius = baseRadius + 2f,
+                        center = center,
+                        style = Stroke(width = 2.8f)
+                    )
+                    // Constellation crown arc with connected glowing stars
+                    val starAngles = listOf(-145.0, -115.0, -90.0, -65.0, -35.0)
+                    val pts = starAngles.mapIndexed { idx, deg ->
+                        val rad = Math.toRadians(deg)
+                        val rExtra = if (idx == 2) 12f else if (idx == 1 || idx == 3) 8f else 5f
+                        Offset(
+                            center.x + (baseRadius + rExtra * pulse) * cos(rad).toFloat(),
+                            center.y + (baseRadius + rExtra * pulse) * sin(rad).toFloat()
+                        )
+                    }
+                    for (i in 0 until pts.size - 1) {
+                        drawLine(color = Color(0xFFFEF08A).copy(alpha = 0.85f), start = pts[i], end = pts[i + 1], strokeWidth = 1.6f)
+                    }
+                    pts.forEachIndexed { idx, p ->
+                        drawCircle(color = if (idx == 2) Color(0xFF38BDF8) else Color(0xFFFDE047), radius = if (idx == 2) 3.8f else 2.6f, center = p)
+                        drawCircle(color = Color.White, radius = 1.3f, center = p)
+                    }
+                }
+
+                "obsidian_seraph" -> {
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            listOf(Color(0xFFA855F7).copy(alpha = 0.48f), Color(0xFFF59E0B).copy(alpha = 0.22f), Color.Transparent),
+                            center = center,
+                            radius = baseRadius * 1.55f
+                        ),
+                        radius = baseRadius * 1.55f,
+                        center = center
+                    )
+                    // Imperial dark purple & gold halo
+                    drawCircle(
+                        brush = Brush.sweepGradient(listOf(Color(0xFFF59E0B), Color(0xFF9333EA), Color(0xFF1E1B4B), Color(0xFFF59E0B))),
+                        radius = baseRadius + 2f,
+                        center = center,
+                        style = Stroke(width = 3.2f)
+                    )
+                    // Triple layered obsidian & gold seraph wings
+                    for (tier in 0..1) {
+                        val spread = if (tier == 0) 0.82f else 0.56f
+                        val yShift = if (tier == 0) -6f else 6f
+                        rotate(wingFlap * (1f + tier * 0.2f), pivot = Offset(center.x - baseRadius, center.y + yShift)) {
+                            val lw = Path().apply {
+                                val sx = center.x - baseRadius
+                                val sy = center.y + yShift
+                                moveTo(sx, sy - 4f)
+                                cubicTo(sx - baseRadius * spread, sy - baseRadius * 0.65f, sx - baseRadius * (spread + 0.12f), sy + 2f, sx - 4f, sy + 9f)
+                                close()
+                            }
+                            drawPath(lw, color = Color(0xFF1E1B4B), style = Fill)
+                            drawPath(lw, color = if (tier == 0) Color(0xFFF59E0B) else Color(0xFFA855F7), style = Stroke(width = 2f))
+                        }
+                        rotate(-wingFlap * (1f + tier * 0.2f), pivot = Offset(center.x + baseRadius, center.y + yShift)) {
+                            val rw = Path().apply {
+                                val sx = center.x + baseRadius
+                                val sy = center.y + yShift
+                                moveTo(sx, sy - 4f)
+                                cubicTo(sx + baseRadius * spread, sy - baseRadius * 0.65f, sx + baseRadius * (spread + 0.12f), sy + 2f, sx + 4f, sy + 9f)
+                                close()
+                            }
+                            drawPath(rw, color = Color(0xFF1E1B4B), style = Fill)
+                            drawPath(rw, color = if (tier == 0) Color(0xFFF59E0B) else Color(0xFFA855F7), style = Stroke(width = 2f))
                         }
                     }
                 }
@@ -1154,6 +1456,94 @@ fun ProfileEffectOverlay(
                     val color = if (e % 3 == 0) Color(0xFFFDE047) else if (e % 3 == 1) Color(0xFFF97316) else Color(0xFFEF4444)
                     drawCircle(color = color.copy(alpha = emberAlpha), radius = 2.6f, center = Offset(currentX, currentY))
                 }
+            }
+
+            "eff_aurora_curtain" -> {
+                // Shimmering northern lights curtains across the banner
+                val ribbons = 4
+                for (r in 0 until ribbons) {
+                    val yBase = h * (0.2f + r * 0.18f)
+                    val path = Path().apply {
+                        moveTo(0f, yBase)
+                        val steps = 8
+                        for (s in 1..steps) {
+                            val x = w * (s.toFloat() / steps)
+                            val wave = sin(progress * Math.PI * 2.0 + s * 0.9 + r).toFloat() * 14f
+                            lineTo(x, yBase + wave)
+                        }
+                    }
+                    val color = when (r % 3) {
+                        0 -> Color(0xFF2DD4BF).copy(alpha = 0.55f)
+                        1 -> Color(0xFF818CF8).copy(alpha = 0.45f)
+                        else -> Color(0xFF34D399).copy(alpha = 0.4f)
+                    }
+                    drawPath(path, color = color, style = Stroke(width = 14f))
+                }
+            }
+
+            "eff_cyber_rain" -> {
+                // Matrix digital rain streams falling smoothly
+                val cols = 14
+                for (c in 0 until cols) {
+                    val x = (w / cols) * (c + 0.5f)
+                    val speedFactor = 1f + (c % 3) * 0.35f
+                    val headY = ((progress * h * 1.5f * speedFactor + c * 29f) % (h + 40f)) - 10f
+                    drawLine(
+                        brush = Brush.verticalGradient(
+                            listOf(Color.Transparent, Color(0xFF10B981).copy(alpha = 0.7f), Color(0xFF00F0FF))
+                        ),
+                        start = Offset(x, headY - 34f),
+                        end = Offset(x, headY),
+                        strokeWidth = 2.4f
+                    )
+                    drawCircle(color = Color.White, radius = 1.8f, center = Offset(x, headY))
+                }
+            }
+
+            "eff_golden_feathers" -> {
+                // Floating golden divine feathers and light motes
+                val count = 12
+                for (i in 0 until count) {
+                    val xBase = (i * 67f) % w
+                    val sway = sin(progress * Math.PI * 2.0 + i * 1.3).toFloat() * 18f
+                    val y = ((progress * h * 1.3f + i * 33f) % (h + 30f)) - 15f
+                    val x = (xBase + sway + w) % w
+                    rotate((sway * 1.8f), pivot = Offset(x, y)) {
+                        drawOval(
+                            brush = Brush.linearGradient(listOf(Color(0xFFFEF08A), Color(0xFFF59E0B))),
+                            topLeft = Offset(x - 3f, y - 8f),
+                            size = androidx.compose.ui.geometry.Size(6f, 16f),
+                            alpha = 0.85f
+                        )
+                    }
+                    drawCircle(color = Color(0xFFFDE047).copy(alpha = 0.65f), radius = 1.5f, center = Offset((x + 12f) % w, (y + 10f) % h))
+                }
+            }
+
+            "eff_crimson_eclipse" -> {
+                // Pulsing crimson shockwave rings around a dark eclipse sun
+                val cx = w * 0.78f
+                val cy = h * 0.5f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        listOf(Color(0xFFDC2626).copy(alpha = 0.65f), Color.Transparent),
+                        center = Offset(cx, cy),
+                        radius = h * 0.85f
+                    ),
+                    radius = h * 0.85f,
+                    center = Offset(cx, cy)
+                )
+                for (wave in 0..2) {
+                    val rProgress = (progress + wave * 0.33f) % 1f
+                    drawCircle(
+                        color = Color(0xFFF97316).copy(alpha = (1f - rProgress) * 0.7f),
+                        radius = h * 0.22f + rProgress * h * 0.7f,
+                        center = Offset(cx, cy),
+                        style = Stroke(width = 2.2f)
+                    )
+                }
+                drawCircle(color = Color(0xFF09090B), radius = h * 0.24f, center = Offset(cx, cy))
+                drawCircle(color = Color(0xFFFDE047), radius = h * 0.24f, center = Offset(cx, cy), style = Stroke(width = 2f))
             }
         }
     }

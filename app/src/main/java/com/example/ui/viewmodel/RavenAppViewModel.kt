@@ -31,8 +31,15 @@ class RavenAppViewModel(application: Application) : AndroidViewModel(application
     private val _isViewingFullVoiceRoom = MutableStateFlow(false)
     val isViewingFullVoiceRoom: StateFlow<Boolean> = _isViewingFullVoiceRoom.asStateFlow()
 
+    private val _hasCompletedEntryAnimation = MutableStateFlow(false)
+    val hasCompletedEntryAnimation: StateFlow<Boolean> = _hasCompletedEntryAnimation.asStateFlow()
+
     fun setViewingFullVoiceRoom(viewing: Boolean) {
         _isViewingFullVoiceRoom.value = viewing
+    }
+
+    fun markEntryAnimationCompleted() {
+        _hasCompletedEntryAnimation.value = true
     }
 
     override fun onCleared() {

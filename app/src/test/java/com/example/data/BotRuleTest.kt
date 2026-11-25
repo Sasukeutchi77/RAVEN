@@ -100,7 +100,7 @@ class BotRuleTest : FirestoreEmulatorTestBase() {
             }
             assertTrue(installSnap.exists())
 
-            val chId = srv.channels.first().id
+            val chId = srv.channels.first { !it.isReadOnly }.id
             assertTrue(aliceChat.executeSlashCommand(chId, "/ping"))
 
             // 2. Switch to Bob (normal non-owner user) and join Alice's public community as MEMBER

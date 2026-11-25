@@ -15,10 +15,12 @@ class RavenMessagingService : FirebaseMessagingService() {
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onNewToken(token: String) {
         super.onNewToken(token)
+        val cleanToken = token.trim()
+        if (cleanToken.length !in 20..512 || cleanToken.contains("..")) return
         try {
             getSharedPreferences("raven_prefs", Context.MODE_PRIVATE)
                 .edit()
-                .putString("fcm_token", token)
+                .putString("fcm_token", cleanToken)
                 .apply()
 
             val uid = Firebase.auth.currentUser?.uid ?: return
@@ -26,7 +28,7 @@ class RavenMessagingService : FirebaseMessagingService() {
             FirebaseFirestore.getInstance(dbId)
                 .collection("users")
                 .document(uid)
-                .set(mapOf("userId" to uid, "fcmToken" to token), SetOptions.merge())
+                .set(mapOf("userId" to uid, "fcmToken" to cleanToken), SetOptions.merge())
         } catch (e: Exception) {
             Log.w("RavenFCM", "Unable to store FCM token", e)
         }
@@ -34,12 +36,25 @@ class RavenMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         super.onMessageReceived(remoteMessage)
-        val title = remoteMessage.notification?.title
+        val rawTitle = remoteMessage.notification?.title
             ?: remoteMessage.data["title"]
             ?: "Raven"
-        val body = remoteMessage.notification?.body
+        val rawBody = remoteMessage.notification?.body
             ?: remoteMessage.data["body"]
             ?: "Nouveau message reçu"
-        NotificationHelper.showNotification(applicationContext, title, body)
+        val safeTitle = sanitizeNotificationField(rawTitle, 100).ifBlank { "Raven" }
+        val safeBody = sanitizeNotificationField(rawBody, 300).ifBlank { "Nouveau message reçu" }
+        NotificationHelper.showNotification(applicationContext, safeTitle, safeBody)
+    }
+
+    companion object {
+        internal fun sanitizeNotificationField(value: String, maxLen: Int): String {
+            return value
+                .replace(Regex("[\\p{Cntrl}&&[^\n]]"), " ")
+                .replace("\n", " ")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+                .take(maxLen)
+        }
     }
 }

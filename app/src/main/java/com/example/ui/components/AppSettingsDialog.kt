@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -49,6 +50,10 @@ fun AppSettingsDialog(
     activeSessionsCount: Int = 1,
     openSecurityAlertsCount: Int = 0,
     onOpenAccountSecurity: (() -> Unit)? = null,
+    onSignOut: (() -> Unit)? = null,
+    pendingOfflineCount: Int = 0,
+    isDeviceOnline: Boolean = true,
+    onFlushOfflineQueue: () -> Unit = {},
     platformProfile: RavenPlatformProfile = LocalRavenPlatform.current,
     onDismiss: () -> Unit
 ) {
@@ -509,6 +514,61 @@ fun AppSettingsDialog(
                 }
             }
 
+            // Smart Offline Mode & Queue
+            SettingsGroupCard(title = "MODE HORS-LIGNE INTELLIGENT", palette = palette) {
+                val effectivelyOnline = isDeviceOnline && !settings.simulateOfflineMode
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Icon(
+                            imageVector = if (effectivelyOnline) Icons.Default.Wifi else Icons.Default.WifiOff,
+                            contentDescription = null,
+                            tint = if (effectivelyOnline) DiscordGreen else DiscordAmber,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = if (effectivelyOnline) "Réseau connecté" else "Hors-ligne (file d'attente active)",
+                                color = palette.textPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "$pendingOfflineCount message(s) en attente d'envoi automatique",
+                                color = palette.textMuted,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                    if (pendingOfflineCount > 0) {
+                        Button(
+                            onClick = onFlushOfflineQueue,
+                            enabled = effectivelyOnline,
+                            colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("settings_flush_offline_btn")
+                        ) {
+                            Text("Envoyer ($pendingOfflineCount)", color = Color.White, fontSize = 11.sp)
+                        }
+                    }
+                }
+                HorizontalDivider(color = palette.border, modifier = Modifier.padding(vertical = 8.dp))
+                SettingsToggleRow(
+                    icon = Icons.Default.AirplanemodeActive,
+                    title = "Activer le mode hors-ligne",
+                    subtitle = "Met vos messages en file d'attente locale et envoie dès le retour du réseau",
+                    checked = settings.simulateOfflineMode,
+                    onCheckedChange = { enabled ->
+                        onUpdateSettings { it.copy(simulateOfflineMode = enabled) }
+                    },
+                    testTag = "settings_offline_mode_switch"
+                )
+            }
+
             // Extensions & Plugins RAVEN
             SettingsGroupCard(title = "EXTENSIONS & PLUGINS RAVEN", palette = palette) {
                 Row(
@@ -626,6 +686,52 @@ fun AppSettingsDialog(
                             }
                         }
                         Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.textMuted)
+                    }
+                }
+                HorizontalDivider(color = palette.border, modifier = Modifier.padding(vertical = 10.dp))
+                SettingsToggleRow(
+                    icon = Icons.Default.Lock,
+                    title = "Exiger le code à l'ouverture",
+                    subtitle = "Demande votre code personnel au lancement de Raven",
+                    checked = settings.requireCodeOnAppLaunch,
+                    onCheckedChange = { enabled ->
+                        onUpdateSettings { it.copy(requireCodeOnAppLaunch = enabled) }
+                    },
+                    testTag = "settings_require_code_launch_switch"
+                )
+                HorizontalDivider(color = palette.border, modifier = Modifier.padding(vertical = 8.dp))
+                SettingsToggleRow(
+                    icon = Icons.Default.Fingerprint,
+                    title = "Déverrouillage biométrique",
+                    subtitle = "Empreinte digitale ou reconnaissance faciale à l'ouverture et pour les MP verrouillés",
+                    checked = settings.biometricUnlockEnabled,
+                    onCheckedChange = { enabled ->
+                        onUpdateSettings { it.copy(biometricUnlockEnabled = enabled) }
+                    },
+                    testTag = "settings_biometric_unlock_switch"
+                )
+                if (onSignOut != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            onDismiss()
+                            onSignOut()
+                        },
+                        border = BorderStroke(1.dp, DiscordRed.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("settings_sign_out_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Logout,
+                            contentDescription = null,
+                            tint = DiscordRed,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Se déconnecter du compte Gmail", color = DiscordRed, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }

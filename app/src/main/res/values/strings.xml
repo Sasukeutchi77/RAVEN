@@ -1,3 +1,6 @@
 <resources>
     <string name="app_name">Raven</string>
+    <string name="splash_raven_content_description">Emblème réaliste du corbeau Raven</string>
+    <string name="widget_label">Raven Aperçu</string>
+    <string name="widget_description">Messages non lus, stories et accès rapide au dernier salon</string>
 </resources>

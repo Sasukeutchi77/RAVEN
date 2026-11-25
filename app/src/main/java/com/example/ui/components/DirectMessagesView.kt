@@ -40,6 +40,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -112,6 +114,23 @@ fun DirectMessagesView(
     botSlashCommandsForConv: (DirectConversation) -> List<SlashCommandOption> = { emptyList() },
     onExecuteDmCommand: (dmId: String, rawInput: String) -> Boolean = { _, _ -> false },
     onOpenBotDm: (String) -> Unit = {},
+    onSendRichMessage: ((dmId: String, text: String, imageUrl: String?, audioUrl: String?, audioDurationSec: Int, waveformAmplitudes: List<Int>, isViewOnce: Boolean) -> Unit)? = null,
+    onStartVideoCall: ((User) -> Unit)? = null,
+    onOpenCallHistory: (() -> Unit)? = null,
+    ephemeralTimersByTarget: Map<String, Int> = emptyMap(),
+    onSetEphemeralTimer: (targetId: String, seconds: Int) -> Unit = { _, _ -> },
+    onOpenViewOnce: (Message) -> Unit = {},
+    onOpenForwardSheet: (Message) -> Unit = {},
+    onTipOrbsOnMessage: (Message, Int) -> Unit = { _, _ -> },
+    onScheduleReminder: (targetId: String, message: Message, delayMs: Long, label: String) -> Unit = { _, _, _, _ -> },
+    lockedConversationIds: Set<String> = emptySet(),
+    onToggleLockConversation: (dmId: String) -> Unit = {},
+    biometricUnlockEnabled: Boolean = false,
+    hasAccessCodeConfigured: Boolean = false,
+    onVerifyLockAccessCode: (String) -> Boolean = { false },
+    isEffectivelyOnline: Boolean = true,
+    pendingOfflineCount: Int = 0,
+    onFlushOfflineQueue: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -131,11 +150,23 @@ fun DirectMessagesView(
     var selectedDmMessageForActions by remember { mutableStateOf<Message?>(null) }
     var dmMessageForEmojiPicker by remember { mutableStateOf<Message?>(null) }
     var showDmInputEmojiPicker by remember { mutableStateOf(false) }
+    var showEphemeralDialogForDm by remember { mutableStateOf<String?>(null) }
+    var dmMessageForReadReceipts by remember { mutableStateOf<Message?>(null) }
+    var dmMessageForTipOrbs by remember { mutableStateOf<Message?>(null) }
+    var dmMessageForReminder by remember { mutableStateOf<Message?>(null) }
+    var viewOncePreviewMsg by remember { mutableStateOf<Message?>(null) }
+    var pickNextPhotoAsViewOnce by remember { mutableStateOf(false) }
+    val sessionUnlockedDmIds = remember { mutableStateListOf<String>() }
+    LaunchedEffect(currentUser.id) {
+        sessionUnlockedDmIds.clear()
+    }
 
     val audioRecorder = remember { AudioRecorderHelper(context) }
     val audioPlayer = remember { AudioPlayerHelper() }
     var isRecordingAudio by remember { mutableStateOf(false) }
+    var isRecordingLocked by remember { mutableStateOf(false) }
     var recordingTimerSec by remember { mutableStateOf(0) }
+    val recordingAmplitudes = remember { mutableStateListOf<Int>() }
 
     val activeConversation = conversations.find { it.id == selectedDmId }
 
@@ -143,10 +174,18 @@ fun DirectMessagesView(
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
+        val asViewOnce = pickNextPhotoAsViewOnce
+        pickNextPhotoAsViewOnce = false
         if (uri != null && activeConversation != null) {
             coroutineScope.launch {
                 val uploadedUrl = CloudinaryHelper.uploadImage(context, uri)
-                onSendMessage(activeConversation.id, "", uploadedUrl, null, 0)
+                if (uploadedUrl.isNotBlank()) {
+                    if (onSendRichMessage != null) {
+                        onSendRichMessage(activeConversation.id, "", uploadedUrl, null, 0, emptyList(), asViewOnce)
+                    } else {
+                        onSendMessage(activeConversation.id, "", uploadedUrl, null, 0)
+                    }
+                }
             }
         }
     }
@@ -184,10 +223,17 @@ fun DirectMessagesView(
     LaunchedEffect(isRecordingAudio) {
         if (isRecordingAudio) {
             recordingTimerSec = 0
+            recordingAmplitudes.clear()
+            var ticks = 0
             while (isRecordingAudio) {
-                delay(1000)
-                recordingTimerSec++
+                recordingAmplitudes.add(audioRecorder.sampleNormalizedAmplitude())
+                if (recordingAmplitudes.size > 36) recordingAmplitudes.removeAt(0)
+                delay(250L)
+                ticks++
+                if (ticks % 4 == 0) recordingTimerSec++
             }
+        } else {
+            isRecordingLocked = false
         }
     }
 
@@ -198,6 +244,9 @@ fun DirectMessagesView(
         val isBotDm = activeConversation.isBotChat ||
             activeConversation.id.startsWith("dm_bot_") ||
             activeConversation.friend.role == UserRole.BOT
+        val isConvLocked = activeConversation.id in lockedConversationIds
+        val isGateActive = isConvLocked && activeConversation.id !in sessionUnlockedDmIds
+        val convEphemeralSec = ephemeralTimersByTarget[activeConversation.id] ?: 0
         Scaffold(
             modifier = paneModifier.fillMaxSize(),
             containerColor = palette.chatBg,
@@ -394,8 +443,32 @@ fun DirectMessagesView(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Call,
-                                    contentDescription = "Appeler",
-                                    tint = DiscordTextLight
+                                    contentDescription = "Appel audio",
+                                    tint = DiscordGreen
+                                )
+                            }
+
+                            if (!activeConversation.isGroup && onStartVideoCall != null) {
+                                IconButton(
+                                    onClick = { onStartVideoCall(activeConversation.friend) },
+                                    modifier = Modifier.testTag("dm_video_call_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Videocam,
+                                        contentDescription = "Appel vidéo",
+                                        tint = DiscordBlurple
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { onToggleLockConversation(activeConversation.id) },
+                                modifier = Modifier.testTag("dm_lock_conversation_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isConvLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                                    contentDescription = if (isConvLocked) "Déverrouiller la discussion" else "Verrouiller la discussion",
+                                    tint = if (isConvLocked) DiscordAmber else DiscordTextLight
                                 )
                             }
 
@@ -415,6 +488,50 @@ fun DirectMessagesView(
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = palette.chatBg)
                 )
+                    if (!isEffectivelyOnline || pendingOfflineCount > 0 || convEphemeralSec > 0) {
+                        Surface(
+                            color = if (!isEffectivelyOnline) DiscordAmber.copy(alpha = 0.16f) else DiscordBlurple.copy(alpha = 0.14f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+                                    Icon(
+                                        imageVector = if (!isEffectivelyOnline) Icons.Default.WifiOff else Icons.Default.Timer,
+                                        contentDescription = null,
+                                        tint = if (!isEffectivelyOnline) DiscordAmber else DiscordBlurple,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = buildString {
+                                            if (!isEffectivelyOnline) append("Hors-ligne ($pendingOfflineCount en attente)")
+                                            else if (pendingOfflineCount > 0) append("$pendingOfflineCount message(s) en attente")
+                                            if (convEphemeralSec > 0) {
+                                                if (isNotEmpty()) append(" • ")
+                                                val lbl = EphemeralDurationOption.entries.find { it.seconds == convEphemeralSec }?.label ?: "${convEphemeralSec}s"
+                                                append("Éphémères : $lbl")
+                                            }
+                                        },
+                                        color = palette.textPrimary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                if (isEffectivelyOnline && pendingOfflineCount > 0) {
+                                    TextButton(
+                                        onClick = onFlushOfflineQueue,
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                        modifier = Modifier.height(26.dp)
+                                    ) {
+                                        Text("Synchroniser", color = DiscordGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     HorizontalDivider(color = palette.border, thickness = 1.dp)
                 }
             },
@@ -426,54 +543,28 @@ fun DirectMessagesView(
                 ) {
                     TypingIndicatorBar(typingUserNames = typingUsersByTarget[activeConversation.id] ?: emptyList())
                     if (isRecordingAudio) {
-                        Surface(
-                            color = DiscordDarkCard,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(12.dp)
-                                            .clip(CircleShape)
-                                            .background(DiscordRed)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Enregistrement vocal... ${recordingTimerSec}s",
-                                        color = DiscordTextWhite,
-                                        fontSize = 13.sp
-                                    )
-                                }
-                                Row {
-                                    TextButton(onClick = {
-                                        audioRecorder.stopRecording()
-                                        isRecordingAudio = false
-                                    }) {
-                                        Text("Annuler", color = DiscordTextMuted)
-                                    }
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Button(
-                                        onClick = {
-                                            val path = audioRecorder.stopRecording()
-                                            isRecordingAudio = false
-                                            if (path != null) {
-                                                onSendMessage(activeConversation.id, "", null, path, recordingTimerSec)
-                                            }
-                                        },
-                                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
-                                    ) {
-                                        Text("Envoyer", color = Color.White)
+                        VoiceNoteRecordingBanner(
+                            recordingSeconds = recordingTimerSec,
+                            amplitudes = recordingAmplitudes.toList(),
+                            isLocked = isRecordingLocked,
+                            onToggleLock = { isRecordingLocked = !isRecordingLocked },
+                            onCancel = {
+                                audioRecorder.stopRecording()
+                                isRecordingAudio = false
+                            },
+                            onSend = {
+                                val path = audioRecorder.stopRecording()
+                                val amps = recordingAmplitudes.toList()
+                                isRecordingAudio = false
+                                if (path != null) {
+                                    if (onSendRichMessage != null) {
+                                        onSendRichMessage(activeConversation.id, "", null, path, recordingTimerSec, amps, false)
+                                    } else {
+                                        onSendMessage(activeConversation.id, "", null, path, recordingTimerSec)
                                     }
                                 }
                             }
-                        }
+                        )
                     } else {
                         AnimatedVisibility(visible = isAttachmentTrayOpen) {
                             LazyRow(
@@ -487,12 +578,38 @@ fun DirectMessagesView(
                                     AssistChip(
                                         onClick = {
                                             isAttachmentTrayOpen = false
+                                            pickNextPhotoAsViewOnce = false
                                             photoPickerLauncher.launch(
                                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                             )
                                         },
                                         label = { Text("Photo", color = DiscordTextWhite, fontSize = 12.sp) },
                                         leadingIcon = { Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, tint = DiscordGreen, modifier = Modifier.size(16.dp)) }
+                                    )
+                                }
+                                item {
+                                    AssistChip(
+                                        onClick = {
+                                            isAttachmentTrayOpen = false
+                                            pickNextPhotoAsViewOnce = true
+                                            photoPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            )
+                                        },
+                                        label = { Text("Vue unique", color = DiscordTextWhite, fontSize = 12.sp) },
+                                        leadingIcon = { Icon(Icons.Default.LooksOne, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp)) },
+                                        modifier = Modifier.testTag("dm_view_once_button")
+                                    )
+                                }
+                                item {
+                                    AssistChip(
+                                        onClick = {
+                                            isAttachmentTrayOpen = false
+                                            showEphemeralDialogForDm = activeConversation.id
+                                        },
+                                        label = { Text("Éphémères", color = DiscordTextWhite, fontSize = 12.sp) },
+                                        leadingIcon = { Icon(Icons.Default.Timer, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(16.dp)) },
+                                        modifier = Modifier.testTag("dm_ephemeral_button")
                                     )
                                 }
                                 item {
@@ -747,6 +864,119 @@ fun DirectMessagesView(
                     )
                 }
 
+                if (isGateActive) {
+                    var unlockErrorMessage by remember(activeConversation.id) { mutableStateOf<String?>(null) }
+                    var pinInput by remember(activeConversation.id) { mutableStateOf("") }
+                    val canUseBiometric = biometricUnlockEnabled &&
+                        com.example.util.BiometricAuthHelper.isBiometricAvailable(context)
+                    Box(
+                        modifier = Modifier.fillMaxSize().padding(24.dp).testTag("dm_locked_gate"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            color = palette.cardBg,
+                            shape = RoundedCornerShape(18.dp),
+                            border = BorderStroke(1.dp, DiscordAmber.copy(alpha = 0.5f)),
+                            modifier = Modifier.widthIn(max = 360.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(22.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(Icons.Default.Fingerprint, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(44.dp))
+                                Text("Discussion verrouillée", color = palette.textPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = "Confirmez votre identité pour lire les messages de ${activeConversation.groupName ?: activeConversation.friend.name}.",
+                                    color = palette.textMuted,
+                                    fontSize = 12.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                if (hasAccessCodeConfigured) {
+                                    OutlinedTextField(
+                                        value = pinInput,
+                                        onValueChange = { next ->
+                                            if (next.length <= 12 && next.all { it.isDigit() }) {
+                                                pinInput = next
+                                                unlockErrorMessage = null
+                                            }
+                                        },
+                                        label = { Text("Code d'accès Raven", fontSize = 12.sp) },
+                                        singleLine = true,
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                            keyboardType = KeyboardType.NumberPassword
+                                        ),
+                                        modifier = Modifier.fillMaxWidth().testTag("dm_unlock_pin_input")
+                                    )
+                                    Button(
+                                        onClick = {
+                                            if (onVerifyLockAccessCode(pinInput)) {
+                                                unlockErrorMessage = null
+                                                pinInput = ""
+                                                sessionUnlockedDmIds.add(activeConversation.id)
+                                            } else {
+                                                unlockErrorMessage = "Code d'accès incorrect."
+                                            }
+                                        },
+                                        enabled = pinInput.length >= 4,
+                                        colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple),
+                                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("dm_unlock_pin_btn")
+                                    ) {
+                                        Text("Déverrouiller par code", color = Color.White, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                if (canUseBiometric) {
+                                    Button(
+                                        onClick = {
+                                            unlockErrorMessage = null
+                                            com.example.util.BiometricAuthHelper.authenticate(
+                                                context = context,
+                                                title = "Déverrouiller la discussion",
+                                                subtitle = "Accès confidentiel à ${activeConversation.groupName ?: activeConversation.friend.name}",
+                                                onSuccess = {
+                                                    unlockErrorMessage = null
+                                                    sessionUnlockedDmIds.add(activeConversation.id)
+                                                },
+                                                onError = { err ->
+                                                    unlockErrorMessage = err.ifBlank {
+                                                        "Authentification biométrique annulée ou refusée."
+                                                    }
+                                                }
+                                            )
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (hasAccessCodeConfigured) palette.inputBg else DiscordBlurple
+                                        ),
+                                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("dm_unlock_gate_btn")
+                                    ) {
+                                        Text(
+                                            text = if (hasAccessCodeConfigured) "Utiliser la biométrie" else "Déverrouiller",
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                } else if (!hasAccessCodeConfigured) {
+                                    Text(
+                                        text = "Activez la biométrie ou configurez un code de sécurité dans vos paramètres de compte pour déverrouiller cette discussion.",
+                                        color = DiscordRed,
+                                        fontSize = 11.sp,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                                if (!unlockErrorMessage.isNullOrBlank()) {
+                                    Text(
+                                        text = unlockErrorMessage.orEmpty(),
+                                        color = DiscordRed,
+                                        fontSize = 12.sp,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.testTag("dm_unlock_error_text")
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 12.dp)
@@ -852,9 +1082,15 @@ fun DirectMessagesView(
                                 if (!onExecuteDmCommand(activeConversation.id, payload)) {
                                     onSendMessage(activeConversation.id, payload, null, null, 0)
                                 }
+                            },
+                            onOpenViewOnce = { msg ->
+                                if (!msg.imageUrl.isNullOrBlank()) {
+                                    viewOncePreviewMsg = msg
+                                }
                             }
                         )
                     }
+                }
                 }
             }
 
@@ -933,6 +1169,48 @@ fun DirectMessagesView(
                                 colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                             )
                         }
+
+                        ListItem(
+                            headlineContent = { Text("Transférer vers d'autres salons/MP", color = DiscordTextWhite) },
+                            leadingContent = { Icon(Icons.Default.ForwardToInbox, contentDescription = null, tint = DiscordBlurple) },
+                            modifier = Modifier.clickable {
+                                onOpenForwardSheet(targetMsg)
+                                selectedDmMessageForActions = null
+                            },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                        )
+
+                        ListItem(
+                            headlineContent = { Text("Accusés de lecture", color = DiscordTextWhite) },
+                            leadingContent = { Icon(Icons.Default.DoneAll, contentDescription = null, tint = Color(0xFF38BDF8)) },
+                            modifier = Modifier.clickable {
+                                dmMessageForReadReceipts = targetMsg
+                                selectedDmMessageForActions = null
+                            },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                        )
+
+                        if (targetMsg.sender.id != currentUser.id && targetMsg.sender.id != "user_me") {
+                            ListItem(
+                                headlineContent = { Text("Offrir des Orbs", color = DiscordAmber) },
+                                leadingContent = { Icon(Icons.Default.Toll, contentDescription = null, tint = DiscordAmber) },
+                                modifier = Modifier.clickable {
+                                    dmMessageForTipOrbs = targetMsg
+                                    selectedDmMessageForActions = null
+                                },
+                                colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                            )
+                        }
+
+                        ListItem(
+                            headlineContent = { Text("Me le rappeler plus tard", color = DiscordTextWhite) },
+                            leadingContent = { Icon(Icons.Default.Alarm, contentDescription = null, tint = DiscordAmber) },
+                            modifier = Modifier.clickable {
+                                dmMessageForReminder = targetMsg
+                                selectedDmMessageForActions = null
+                            },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                        )
                     }
                 }
             }
@@ -982,6 +1260,58 @@ fun DirectMessagesView(
                     onDismiss = { showStickerPicker = false }
                 )
             }
+
+            showEphemeralDialogForDm?.let { targetDmId ->
+                EphemeralTimerDialog(
+                    currentDurationSec = ephemeralTimersByTarget[targetDmId] ?: 0,
+                    onSelectDuration = { sec -> onSetEphemeralTimer(targetDmId, sec) },
+                    onDismiss = { showEphemeralDialogForDm = null }
+                )
+            }
+
+            dmMessageForReadReceipts?.let { receiptMsg ->
+                val knownUsers = remember(allFriends, conv, currentUser) {
+                    (allFriends + conv.groupMembers + conv.friend + currentUser).distinctBy { it.id }
+                }
+                MessageReadReceiptsDialog(
+                    message = receiptMsg,
+                    knownMembers = knownUsers,
+                    onDismiss = { dmMessageForReadReceipts = null }
+                )
+            }
+
+            dmMessageForTipOrbs?.let { tipMsg ->
+                MessageTipOrbsDialog(
+                    message = tipMsg,
+                    currentOrbsBalance = orbsBalance,
+                    onTipOrbs = { amount -> onTipOrbsOnMessage(tipMsg, amount) },
+                    onDismiss = { dmMessageForTipOrbs = null }
+                )
+            }
+
+            dmMessageForReminder?.let { remMsg ->
+                MessageReminderDialog(
+                    message = remMsg,
+                    onScheduleReminder = { delayMs, label ->
+                        onScheduleReminder(conv.id, remMsg, delayMs, label)
+                    },
+                    onDismiss = { dmMessageForReminder = null }
+                )
+            }
+
+            viewOncePreviewMsg?.let { voMsg ->
+                val imgUrl = voMsg.imageUrl
+                if (!imgUrl.isNullOrBlank()) {
+                    ViewOnceFullScreenDialog(
+                        imageUrl = imgUrl,
+                        senderName = voMsg.sender.name,
+                        onDismiss = {
+                            onOpenViewOnce(voMsg)
+                            viewOncePreviewMsg = null
+                        }
+                    )
+                }
+            }
         }
     }
 
@@ -1016,6 +1346,18 @@ fun DirectMessagesView(
                             }
                         },
                         actions = {
+                            if (onOpenCallHistory != null) {
+                                IconButton(
+                                    onClick = onOpenCallHistory,
+                                    modifier = Modifier.testTag("dm_call_history_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.History,
+                                        contentDescription = "Historique d'appels",
+                                        tint = palette.textSecondary
+                                    )
+                                }
+                            }
                             IconButton(
                                 onClick = onOpenUserSearchSheet,
                                 modifier = Modifier.testTag("dm_search_users_button")

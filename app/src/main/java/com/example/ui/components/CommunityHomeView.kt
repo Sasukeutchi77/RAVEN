@@ -67,6 +67,7 @@ fun CommunityHomeView(
     onOpenEventsHub: () -> Unit = {},
     serverBackground: ChatBackgroundTheme? = null,
     onOpenServerBackground: () -> Unit = {},
+    onOpenServerTreasury: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -676,6 +677,26 @@ fun CommunityHomeView(
                                             }
                                         }
                                     }
+                                }
+
+                                // Banque d'Orbs communautaire (accessible à tous les membres)
+                                OutlinedButton(
+                                    onClick = onOpenServerTreasury,
+                                    border = BorderStroke(1.dp, DiscordAmber.copy(alpha = 0.55f)),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .defaultMinSize(minHeight = 44.dp)
+                                        .testTag("home_server_treasury_btn")
+                                ) {
+                                    Icon(Icons.Default.Savings, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Banque d'Orbs du serveur • ${server.treasuryOrbs} Orbs",
+                                        color = DiscordAmber,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
                             }
                         }

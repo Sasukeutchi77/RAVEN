@@ -86,6 +86,7 @@ fun UserProfileDialog(
     onRemoveFriend: (() -> Unit)? = null,
     onBlockUser: (() -> Unit)? = null,
     onUnblockUser: (() -> Unit)? = null,
+    onSignOut: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -819,14 +820,22 @@ fun UserProfileDialog(
                             } else {
                                 TextButton(
                                     onClick = {
-                                        try {
-                                            Firebase.auth.signOut()
-                                        } catch (e: Exception) {
-                                            Log.w("Auth", "Sign out error", e)
+                                        if (onSignOut != null) {
+                                            onDismiss()
+                                            onSignOut()
+                                        } else {
+                                            try {
+                                                Firebase.auth.signOut()
+                                            } catch (e: Exception) {
+                                                Log.w("Auth", "Sign out error", e)
+                                            }
+                                            authUser = null
+                                            onFirebaseAuthChanged()
                                         }
-                                        authUser = null
-                                        onFirebaseAuthChanged()
-                                    }
+                                    },
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .testTag("profile_sign_out_button")
                                 ) {
                                     Text("Déconnexion", color = DiscordRed, fontSize = 12.sp)
                                 }
@@ -948,6 +957,7 @@ fun UserProfileDialog(
     if (showCloudinaryDialog) {
         var cloudNameInput by remember { mutableStateOf(CloudinaryHelper.cloudName) }
         var presetInput by remember { mutableStateOf(CloudinaryHelper.uploadPreset) }
+        var configError by remember { mutableStateOf<String?>(null) }
 
         AlertDialog(
             onDismissRequest = { showCloudinaryDialog = false },
@@ -963,7 +973,7 @@ fun UserProfileDialog(
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = cloudNameInput,
-                        onValueChange = { cloudNameInput = it },
+                        onValueChange = { cloudNameInput = it; configError = null },
                         label = { Text("Cloud Name", color = DiscordTextMuted) },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
@@ -977,7 +987,7 @@ fun UserProfileDialog(
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = presetInput,
-                        onValueChange = { presetInput = it },
+                        onValueChange = { presetInput = it; configError = null },
                         label = { Text("Upload Preset (unsigned)", color = DiscordTextMuted) },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
@@ -988,13 +998,20 @@ fun UserProfileDialog(
                             unfocusedTextColor = DiscordTextLight
                         )
                     )
+                    if (!configError.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(configError.orEmpty(), color = DiscordRed, fontSize = 11.sp)
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        CloudinaryHelper.saveConfig(context, cloudNameInput, presetInput)
-                        showCloudinaryDialog = false
+                        if (CloudinaryHelper.saveConfig(context, cloudNameInput, presetInput)) {
+                            showCloudinaryDialog = false
+                        } else {
+                            configError = "Format invalide : utilisez uniquement lettres, chiffres, '-' ou '_'."
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
                 ) {

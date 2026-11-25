@@ -48,7 +48,8 @@ class ChatRepositoryRuleTest : FirestoreEmulatorTestBase() {
                 val userDoc = firestore.collection("users").document(aliceUid).get().await()
                 val pubDoc = firestore.collection("public_profiles").document(aliceUid).get().await()
                 userDoc.exists() && userDoc.getString("bio") == "Bio Cloud Test" &&
-                    pubDoc.exists() && pubDoc.getBoolean("isPublic") == true
+                    pubDoc.exists() && pubDoc.getBoolean("isPublic") == true &&
+                    pubDoc.getString("name") == "Alice Raven"
             }
 
             // Switch to Bob: reading Alice's private user document must fail with PERMISSION_DENIED

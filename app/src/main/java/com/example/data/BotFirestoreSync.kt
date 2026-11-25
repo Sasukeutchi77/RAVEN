@@ -19,6 +19,8 @@ internal object BotFirestoreSync {
             .connectTimeout(5, TimeUnit.SECONDS)
             .readTimeout(8, TimeUnit.SECONDS)
             .writeTimeout(5, TimeUnit.SECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
             .build()
     }
 
@@ -315,10 +317,16 @@ internal object BotFirestoreSync {
             return@withContext null to "URL webhook HTTPS invalide ou désactivée."
         }
         try {
+            val host = java.net.URI(config.endpointUrl.trim()).host
+                ?: return@withContext null to "Hôte webhook invalide."
+            val resolved = java.net.InetAddress.getAllByName(host)
+            if (resolved.isEmpty() || resolved.any { !BotTokenManager.isPublicInetAddress(it) }) {
+                return@withContext null to "Adresse réseau non publique bloquée par sécurité."
+            }
             val mediaType = "application/json; charset=utf-8".toMediaType()
             val body = payloadJson.toRequestBody(mediaType)
             val reqBuilder = Request.Builder()
-                .url(config.endpointUrl)
+                .url(config.endpointUrl.trim())
                 .post(body)
                 .header("Content-Type", "application/json")
                 .header("X-Raven-Event", event.name)

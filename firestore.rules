@@ -158,7 +158,7 @@ service cloud.firestore {
              (!('bio' in data) || data.bio == null || (data.bio is string && data.bio.size() <= 500)) &&
              (!('pronouns' in data) || data.pronouns == null || (data.pronouns is string && data.pronouns.size() <= 40)) &&
              (!('tag' in data) || data.tag == null || (data.tag is string && data.tag.size() <= 16)) &&
-             (!('status' in data) || data.status == null || (data.status is string && data.status in ['ONLINE', 'IDLE', 'DO_NOT_DISTURB', 'OFFLINE'])) &&
+             (!('status' in data) || data.status == null || (data.status is string && data.status in ['ONLINE', 'IDLE', 'DND', 'DO_NOT_DISTURB', 'OFFLINE'])) &&
              (!('customStatus' in data) || data.customStatus == null || (data.customStatus is string && data.customStatus.size() <= 160)) &&
              (!('lastActiveAtMs' in data) || data.lastActiveAtMs is int) &&
              (!('lastActivityLabel' in data) || data.lastActivityLabel == null || (data.lastActivityLabel is string && data.lastActivityLabel.size() <= 120)) &&
@@ -167,6 +167,10 @@ service cloud.firestore {
              (!('showOnlineStatus' in data) || data.showOnlineStatus is bool) &&
              (!('showLastActivity' in data) || data.showLastActivity is bool) &&
              (!('notifyFriendRequests' in data) || data.notifyFriendRequests is bool) &&
+             (!('onboardingCompleted' in data) || data.onboardingCompleted is bool) &&
+             (!('requireCodeOnAppLaunch' in data) || data.requireCodeOnAppLaunch is bool) &&
+             (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 800)) &&
+             (!('bannerUrl' in data) || data.bannerUrl == null || (data.bannerUrl is string && data.bannerUrl.size() <= 800)) &&
              (!('clanTag' in data) || data.clanTag == null || (data.clanTag is string && data.clanTag.size() <= 8)) &&
              (!('fcmToken' in data) || data.fcmToken == null || (data.fcmToken is string && data.fcmToken.size() <= 512)) &&
              (!('orbsBalance' in data) || data.orbsBalance is int) &&
@@ -179,11 +183,11 @@ service cloud.firestore {
              data.name is string && data.name.size() >= 1 && data.name.size() <= 64 &&
              (!('tag' in data) || data.tag == null || (data.tag is string && data.tag.size() <= 16)) &&
              (!('bio' in data) || data.bio == null || (data.bio is string && data.bio.size() <= 500)) &&
-             (!('status' in data) || data.status == null || (data.status is string && data.status in ['ONLINE', 'IDLE', 'DO_NOT_DISTURB', 'OFFLINE'])) &&
+             (!('status' in data) || data.status == null || (data.status is string && data.status in ['ONLINE', 'IDLE', 'DND', 'DO_NOT_DISTURB', 'OFFLINE'])) &&
              (!('customStatus' in data) || data.customStatus == null || (data.customStatus is string && data.customStatus.size() <= 160)) &&
              (!('clanTag' in data) || data.clanTag == null || (data.clanTag is string && data.clanTag.size() <= 8)) &&
              (!('clanBadgeIcon' in data) || data.clanBadgeIcon == null || (data.clanBadgeIcon is string && data.clanBadgeIcon.size() <= 40)) &&
-             (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 500)) &&
+             (!('avatarUrl' in data) || data.avatarUrl == null || (data.avatarUrl is string && data.avatarUrl.size() <= 800)) &&
              (!('avatarColor' in data) || data.avatarColor is int) &&
              (!('lastActiveAtMs' in data) || data.lastActiveAtMs is int) &&
              (!('lastActivityLabel' in data) || data.lastActivityLabel == null || (data.lastActivityLabel is string && data.lastActivityLabel.size() <= 120)) &&
@@ -315,11 +319,20 @@ service cloud.firestore {
              (!('memberIds' in data) || (data.memberIds is list && data.memberIds.size() <= 200));
     }
 
+    function isValidSafeMediaUrl(url) {
+      return url is string &&
+             url.size() >= 1 &&
+             url.size() <= 900 &&
+             !url.lower().matches('.*(javascript:|vbscript:|data:|content://).*') &&
+             !url.matches('.*\\.\\..*');
+    }
+
     function isValidChannel(data) {
       return data.serverId is string && data.serverId.size() <= 128 &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
-             data.type is string && data.type in ['TEXT', 'VOICE', 'ANNOUNCEMENT', 'STAGE'] &&
+             data.type is string && data.type in ['TEXT', 'VOICE', 'ANNOUNCEMENT', 'STAGE', 'FORUM'] &&
              data.memberIds is list && data.memberIds.size() <= 200 &&
+             (!('topic' in data) || data.topic == null || (data.topic is string && data.topic.size() <= 300)) &&
              (!('position' in data) || (data.position is int && data.position >= 0 && data.position <= 500)) &&
              (!('iconKey' in data) || data.iconKey == null || (data.iconKey is string && data.iconKey.size() <= 32)) &&
              (!('isPublic' in data) || data.isPublic is bool) &&
@@ -333,21 +346,36 @@ service cloud.firestore {
              (!('slowmodeSeconds' in data) || data.slowmodeSeconds is int) &&
              (!('isReadOnly' in data) || data.isReadOnly is bool) &&
              (!('lastTypingUid' in data) || data.lastTypingUid == null || (data.lastTypingUid is string && data.lastTypingUid.size() <= 128)) &&
-             (!('lastTypingName' in data) || data.lastTypingName == null || (data.lastTypingName is string && data.lastTypingName.size() <= 64));
+             (!('lastTypingName' in data) || data.lastTypingName == null || (data.lastTypingName is string && data.lastTypingName.size() <= 64)) &&
+             (!('lastTypingMs' in data) || data.lastTypingMs is int);
     }
 
     function isValidMessage(data) {
       return data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
              data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 64 &&
+             (!('senderAvatarUrl' in data) || data.senderAvatarUrl == null || isValidSafeMediaUrl(data.senderAvatarUrl)) &&
              (!('text' in data) || data.text == null || (data.text is string && data.text.size() <= 2000)) &&
-             (!('imageUrl' in data) || data.imageUrl == null || (data.imageUrl is string && data.imageUrl.size() <= 800)) &&
-             (!('audioUrl' in data) || data.audioUrl == null || (data.audioUrl is string && data.audioUrl.size() <= 800)) &&
+             (!('imageUrl' in data) || data.imageUrl == null || isValidSafeMediaUrl(data.imageUrl)) &&
+             (!('audioUrl' in data) || data.audioUrl == null || isValidSafeMediaUrl(data.audioUrl)) &&
+             (!('audioDurationSec' in data) || (data.audioDurationSec is int && data.audioDurationSec >= 0 && data.audioDurationSec <= 7200)) &&
+             (!('waveformAmplitudes' in data) || (data.waveformAmplitudes is list && data.waveformAmplitudes.size() <= 128)) &&
              (!('attachmentName' in data) || data.attachmentName == null || (data.attachmentName is string && data.attachmentName.size() <= 200)) &&
+             (!('attachmentType' in data) || data.attachmentType == null || (data.attachmentType is string && data.attachmentType.size() <= 64)) &&
+             (!('attachmentSizeLabel' in data) || data.attachmentSizeLabel == null || (data.attachmentSizeLabel is string && data.attachmentSizeLabel.size() <= 40)) &&
              (!('stickerId' in data) || data.stickerId == null || (data.stickerId is string && data.stickerId.size() <= 80)) &&
              (!('replyToText' in data) || data.replyToText == null || (data.replyToText is string && data.replyToText.size() <= 200)) &&
              (!('isPinned' in data) || data.isPinned is bool) &&
              (!('isEdited' in data) || data.isEdited is bool) &&
              (!('isPublic' in data) || data.isPublic is bool) &&
+             (!('isViewOnce' in data) || data.isViewOnce is bool) &&
+             (!('viewedByIds' in data) || (data.viewedByIds is list && data.viewedByIds.size() <= 200)) &&
+             (!('readByIds' in data) || (data.readByIds is list && data.readByIds.size() <= 200)) &&
+             (!('ephemeralExpiresAtMs' in data) || data.ephemeralExpiresAtMs == null || data.ephemeralExpiresAtMs is int) &&
+             (!('forwardedFrom' in data) || data.forwardedFrom == null || (data.forwardedFrom is string && data.forwardedFrom.size() <= 120)) &&
+             (!('totalOrbsTipped' in data) || (data.totalOrbsTipped is int && data.totalOrbsTipped >= 0 && data.totalOrbsTipped <= 1000000)) &&
+             (!('mentions' in data) || (data.mentions is list && data.mentions.size() <= 50)) &&
+             (!('threadCount' in data) || (data.threadCount is int && data.threadCount >= 0)) &&
+             (!('reactions' in data) || data.reactions is map) &&
              (!('isBotMessage' in data) || data.isBotMessage is bool) &&
              (!('botId' in data) || data.botId == null || isValidId(data.botId)) &&
              (!('triggeredByUid' in data) || data.triggeredByUid == null || (data.triggeredByUid is string && data.triggeredByUid.size() <= 128)) &&
@@ -355,6 +383,111 @@ service cloud.firestore {
              (!('botQuickReplies' in data) || (data.botQuickReplies is list && data.botQuickReplies.size() <= 10)) &&
              (!('memberIds' in data) || (data.memberIds is list && data.memberIds.size() <= 200)) &&
              (!('participantIds' in data) || (data.participantIds is list && data.participantIds.size() <= 50));
+    }
+
+    function canUpdateServer(serverId, newData, oldData) {
+      let uid = request.auth.uid;
+      let affected = newData.diff(oldData).affectedKeys();
+      let hasAdmins = 'adminIds' in oldData;
+      let hasMods = 'moderatorIds' in oldData;
+      return newData.ownerId == oldData.ownerId && (
+        // 5a. Owner or Admin (Admin cannot mutate adminIds)
+        oldData.ownerId == uid ||
+        (hasAdmins && uid in oldData.adminIds &&
+         (!('adminIds' in newData) ? !hasAdmins : (newData.adminIds == oldData.adminIds))) ||
+
+        // 5b. Moderator: can manage events & categories or kick regular non-staff members
+        (hasMods && uid in oldData.moderatorIds &&
+         affected.hasOnly(['events', 'categories', 'memberIds', 'updatedAt']) &&
+         (newData.memberIds == oldData.memberIds || (
+           oldData.ownerId in newData.memberIds &&
+           (!hasAdmins || newData.memberIds.hasAll(oldData.adminIds)) &&
+           newData.memberIds.hasAll(oldData.moderatorIds)
+         ))) ||
+
+        // 5c. Regular member leaving community (removing only self from memberIds/adminIds/moderatorIds)
+        (uid in oldData.memberIds &&
+         uid != oldData.ownerId &&
+         !(uid in newData.memberIds) &&
+         newData.memberIds.size() == oldData.memberIds.size() - 1 &&
+         oldData.memberIds.hasAll(newData.memberIds) &&
+         affected.hasOnly(['memberIds', 'adminIds', 'moderatorIds', 'updatedAt']) &&
+         (!hasAdmins ? !('adminIds' in newData) : ('adminIds' in newData && (
+           newData.adminIds == oldData.adminIds ||
+           (uid in oldData.adminIds && !(uid in newData.adminIds) &&
+            newData.adminIds.size() == oldData.adminIds.size() - 1 &&
+            oldData.adminIds.hasAll(newData.adminIds))
+         ))) &&
+         (!hasMods ? !('moderatorIds' in newData) : ('moderatorIds' in newData && (
+           newData.moderatorIds == oldData.moderatorIds ||
+           (uid in oldData.moderatorIds && !(uid in newData.moderatorIds) &&
+            newData.moderatorIds.size() == oldData.moderatorIds.size() - 1 &&
+            oldData.moderatorIds.hasAll(newData.moderatorIds))
+         )))) ||
+
+        // 5d. Regular member boosting or purchasing from internal shop
+        (uid in oldData.memberIds &&
+         affected.hasOnly(['boostCount', 'boostLevel', 'shopItems', 'updatedAt'])) ||
+
+        // 5e. Joining public community or private community via valid non-revoked invite
+        (!(uid in oldData.memberIds) &&
+         uid in newData.memberIds &&
+         newData.memberIds.size() == oldData.memberIds.size() + 1 && (
+           (oldData.isPublic == true && affected.hasOnly(['memberIds', 'updatedAt'])) ||
+           (affected.hasOnly(['memberIds', 'lastInviteCodeUsed', 'updatedAt']) &&
+            (!('privacyConfig' in oldData) ||
+             !('allowInviteLinks' in oldData.privacyConfig) ||
+             oldData.privacyConfig.allowInviteLinks == true) &&
+            hasValidCommunityInvite(serverId, newData))
+         ))
+      );
+    }
+
+    function isValidPollVoteOrSenderUpdate(newData, oldData, affected, isSender) {
+      return !('poll' in affected) ||
+             isSender ||
+             (oldData.poll is map && newData.poll is map &&
+              newData.poll.question == oldData.poll.question &&
+              newData.poll.options is list && oldData.poll.options is list &&
+              newData.poll.options.size() == oldData.poll.options.size());
+    }
+
+    function canUpdateChannelMessage(serverId, newData, oldData) {
+      let uid = request.auth.uid;
+      let affected = newData.diff(oldData).affectedKeys();
+      let isSender = oldData.senderId == uid;
+      return newData.senderId == oldData.senderId &&
+             isServerMemberOrPublic(serverId) &&
+             isValidPollVoteOrSenderUpdate(newData, oldData, affected, isSender) && (
+               (isSender && affected.hasOnly(['text', 'isEdited', 'isPinned', 'reactions', 'poll', 'threadCount', 'readByIds', 'viewedByIds', 'totalOrbsTipped', 'ephemeralExpiresAtMs', 'updatedAt'])) ||
+               (isCommunityStaff(serverId) && affected.hasOnly(['isPinned', 'reactions', 'poll', 'threadCount', 'readByIds', 'viewedByIds', 'totalOrbsTipped', 'updatedAt'])) ||
+               affected.hasOnly(['reactions', 'poll', 'threadCount', 'readByIds', 'viewedByIds', 'totalOrbsTipped', 'updatedAt']) ||
+               (oldData.isViewOnce == true &&
+                newData.imageUrl == null &&
+                ('viewedByIds' in newData) && uid in newData.viewedByIds &&
+                affected.hasOnly(['viewedByIds', 'imageUrl', 'text', 'updatedAt']))
+             );
+    }
+
+    function canUpdateDmMessage(conversationId, newData, oldData) {
+      let uid = request.auth.uid;
+      let convData = get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data;
+      let participants = convData.participantIds;
+      let affected = newData.diff(oldData).affectedKeys();
+      let isSender = oldData.senderId == uid ||
+        (('isBotMessage' in oldData) && oldData.isBotMessage == true &&
+         ('triggeredByUid' in oldData) && oldData.triggeredByUid == uid);
+      return newData.senderId == oldData.senderId &&
+             uid in participants &&
+             twoPartyDmNoBlock(participants) &&
+             isValidPollVoteOrSenderUpdate(newData, oldData, affected, isSender) && (
+               (isSender && affected.hasOnly(['text', 'isEdited', 'isPinned', 'reactions', 'poll', 'threadCount', 'readByIds', 'viewedByIds', 'totalOrbsTipped', 'ephemeralExpiresAtMs', 'updatedAt'])) ||
+               affected.hasOnly(['reactions', 'poll', 'threadCount', 'readByIds', 'viewedByIds', 'totalOrbsTipped', 'isPinned', 'updatedAt']) ||
+               (oldData.isViewOnce == true &&
+                newData.imageUrl == null &&
+                ('viewedByIds' in newData) && uid in newData.viewedByIds &&
+                affected.hasOnly(['viewedByIds', 'imageUrl', 'text', 'updatedAt']))
+             );
     }
 
     function isValidWhiteboard(data) {
@@ -551,11 +684,7 @@ service cloud.firestore {
     }
 
     function isValidStoryUrl(url) {
-      return url is string &&
-             url.size() >= 1 &&
-             url.size() <= 900 &&
-             !url.matches('.*javascript:.*') &&
-             !url.matches('.*\\.\\..*');
+      return isValidSafeMediaUrl(url);
     }
 
     function isValidStoryDoc(data) {
@@ -1136,7 +1265,10 @@ service cloud.firestore {
       allow list: if isSignedIn() && resource.data.isPublic == true;
       allow create: if isSignedIn() && isValidId(handle) && isValidCommunityHandle(incoming()) &&
                        incoming().ownerId == request.auth.uid && incoming().handle == handle;
-      allow update, delete: if isSignedIn() && isValidId(handle) && existing().ownerId == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(handle) && existing().ownerId == request.auth.uid &&
+                       isValidCommunityHandle(incoming()) &&
+                       incoming().ownerId == existing().ownerId && incoming().handle == handle;
+      allow delete: if isSignedIn() && isValidId(handle) && existing().ownerId == request.auth.uid;
     }
 
     // 4. Community Invites Index
@@ -1167,7 +1299,10 @@ service cloud.firestore {
       allow list: if isSignedIn();
       allow create: if isSignedIn() && isValidId(handle) && isValidBotHandle(incoming()) &&
                        incoming().ownerUid == request.auth.uid && incoming().handle == handle;
-      allow update, delete: if isSignedIn() && isValidId(handle) && existing().ownerUid == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(handle) && existing().ownerUid == request.auth.uid &&
+                       isValidBotHandle(incoming()) &&
+                       incoming().ownerUid == existing().ownerUid && incoming().handle == handle;
+      allow delete: if isSignedIn() && isValidId(handle) && existing().ownerUid == request.auth.uid;
     }
 
     // 4.2 Raven Bots Registry & Owner-Only Secrets / Audit Logs
@@ -1213,41 +1348,7 @@ service cloud.firestore {
       allow create: if isSignedIn() && isValidId(serverId) && isValidServer(incoming()) &&
                        incoming().ownerId == request.auth.uid && request.auth.uid in incoming().memberIds;
       allow update: if isSignedIn() && isValidId(serverId) && isValidServer(incoming()) &&
-                       incoming().ownerId == existing().ownerId && (
-                         // 5a. Owner: full management including adminIds; Admin: full management (including isClosed) EXCEPT cannot mutate adminIds
-                         existing().ownerId == request.auth.uid ||
-                         ('adminIds' in existing() && request.auth.uid in existing().adminIds &&
-                          (!('adminIds' in incoming()) ? !('adminIds' in existing()) : (('adminIds' in existing()) && incoming().adminIds == existing().adminIds))) ||
-
-                         // 5b. Moderator: can manage events & categories or kick regular non-staff members
-                         ('moderatorIds' in existing() && request.auth.uid in existing().moderatorIds &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['events', 'categories', 'memberIds', 'updatedAt'])) ||
-
-                         // 5c. Regular member leaving community (removing only self from memberIds)
-                         (request.auth.uid in existing().memberIds &&
-                          request.auth.uid != existing().ownerId &&
-                          !(request.auth.uid in incoming().memberIds) &&
-                          incoming().memberIds.size() == existing().memberIds.size() - 1 &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'adminIds', 'moderatorIds', 'updatedAt'])) ||
-
-                         // 5d. Regular member boosting or purchasing from internal shop
-                         (request.auth.uid in existing().memberIds &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['boostCount', 'boostLevel', 'shopItems', 'updatedAt'])) ||
-
-                         // 5e. Joining public community or private community via valid non-revoked invite
-                         (!(request.auth.uid in existing().memberIds) &&
-                          request.auth.uid in incoming().memberIds &&
-                          incoming().memberIds.size() == existing().memberIds.size() + 1 &&
-                          (
-                            (existing().isPublic == true &&
-                             incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'updatedAt'])) ||
-                            (incoming().diff(existing()).affectedKeys().hasOnly(['memberIds', 'lastInviteCodeUsed', 'updatedAt']) &&
-                             (!('privacyConfig' in existing()) ||
-                              !('allowInviteLinks' in existing().privacyConfig) ||
-                              existing().privacyConfig.allowInviteLinks == true) &&
-                             hasValidCommunityInvite(serverId, incoming()))
-                          ))
-                       );
+                       canUpdateServer(serverId, incoming(), existing());
       allow delete: if isSignedIn() && isValidId(serverId) && existing().ownerId == request.auth.uid;
 
       // 5.0 Installed Bots & Server-Scoped Permissions / Roles
@@ -1354,13 +1455,28 @@ service cloud.firestore {
                             get(/databases/$(database)/documents/servers/$(serverId)/bots/$(incoming().botId)).data.isEnabledInServer == true)
                          );
           allow update: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
-                           incoming().senderId == existing().senderId && isServerMemberOrPublic(serverId) && (
-                             (existing().senderId == request.auth.uid &&
-                              incoming().diff(existing()).affectedKeys().hasOnly(['text', 'isEdited', 'isPinned', 'reactions', 'poll', 'threadCount', 'updatedAt'])) ||
-                             incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'isPinned', 'poll', 'threadCount', 'updatedAt'])
-                           );
+                           canUpdateChannelMessage(serverId, incoming(), existing());
           allow delete: if isSignedIn() && isValidId(messageId) && isServerMemberOrPublic(serverId) &&
-                           (existing().senderId == request.auth.uid || isCommunityStaff(serverId));
+                           (existing().senderId == request.auth.uid ||
+                            (('isBotMessage' in existing()) && existing().isBotMessage == true &&
+                             ('triggeredByUid' in existing()) && existing().triggeredByUid == request.auth.uid) ||
+                            isCommunityStaff(serverId));
+
+          match /threads/{replyId} {
+            allow get: if isSignedIn() && isValidId(replyId) && isServerMemberOrPublic(serverId);
+            allow list: if isSignedIn() && (resource.data.isPublic == true || request.auth.uid in resource.data.memberIds);
+            allow create: if isSignedIn() && isValidId(replyId) && isValidMessage(incoming()) &&
+                             isServerMemberOrPublic(serverId) &&
+                             (!isServerClosed(serverId) || isCommunityAdmin(serverId)) &&
+                             incoming().senderId == request.auth.uid;
+            allow update: if isSignedIn() && isValidId(replyId) && isValidMessage(incoming()) &&
+                             incoming().senderId == existing().senderId &&
+                             existing().senderId == request.auth.uid &&
+                             isServerMemberOrPublic(serverId) &&
+                             incoming().diff(existing()).affectedKeys().hasOnly(['text', 'isEdited', 'reactions', 'updatedAt']);
+            allow delete: if isSignedIn() && isValidId(replyId) && isServerMemberOrPublic(serverId) &&
+                             (existing().senderId == request.auth.uid || isCommunityStaff(serverId));
+          }
         }
 
         match /whiteboard/{canvasId} {
@@ -1454,7 +1570,14 @@ service cloud.firestore {
       allow update: if isSignedIn() && isValidId(conversationId) && isValidDirectConversation(incoming()) &&
                        request.auth.uid in existing().participantIds &&
                        request.auth.uid in incoming().participantIds &&
-                       twoPartyDmNoBlock(incoming().participantIds);
+                       twoPartyDmNoBlock(incoming().participantIds) &&
+                       (!('id' in existing()) || !('id' in incoming()) || incoming().id == existing().id) &&
+                       (!('isGroup' in existing()) || incoming().isGroup == existing().isGroup) &&
+                       (!('isBotChat' in existing()) || incoming().isBotChat == existing().isBotChat) &&
+                       (!('botId' in existing()) || incoming().botId == existing().botId) &&
+                       (!('dmPairKey' in existing()) || incoming().dmPairKey == existing().dmPairKey) &&
+                       (('isGroup' in existing() && existing().isGroup == true) || incoming().participantIds == existing().participantIds) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['id', 'lastMessage', 'lastMessageTime', 'updatedAtMs', 'updatedAt', 'participantIds', 'participantNames', 'groupName']);
 
       match /messages/{messageId} {
         allow get: if isSignedIn() && isValidId(messageId) &&
@@ -1481,9 +1604,31 @@ service cloud.firestore {
                             ))
                          );
         allow update: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) &&
-                         incoming().senderId == existing().senderId &&
-                         request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds;
-        allow delete: if isSignedIn() && isValidId(messageId) && existing().senderId == request.auth.uid;
+                         canUpdateDmMessage(conversationId, incoming(), existing());
+        allow delete: if isSignedIn() && isValidId(messageId) &&
+                         request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds && (
+                           existing().senderId == request.auth.uid ||
+                           (('isBotMessage' in existing()) && existing().isBotMessage == true &&
+                            ('triggeredByUid' in existing()) && existing().triggeredByUid == request.auth.uid)
+                         );
+
+        match /threads/{replyId} {
+          allow get: if isSignedIn() && isValidId(replyId) &&
+                        request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds;
+          allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
+          allow create: if isSignedIn() && isValidId(replyId) && isValidMessage(incoming()) &&
+                           request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds &&
+                           twoPartyDmNoBlock(get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds) &&
+                           incoming().senderId == request.auth.uid;
+          allow update: if isSignedIn() && isValidId(replyId) && isValidMessage(incoming()) &&
+                           incoming().senderId == existing().senderId &&
+                           existing().senderId == request.auth.uid &&
+                           request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'isEdited', 'reactions', 'updatedAt']);
+          allow delete: if isSignedIn() && isValidId(replyId) &&
+                           request.auth.uid in get(/databases/$(database)/documents/direct_conversations/$(conversationId)).data.participantIds &&
+                           existing().senderId == request.auth.uid;
+        }
       }
     }
 

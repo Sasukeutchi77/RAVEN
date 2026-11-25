@@ -7,6 +7,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.BorderStroke
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,6 +50,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.example.data.AccountSecurityRepository
+import com.example.data.AuthGateRepository
+import com.example.data.AuthOnboardingPhase
 import com.example.data.BotRepository
 import com.example.data.ChatRepository
 import com.example.data.CommunityPermissions
@@ -77,6 +81,7 @@ import com.example.model.serverBackgroundTargetKey
 import com.example.ui.components.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.AccountSecurityViewModel
+import com.example.ui.viewmodel.AuthGateViewModel
 import com.example.ui.viewmodel.BotDashboardViewModel
 import com.example.ui.viewmodel.CommunityViewModel
 import com.example.ui.viewmodel.EventViewModel
@@ -101,7 +106,107 @@ import kotlinx.coroutines.launch
 fun RavenApp(
     repository: ChatRepository,
     isViewingFullVoiceRoom: Boolean? = null,
-    onViewingFullVoiceRoomChange: ((Boolean) -> Unit)? = null
+    onViewingFullVoiceRoomChange: ((Boolean) -> Unit)? = null,
+    hasCompletedEntryAnimation: Boolean? = null,
+    onEntryAnimationFinished: (() -> Unit)? = null,
+    initialWidgetRoute: String? = null,
+    onWidgetRouteConsumed: () -> Unit = {}
+) {
+    var internalSplashCompleted by rememberSaveable { mutableStateOf(false) }
+    val effectiveSplashDone = hasCompletedEntryAnimation ?: internalSplashCompleted
+
+    val appSettings by repository.appSettings.collectAsState()
+    val authGateRepo = remember(repository) { AuthGateRepository(repository) }
+    val authGateViewModel = remember(authGateRepo) { AuthGateViewModel(authGateRepo) }
+    val authUiState by authGateViewModel.uiState.collectAsState()
+
+    LaunchedEffect(authGateViewModel) {
+        authGateViewModel.evaluateStartup()
+    }
+
+    Crossfade(
+        targetState = when {
+            !effectiveSplashDone -> "SPLASH"
+            authUiState.phase != AuthOnboardingPhase.READY -> "AUTH_GATE"
+            else -> "WORKSPACE"
+        },
+        label = "raven_root_stage"
+    ) { stage ->
+        when (stage) {
+            "SPLASH" -> {
+                RavenEntrySplashScreen(
+                    durationMs = 3200L,
+                    onFinished = {
+                        internalSplashCompleted = true
+                        onEntryAnimationFinished?.invoke()
+                    }
+                )
+            }
+
+            "AUTH_GATE" -> {
+                RavenAuthAndOnboardingScreen(
+                    uiState = authUiState,
+                    onAuthIntentChange = { authGateViewModel.onAuthIntentChange(it) },
+                    onGmailInputChange = { authGateViewModel.onGmailInputChange(it) },
+                    onSelectRememberedAccount = { authGateViewModel.selectRememberedAccount(it) },
+                    onRemoveRememberedAccount = { authGateViewModel.removeRememberedAccount(it) },
+                    onAuthError = { authGateViewModel.setAuthError(it) },
+                    onClearLockoutIfExpired = { authGateViewModel.clearLockoutIfExpired() },
+                    onGmailCredentialSignedIn = { code, isSilent ->
+                        authGateViewModel.onGmailCredentialSignedIn(code, isSilentAutoSignIn = isSilent)
+                    },
+                    onVerifyAccessCode = { code -> authGateViewModel.verifyAccessCode(code) },
+                    onGmailReauthConfirmedForReset = { authGateViewModel.onGmailReauthConfirmedForReset() },
+                    onCancelCodeReset = { authGateViewModel.cancelCodeReset() },
+                    onApplyResetCode = { newCode, confirm -> authGateViewModel.applyResetAccessCode(newCode, confirm) },
+                    onCompleteAccountCreation = { name, tag, bio, avatarUrl, avatarColor, status, code, confirm, requireOnLaunch ->
+                        authGateViewModel.completeAccountCreation(
+                            name = name,
+                            tag = tag,
+                            bio = bio,
+                            avatarUrl = avatarUrl,
+                            avatarColor = avatarColor,
+                            status = status,
+                            accessCode = code,
+                            confirmCode = confirm,
+                            requireCodeOnAppLaunch = requireOnLaunch
+                        )
+                    },
+                    biometricUnlockEnabled = appSettings.biometricUnlockEnabled,
+                    onBiometricUnlocked = { authGateViewModel.unlockWithBiometrics() },
+                    onSignOut = { authGateViewModel.signOut() }
+                )
+            }
+
+            else -> {
+                val activeUid = authUiState.signedInUid ?: repository.currentUser.value.id
+                key(activeUid) {
+                    RavenAuthenticatedWorkspace(
+                        repository = repository,
+                        isViewingFullVoiceRoom = isViewingFullVoiceRoom,
+                        onViewingFullVoiceRoomChange = onViewingFullVoiceRoomChange,
+                        initialWidgetRoute = initialWidgetRoute,
+                        onWidgetRouteConsumed = onWidgetRouteConsumed,
+                        hasAccessCodeConfigured = { authGateViewModel.hasAccessCodeConfigured() },
+                        onVerifyLockAccessCode = { pin -> authGateViewModel.verifyLockAccessCode(pin) },
+                        onSignOut = { authGateViewModel.signOut() }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RavenAuthenticatedWorkspace(
+    repository: ChatRepository,
+    isViewingFullVoiceRoom: Boolean? = null,
+    onViewingFullVoiceRoomChange: ((Boolean) -> Unit)? = null,
+    initialWidgetRoute: String? = null,
+    onWidgetRouteConsumed: () -> Unit = {},
+    hasAccessCodeConfigured: () -> Boolean = { false },
+    onVerifyLockAccessCode: (String) -> Boolean = { false },
+    onSignOut: () -> Unit = {}
 ) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -151,6 +256,13 @@ fun RavenApp(
     val remoteVideoTracks by repository.remoteVideoTracks.collectAsState()
     val voiceError by repository.voiceError.collectAsState()
     val jukeboxVolume by repository.jukeboxVolume.collectAsState()
+    val ephemeralTimersByTarget by repository.ephemeralTimersByTarget.collectAsState()
+    val forumPostsByChannel by repository.forumPostsByChannel.collectAsState()
+    val activeDirectCall by repository.activeDirectCall.collectAsState()
+    val callHistory by repository.callHistory.collectAsState()
+    val pendingOfflineMessages by repository.pendingOfflineMessages.collectAsState()
+    val isDeviceOnline by repository.isDeviceOnline.collectAsState()
+    val isEffectivelyOnline = isDeviceOnline && !appSettings.simulateOfflineMode
 
     val communityRepo = remember(repository) { CommunityRepository(repository) }
     val communityViewModel = remember(communityRepo) { CommunityViewModel(communityRepo) }
@@ -259,6 +371,10 @@ fun RavenApp(
     var showAccountSecuritySheet by remember { mutableStateOf(false) }
     var sharedMediaTarget by remember { mutableStateOf<Pair<String, String>?>(null) }
     var activeThreadParent by remember { mutableStateOf<Message?>(null) }
+    var forwardingMessage by remember { mutableStateOf<Message?>(null) }
+    var showCallHistorySheet by remember { mutableStateOf(false) }
+    var showMiniGamesSheet by remember { mutableStateOf(false) }
+    var showServerTreasuryDialog by remember { mutableStateOf(false) }
 
     // Permissions launchers
     val audioPermissionLauncher = rememberLauncherForActivityResult(
@@ -385,6 +501,46 @@ fun RavenApp(
         ?: activeServer.channels.firstOrNull { it.type == ChannelType.TEXT }
         ?: activeServer.channels.firstOrNull()
         ?: Channel("c_def", activeServer.id, "général", ChannelType.TEXT)
+
+    val needsRulesAcceptance = !activeServer.isDmTab &&
+        (activeServer.requireRulesAcceptance || activeServer.customization.requireRulesAcceptance) &&
+        !CommunityPermissions.isCreatorOrAdmin(activeServer, currentUser.id) &&
+        currentUser.id !in activeServer.acceptedRulesMemberIds
+
+    // Widget deep-link routing + Read Receipts auto-mark + Home Widget refresh
+    LaunchedEffect(initialWidgetRoute) {
+        when (initialWidgetRoute) {
+            com.example.widget.RavenHomeWidgetProvider.ROUTE_DM -> {
+                isViewingCommunityHome = false
+                setViewingVoiceRoom(false)
+                repository.selectServer("dm_tab")
+                onWidgetRouteConsumed()
+            }
+            com.example.widget.RavenHomeWidgetProvider.ROUTE_LAST_CHANNEL -> {
+                isViewingCommunityHome = false
+                setViewingVoiceRoom(false)
+                val firstCommunity = servers.firstOrNull { !it.isDmTab }
+                if (firstCommunity != null) {
+                    repository.selectServer(firstCommunity.id)
+                }
+                onWidgetRouteConsumed()
+            }
+        }
+    }
+
+    val currentTargetId = if (activeServer.isDmTab) selectedDmId else activeChannel.id
+    LaunchedEffect(currentTargetId, messages[currentTargetId]?.size) {
+        if (!currentTargetId.isNullOrBlank()) {
+            repository.markTargetMessagesRead(currentTargetId)
+        }
+    }
+
+    val activeStoriesTotalCount = remember(storyUiState.allGroups) {
+        storyUiState.allGroups.sumOf { it.stories.size }
+    }
+    LaunchedEffect(directConversations, activeStoriesTotalCount, connectedVoiceChannel, selectedChannelId, pendingOfflineMessages.size) {
+        repository.refreshHomeWidget(activeStoriesTotalCount)
+    }
 
     BackHandler(enabled = isMemberListOpen || effectiveViewingVoiceRoom || isViewingCommunityHome || drawerState.isOpen || (activeServer.isDmTab && selectedDmId != null)) {
         when {
@@ -945,29 +1101,17 @@ fun RavenApp(
                                 onAddFriend = { tag -> friendViewModel.sendFriendRequestByInput(tag) },
                                 onStartCall = { friend ->
                                     requestAudioPermission()
-                                    val dmVoice = Channel(
-                                        id = "voice_${friend.id}",
-                                        serverId = "dm_tab",
-                                        name = "Appel avec ${friend.name}",
-                                        type = ChannelType.VOICE,
-                                        activeVoiceUsers = listOf(friend)
-                                    )
-                                    if (repository.joinVoiceChannel(dmVoice)) {
-                                        setViewingVoiceRoom(true)
-                                    }
+                                    repository.startDirectCall(peerUser = friend, isVideo = false)
                                 },
                                 onStartGroupCall = { groupConv ->
                                     requestAudioPermission()
-                                    val grpVoice = Channel(
-                                        id = "voice_${groupConv.id}",
-                                        serverId = "dm_tab",
-                                        name = groupConv.groupName ?: "Appel de groupe",
-                                        type = ChannelType.VOICE,
-                                        activeVoiceUsers = groupConv.groupMembers
+                                    val firstPeer = groupConv.groupMembers.firstOrNull() ?: groupConv.friend
+                                    repository.startDirectCall(
+                                        peerUser = firstPeer,
+                                        isVideo = false,
+                                        isGroupCall = true,
+                                        groupName = groupConv.groupName ?: "Appel de groupe"
                                     )
-                                    if (repository.joinVoiceChannel(grpVoice)) {
-                                        setViewingVoiceRoom(true)
-                                    }
                                 },
                                 onToggleDrawer = {
                                     coroutineScope.launch { drawerState.open() }
@@ -1017,7 +1161,45 @@ fun RavenApp(
                                 bots = bots.filter { (it.ownerUid == currentUser.id || it.isPublicCatalog) && it.allowDirectMessages },
                                 botSlashCommandsForConv = { conv -> botRepo.getSlashCommandsForDm(conv) },
                                 onExecuteDmCommand = { dmId, raw -> repository.executeSlashCommand(dmId, raw) },
-                                onOpenBotDm = { botId -> botViewModel.openBotDirectChat(botId) }
+                                onOpenBotDm = { botId -> botViewModel.openBotDirectChat(botId) },
+                                onSendRichMessage = { dmId, text, imgUrl, audUrl, audDur, waveform, isViewOnce ->
+                                    repository.sendRichMessage(dmId, text, imgUrl, audUrl, audDur, waveform, isViewOnce)
+                                },
+                                onStartVideoCall = { friend ->
+                                    requestAudioPermission()
+                                    repository.startDirectCall(peerUser = friend, isVideo = true)
+                                },
+                                onOpenCallHistory = { showCallHistorySheet = true },
+                                ephemeralTimersByTarget = ephemeralTimersByTarget,
+                                onSetEphemeralTimer = { tid, sec -> repository.setEphemeralTimer(tid, sec) },
+                                onOpenViewOnce = { msg ->
+                                    val tid = selectedDmId ?: msg.channelId
+                                    repository.openViewOnceMessage(tid, msg.id)
+                                },
+                                onOpenForwardSheet = { msg -> forwardingMessage = msg },
+                                onTipOrbsOnMessage = { msg, amt ->
+                                    val tid = selectedDmId ?: msg.channelId
+                                    repository.tipOrbsOnMessage(tid, msg.id, amt)
+                                },
+                                onScheduleReminder = { _, msg, delayMs, label ->
+                                    requestNotificationPermission()
+                                    repository.scheduleMessageReminder(msg, delayMs, label)
+                                },
+                                lockedConversationIds = appSettings.lockedConversationIds,
+                                onToggleLockConversation = { dmId -> repository.toggleLockedConversation(dmId) },
+                                biometricUnlockEnabled = appSettings.biometricUnlockEnabled,
+                                hasAccessCodeConfigured = hasAccessCodeConfigured(),
+                                onVerifyLockAccessCode = onVerifyLockAccessCode,
+                                isEffectivelyOnline = isEffectivelyOnline,
+                                pendingOfflineCount = pendingOfflineMessages.size,
+                                onFlushOfflineQueue = { repository.flushOfflineQueue() }
+                            )
+                        }
+
+                        needsRulesAcceptance -> {
+                            ServerOnboardingRulesOverlay(
+                                server = activeServer,
+                                onAcceptRules = { repository.acceptServerRules(activeServer.id) }
                             )
                         }
 
@@ -1095,7 +1277,32 @@ fun RavenApp(
                                     channelId = null,
                                     userBackgrounds = chatBackgrounds
                                 ),
-                                onOpenServerBackground = { showServerBackgroundDialog = true }
+                                onOpenServerBackground = { showServerBackgroundDialog = true },
+                                onOpenServerTreasury = { showServerTreasuryDialog = true }
+                            )
+                        }
+
+                        activeChannel.type == ChannelType.FORUM -> {
+                            ForumChannelView(
+                                channel = activeChannel,
+                                posts = forumPostsByChannel[activeChannel.id].orEmpty(),
+                                currentUserId = currentUser.id,
+                                canModerateForum = CommunityPermissions.isCreatorOrAdmin(activeServer, currentUser.id) ||
+                                    CommunityPermissions.hasPermission(activeServer, currentUser.id, RolePermission.MODERATE_MEMBERS),
+                                showNavigationDrawerButton = showDrawerButton,
+                                onToggleDrawer = { coroutineScope.launch { drawerState.open() } },
+                                onCreatePost = { title, content, tags, status ->
+                                    repository.createForumPost(activeChannel.id, activeServer.id, title, content, tags, status)
+                                },
+                                onToggleUpvote = { postId ->
+                                    repository.toggleForumPostUpvote(activeChannel.id, postId)
+                                },
+                                onAddReply = { postId, replyText ->
+                                    repository.addForumReply(activeChannel.id, postId, replyText)
+                                },
+                                onUpdateStatus = { postId, status ->
+                                    repository.updateForumPostStatus(activeChannel.id, postId, status)
+                                }
                             )
                         }
 
@@ -1228,7 +1435,19 @@ fun RavenApp(
                                 serverClosedByName = activeServer.closedByName,
                                 onToggleServerClosed = { closed ->
                                     communityViewModel.setServerClosed(activeServer.id, closed)
-                                }
+                                },
+                                onSendRichMessage = { text, imgUrl, audUrl, audDur, waveform, isViewOnce ->
+                                    repository.sendRichMessage(activeChannel.id, text, imgUrl, audUrl, audDur, waveform, isViewOnce)
+                                },
+                                ephemeralDurationSec = ephemeralTimersByTarget[activeChannel.id] ?: 0,
+                                onSetEphemeralTimer = { sec -> repository.setEphemeralTimer(activeChannel.id, sec) },
+                                onOpenViewOnce = { msg -> repository.openViewOnceMessage(activeChannel.id, msg.id) },
+                                onOpenForwardSheet = { msg -> forwardingMessage = msg },
+                                onTipOrbsOnMessage = { msg, amt -> repository.tipOrbsOnMessage(activeChannel.id, msg.id, amt) },
+                                onOpenMiniGames = { showMiniGamesSheet = true },
+                                isEffectivelyOnline = isEffectivelyOnline,
+                                pendingOfflineCount = pendingOfflineMessages.size,
+                                onFlushOfflineQueue = { repository.flushOfflineQueue() }
                             )
                         }
                     }
@@ -2131,6 +2350,14 @@ fun RavenApp(
     // Thread Sheet
     if (activeThreadParent != null) {
         val parent = activeThreadParent!!
+        LaunchedEffect(parent.channelId, parent.id) {
+            repository.listenToMessageThreads(parent.channelId, parent.id)
+        }
+        DisposableEffect(parent.id) {
+            onDispose {
+                repository.stopListeningToMessageThreads()
+            }
+        }
         ThreadSheet(
             parentMessage = parent,
             replies = threads[parent.id] ?: emptyList(),
@@ -2204,6 +2431,10 @@ fun RavenApp(
             activeSessionsCount = securityUiState.activeSessionsCount.coerceAtLeast(1),
             openSecurityAlertsCount = securityUiState.openAlertsCount,
             onOpenAccountSecurity = { showAccountSecuritySheet = true },
+            onSignOut = onSignOut,
+            pendingOfflineCount = pendingOfflineMessages.size,
+            isDeviceOnline = isDeviceOnline,
+            onFlushOfflineQueue = { repository.flushOfflineQueue() },
             platformProfile = activePlatformProfile,
             onDismiss = { showAppSettingsDialog = false }
         )
@@ -2319,7 +2550,8 @@ fun RavenApp(
                 friendViewModel.blockUser(targetUser)
                 selectedUserProfile = null
             },
-            onUnblockUser = { friendViewModel.unblockUser(targetUser.id) }
+            onUnblockUser = { friendViewModel.unblockUser(targetUser.id) },
+            onSignOut = onSignOut
         )
     }
 
@@ -2337,7 +2569,10 @@ fun RavenApp(
             onUpdateOrbsBalance = { newBalance -> repository.updateOrbsBalance(newBalance) },
             onEquipDecoration = { decoKey -> repository.equipAvatarDecoration(decoKey) },
             onUnlockBadge = { badgeId -> repository.toggleUserBadge(badgeId) },
-            onEquipProfileEffect = { effectKey -> repository.equipProfileEffect(effectKey) }
+            onEquipProfileEffect = { effectKey -> repository.equipProfileEffect(effectKey) },
+            onEquipChatTheme = { themeId -> repository.equipChatThemeFromShop(themeId, currentTargetId) },
+            onPurchaseShopItem = { item -> repository.purchaseShopItem(item, currentTargetId) },
+            onToggleFavoriteItem = { itemId -> repository.toggleShopFavorite(itemId) }
         )
     }
 
@@ -2482,7 +2717,7 @@ fun RavenApp(
         )
     }
 
-    // Create Story Dialog (Text, Image, Video, TTL, Privacy)
+    // Create Story Dialog (Text, Image, Video, TTL, Privacy, Stickers, Polls, Music)
     if (showCreateStoryDialog) {
         val storyFriends = remember(directConversations, friendUiState.friends) {
             (friendUiState.friends.map { it.user } + directConversations.filter { !it.isGroup }.map { it.friend })
@@ -2491,15 +2726,47 @@ fun RavenApp(
         }
         CreateStoryDialog(
             friends = storyFriends,
+            servers = servers.filterNot { it.isDmTab },
+            jukeboxTracks = com.example.data.MockData.jukeboxCatalogTracks,
             isBusy = storyUiState.isBusy,
             onDismiss = { showCreateStoryDialog = false },
-            onPublishText = { txt, cap, pCol, sCol, vis, allowed, hrs ->
-                storyViewModel.publishTextStory(txt, cap, pCol, sCol, vis, allowed, hrs) {
+            onPublishText = { txt, cap, pCol, sCol, vis, allowed, hrs, srvId, stkTxt, stkStyle, pollQ, pollOpts, musTitle, musArtist ->
+                storyViewModel.publishTextStory(
+                    textContent = txt,
+                    caption = cap,
+                    backgroundColorHex = pCol,
+                    secondaryColorHex = sCol,
+                    visibility = vis,
+                    customAllowedViewerIds = allowed,
+                    durationHours = hrs,
+                    allowedServerId = srvId,
+                    stickerText = stkTxt,
+                    stickerStyle = stkStyle,
+                    quickPollQuestion = pollQ,
+                    quickPollOptions = pollOpts,
+                    musicTrackTitle = musTitle,
+                    musicTrackArtist = musArtist
+                ) {
                     showCreateStoryDialog = false
                 }
             },
-            onPublishMedia = { uri, type, cap, vis, allowed, hrs ->
-                storyViewModel.publishMediaStory(context, uri, type, cap, vis, allowed, hrs) {
+            onPublishMedia = { uri, type, cap, vis, allowed, hrs, srvId, stkTxt, stkStyle, pollQ, pollOpts, musTitle, musArtist ->
+                storyViewModel.publishMediaStory(
+                    context = context,
+                    uri = uri,
+                    mediaType = type,
+                    caption = cap,
+                    visibility = vis,
+                    customAllowedViewerIds = allowed,
+                    durationHours = hrs,
+                    allowedServerId = srvId,
+                    stickerText = stkTxt,
+                    stickerStyle = stkStyle,
+                    quickPollQuestion = pollQ,
+                    quickPollOptions = pollOpts,
+                    musicTrackTitle = musTitle,
+                    musicTrackArtist = musArtist
+                ) {
                     showCreateStoryDialog = false
                 }
             }
@@ -2520,6 +2787,7 @@ fun RavenApp(
                 onDeleteStory = { storyId -> storyViewModel.deleteStory(storyId) },
                 onReplyToStory = { storyId, reply -> storyViewModel.replyToStory(storyId, reply) },
                 onToggleLike = { storyId -> storyViewModel.toggleStoryLike(storyId) },
+                onVoteQuickPoll = { storyId, option -> storyViewModel.voteStoryQuickPoll(storyId, option) },
                 onDismiss = { viewingStoryAuthorId = null }
             )
         } else {
@@ -2650,6 +2918,93 @@ fun RavenApp(
                 }
             }
         )
+    }
+
+    // Forward Message Multi-Targets Dialog
+    forwardingMessage?.let { msgToForward ->
+        MessageForwardSheet(
+            message = msgToForward,
+            conversations = directConversations,
+            servers = servers,
+            onConfirmForward = { targetIds ->
+                repository.forwardMessageToTargets(msgToForward, targetIds)
+            },
+            onDismiss = { forwardingMessage = null }
+        )
+    }
+
+    // Call History Sheet
+    if (showCallHistorySheet) {
+        CallHistorySheet(
+            history = callHistory,
+            onCallBack = { entry, isVideo ->
+                requestAudioPermission()
+                val peer = com.example.model.User(
+                    id = entry.peerId,
+                    name = entry.peerName,
+                    avatarColor = entry.peerAvatarColor,
+                    avatarUrl = entry.peerAvatarUrl
+                )
+                repository.startDirectCall(peerUser = peer, isVideo = isVideo)
+            },
+            onDismiss = { showCallHistorySheet = false }
+        )
+    }
+
+    // Live Channel Mini-Games Sheet
+    if (showMiniGamesSheet && !activeServer.isDmTab) {
+        ChannelMiniGamesSheet(
+            targetName = "#${activeChannel.name}",
+            onPostResultToChannel = { summary ->
+                repository.sendMessage(activeChannel.id, summary)
+            },
+            onRewardOrbs = { orbs, reason ->
+                repository.updateOrbsBalance(currentUser.orbsBalance + orbs)
+                repository.grantXp(orbs, reason)
+            },
+            onDismiss = { showMiniGamesSheet = false }
+        )
+    }
+
+    // Server Orbs Treasury Dialog
+    if (showServerTreasuryDialog && !activeServer.isDmTab) {
+        ServerOrbsTreasuryDialog(
+            server = activeServer,
+            currentOrbsBalance = currentUser.orbsBalance,
+            onDonateOrbs = { amt ->
+                repository.donateOrbsToServerTreasury(activeServer.id, amt)
+            },
+            onDismiss = { showServerTreasuryDialog = false }
+        )
+    }
+
+    // Direct 1-to-1 / Group Call Floating PiP or Fullscreen Overlay
+    activeDirectCall?.let { callSession ->
+        if (callSession.isMinimized) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing),
+                contentAlignment = Alignment.TopEnd
+            ) {
+                DirectCallFloatingPipBar(
+                    session = callSession,
+                    onExpand = { repository.toggleCallMinimized(false) },
+                    onToggleMute = { repository.toggleCallMute() },
+                    onHangUp = { repository.endDirectCall() }
+                )
+            }
+        } else {
+            DirectCallOverlay(
+                session = callSession,
+                onAnswer = { repository.answerDirectCall() },
+                onDeclineOrEnd = { repository.endDirectCall() },
+                onToggleMute = { repository.toggleCallMute() },
+                onToggleCamera = { repository.toggleCallCamera() },
+                onToggleSpeaker = { repository.toggleCallSpeaker() },
+                onMinimize = { repository.toggleCallMinimized(true) }
+            )
+        }
     }
 }
 

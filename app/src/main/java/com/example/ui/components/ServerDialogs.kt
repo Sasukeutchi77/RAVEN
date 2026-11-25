@@ -3,9 +3,12 @@ package com.example.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.Tag
@@ -197,7 +200,7 @@ fun CreateChannelDialog(
             )
         },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     text = "TYPE DE SALON",
                     color = DiscordTextMuted,
@@ -225,6 +228,32 @@ fun CreateChannelDialog(
                     RadioButton(
                         selected = channelType == ChannelType.TEXT,
                         onClick = { channelType = ChannelType.TEXT },
+                        colors = RadioButtonDefaults.colors(selectedColor = DiscordBlurple)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Forum Channel option
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (channelType == ChannelType.FORUM) DiscordDarkInput else Color.Transparent)
+                        .clickable { channelType = ChannelType.FORUM }
+                        .padding(10.dp)
+                        .testTag("create_channel_type_forum"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Forum, contentDescription = null, tint = DiscordBlurple)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Forum / Entraide", color = DiscordTextWhite, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Sujets structurés avec votes, tags Résolu & réponses", color = DiscordTextMuted, fontSize = 11.sp)
+                    }
+                    RadioButton(
+                        selected = channelType == ChannelType.FORUM,
+                        onClick = { channelType = ChannelType.FORUM },
                         colors = RadioButtonDefaults.colors(selectedColor = DiscordBlurple)
                     )
                 }

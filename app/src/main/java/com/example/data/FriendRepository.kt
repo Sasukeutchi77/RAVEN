@@ -54,6 +54,7 @@ class FriendRepository(
     private var publicDirectoryListener: ListenerRegistration? = null
     private val notifiedRequestIds = mutableSetOf<String>()
     private val materializedPairIds = mutableSetOf<String>()
+    private val syncedCloudDmIds = mutableSetOf<String>()
 
     init {
         seedOfflineDefaults()
@@ -124,13 +125,22 @@ class FriendRepository(
         if (uid.isNullOrBlank() || db == null) {
             stopListeners()
             activeAuthUid = null
-            if (_friends.value.isEmpty()) {
-                seedOfflineDefaults()
-            }
+            notifiedRequestIds.clear()
+            materializedPairIds.clear()
+            syncedCloudDmIds.clear()
+            _friends.value = emptyList()
+            _directoryUsers.value = emptyMap()
+            chatRepo.directConversationsMutableFlow().value = emptyList()
+            seedOfflineDefaults()
             return
         }
         if (activeAuthUid == uid) return
         activeAuthUid = uid
+        notifiedRequestIds.clear()
+        materializedPairIds.clear()
+        syncedCloudDmIds.clear()
+        _friends.value = emptyList()
+        _directoryUsers.value = emptyMap()
         startListeners(db, uid)
     }
 
@@ -266,9 +276,11 @@ class FriendRepository(
                 }.filter { conv ->
                     conv.isGroup || conv.friend.id !in blockedIds
                 }
-                if (cloudConvs.isNotEmpty()) {
-                    mergeDirectConversationsCoherently(cloudConvs, uid)
-                }
+                mergeDirectConversationsCoherently(
+                    cloudConvs = cloudConvs,
+                    myUid = uid,
+                    hasPendingWrites = snap.metadata.hasPendingWrites()
+                )
             }
 
         // 5. Public profiles directory listener (non-PII + privacy flags + activity)
@@ -313,9 +325,23 @@ class FriendRepository(
             }
     }
 
-    private fun mergeDirectConversationsCoherently(cloudConvs: List<DirectConversation>, myUid: String) {
+    private fun mergeDirectConversationsCoherently(
+        cloudConvs: List<DirectConversation>,
+        myUid: String,
+        hasPendingWrites: Boolean = false
+    ) {
+        val cloudIds = cloudConvs.map { it.id }.toSet()
+        val previouslySynced = syncedCloudDmIds.toSet()
+        val demoIds = MockData.initialDirectConversations.map { it.id }.toSet()
         val current = chatRepo.directConversationsMutableFlow().value
-        val result = current.toMutableList()
+        val result = if (hasPendingWrites) {
+            current.toMutableList()
+        } else {
+            current.filter { local ->
+                local.id in cloudIds ||
+                    (local.id !in previouslySynced && (cloudConvs.isEmpty() || local.id in demoIds))
+            }.toMutableList()
+        }
         cloudConvs.forEach { cloud ->
             val existingIdx = result.indexOfFirst { local ->
                 if (local.id == cloud.id) true
@@ -328,6 +354,7 @@ class FriendRepository(
             if (existingIdx >= 0) {
                 val existing = result[existingIdx]
                 result[existingIdx] = existing.copy(
+                    id = cloud.id,
                     lastMessage = cloud.lastMessage.ifBlank { existing.lastMessage },
                     lastMessageTime = cloud.lastMessageTime.ifBlank { existing.lastMessageTime },
                     participantIds = cloud.participantIds.ifEmpty { existing.participantIds },
@@ -337,6 +364,8 @@ class FriendRepository(
                 result.add(0, cloud)
             }
         }
+        syncedCloudDmIds.clear()
+        syncedCloudDmIds.addAll(cloudIds)
         chatRepo.directConversationsMutableFlow().value = deduplicateDirectConversations(result, myUid)
     }
 

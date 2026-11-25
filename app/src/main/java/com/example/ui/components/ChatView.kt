@@ -133,6 +133,16 @@ fun ChatView(
     serverClosedByName: String? = null,
     onToggleServerClosed: ((Boolean) -> Unit)? = null,
     onBotQuickReplyClick: ((String) -> Unit)? = null,
+    onSendRichMessage: ((text: String, imageUrl: String?, audioUrl: String?, audioDurationSec: Int, waveformAmplitudes: List<Int>, isViewOnce: Boolean) -> Unit)? = null,
+    ephemeralDurationSec: Int = 0,
+    onSetEphemeralTimer: (Int) -> Unit = {},
+    onOpenViewOnce: (Message) -> Unit = {},
+    onOpenForwardSheet: (Message) -> Unit = {},
+    onTipOrbsOnMessage: (Message, Int) -> Unit = { _, _ -> },
+    onOpenMiniGames: () -> Unit = {},
+    isEffectivelyOnline: Boolean = true,
+    pendingOfflineCount: Int = 0,
+    onFlushOfflineQueue: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = ravenPalette()
@@ -157,6 +167,11 @@ fun ChatView(
     var showStickerPicker by remember { mutableStateOf(false) }
     var showBackgroundDialog by remember { mutableStateOf(false) }
     var showCreatePollDialog by remember { mutableStateOf(false) }
+    var showEphemeralDialog by remember { mutableStateOf(false) }
+    var messageForReadReceipts by remember { mutableStateOf<Message?>(null) }
+    var messageForTipOrbs by remember { mutableStateOf<Message?>(null) }
+    var viewOncePreviewMsg by remember { mutableStateOf<Message?>(null) }
+    var pickNextPhotoAsViewOnce by remember { mutableStateOf(false) }
 
     var slowmodeRemainingSec by remember(slowmodeCooldownUntilMs) { mutableIntStateOf(0) }
     LaunchedEffect(slowmodeCooldownUntilMs) {
@@ -176,16 +191,26 @@ fun ChatView(
     val audioRecorder = remember { AudioRecorderHelper(context) }
     val audioPlayer = remember { AudioPlayerHelper() }
     var isRecordingAudio by remember { mutableStateOf(false) }
+    var isRecordingLocked by remember { mutableStateOf(false) }
     var recordingTimerSec by remember { mutableStateOf(0) }
+    val recordingAmplitudes = remember { mutableStateListOf<Int>() }
 
     // Cloudinary photo picker
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
+        val asViewOnce = pickNextPhotoAsViewOnce
+        pickNextPhotoAsViewOnce = false
         if (uri != null) {
             coroutineScope.launch {
                 val uploadedUrl = CloudinaryHelper.uploadImage(context, uri)
-                onSendMessage("", uploadedUrl, null, 0)
+                if (uploadedUrl.isNotBlank()) {
+                    if (onSendRichMessage != null) {
+                        onSendRichMessage("", uploadedUrl, null, 0, emptyList(), asViewOnce)
+                    } else {
+                        onSendMessage("", uploadedUrl, null, 0)
+                    }
+                }
             }
         }
     }
@@ -230,14 +255,21 @@ fun ChatView(
         }
     }
 
-    // Recording timer
+    // Recording timer & live waveform sampling
     LaunchedEffect(isRecordingAudio) {
         if (isRecordingAudio) {
             recordingTimerSec = 0
+            recordingAmplitudes.clear()
+            var ticks = 0
             while (isRecordingAudio) {
-                delay(1000)
-                recordingTimerSec++
+                recordingAmplitudes.add(audioRecorder.sampleNormalizedAmplitude())
+                if (recordingAmplitudes.size > 36) recordingAmplitudes.removeAt(0)
+                delay(250L)
+                ticks++
+                if (ticks % 4 == 0) recordingTimerSec++
             }
+        } else {
+            isRecordingLocked = false
         }
     }
 
@@ -524,6 +556,51 @@ fun ChatView(
                     }
                 }
 
+                if (!isEffectivelyOnline || pendingOfflineCount > 0 || ephemeralDurationSec > 0) {
+                    Surface(
+                        color = if (!isEffectivelyOnline) DiscordAmber.copy(alpha = 0.16f) else DiscordBlurple.copy(alpha = 0.14f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
+                                Icon(
+                                    imageVector = if (!isEffectivelyOnline) Icons.Default.WifiOff else Icons.Default.Timer,
+                                    contentDescription = null,
+                                    tint = if (!isEffectivelyOnline) DiscordAmber else DiscordBlurple,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = buildString {
+                                        if (!isEffectivelyOnline) append("Hors-ligne ($pendingOfflineCount en attente)")
+                                        else if (pendingOfflineCount > 0) append("$pendingOfflineCount message(s) prêt(s) à synchroniser")
+                                        if (ephemeralDurationSec > 0) {
+                                            if (isNotEmpty()) append(" • ")
+                                            val lbl = EphemeralDurationOption.entries.find { it.seconds == ephemeralDurationSec }?.label ?: "${ephemeralDurationSec}s"
+                                            append("Éphémères : $lbl")
+                                        }
+                                    },
+                                    color = palette.textPrimary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            if (isEffectivelyOnline && pendingOfflineCount > 0) {
+                                TextButton(
+                                    onClick = onFlushOfflineQueue,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                    modifier = Modifier.height(26.dp)
+                                ) {
+                                    Text("Synchroniser", color = DiscordGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 HorizontalDivider(color = palette.border, thickness = 1.dp)
             }
         },
@@ -680,58 +757,30 @@ fun ChatView(
                     }
                 }
 
-                // Voice note recording banner
+                // Voice note recording banner with live waveform & lock mic
                 if (isRecordingAudio) {
-                    Surface(
-                        color = DiscordDarkCard,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(12.dp)
-                                        .clip(CircleShape)
-                                        .background(DiscordRed)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Enregistrement vocal... ${recordingTimerSec}s",
-                                    color = DiscordTextWhite,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                TextButton(onClick = {
-                                    audioRecorder.stopRecording()
-                                    isRecordingAudio = false
-                                }) {
-                                    Text("Annuler", color = DiscordTextMuted)
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Button(
-                                    onClick = {
-                                        val recordedPath = audioRecorder.stopRecording()
-                                        isRecordingAudio = false
-                                        if (recordedPath != null) {
-                                            onSendMessage("", null, recordedPath, recordingTimerSec)
-                                        }
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
-                                ) {
-                                    Text("Envoyer", color = Color.White)
+                    VoiceNoteRecordingBanner(
+                        recordingSeconds = recordingTimerSec,
+                        amplitudes = recordingAmplitudes.toList(),
+                        isLocked = isRecordingLocked,
+                        onToggleLock = { isRecordingLocked = !isRecordingLocked },
+                        onCancel = {
+                            audioRecorder.stopRecording()
+                            isRecordingAudio = false
+                        },
+                        onSend = {
+                            val recordedPath = audioRecorder.stopRecording()
+                            val amps = recordingAmplitudes.toList()
+                            isRecordingAudio = false
+                            if (recordedPath != null) {
+                                if (onSendRichMessage != null) {
+                                    onSendRichMessage("", null, recordedPath, recordingTimerSec, amps, false)
+                                } else {
+                                    onSendMessage("", null, recordedPath, recordingTimerSec)
                                 }
                             }
                         }
-                    }
+                    )
                 }
 
                 // Expandable Discord "+" Attachment & Action Tray
@@ -747,6 +796,7 @@ fun ChatView(
                             AssistChip(
                                 onClick = {
                                     isAttachmentTrayOpen = false
+                                    pickNextPhotoAsViewOnce = false
                                     photoPickerLauncher.launch(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                     )
@@ -754,6 +804,42 @@ fun ChatView(
                                 label = { Text("Photo", color = DiscordTextWhite, fontSize = 12.sp) },
                                 leadingIcon = { Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, tint = DiscordGreen, modifier = Modifier.size(16.dp)) },
                                 modifier = Modifier.testTag("chat_attachment_button")
+                            )
+                        }
+                        item {
+                            AssistChip(
+                                onClick = {
+                                    isAttachmentTrayOpen = false
+                                    pickNextPhotoAsViewOnce = true
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                label = { Text("Vue unique", color = DiscordTextWhite, fontSize = 12.sp) },
+                                leadingIcon = { Icon(Icons.Default.LooksOne, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp)) },
+                                modifier = Modifier.testTag("chat_view_once_button")
+                            )
+                        }
+                        item {
+                            AssistChip(
+                                onClick = {
+                                    isAttachmentTrayOpen = false
+                                    showEphemeralDialog = true
+                                },
+                                label = { Text("Éphémères", color = DiscordTextWhite, fontSize = 12.sp) },
+                                leadingIcon = { Icon(Icons.Default.Timer, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(16.dp)) },
+                                modifier = Modifier.testTag("chat_ephemeral_button")
+                            )
+                        }
+                        item {
+                            AssistChip(
+                                onClick = {
+                                    isAttachmentTrayOpen = false
+                                    onOpenMiniGames()
+                                },
+                                label = { Text("Mini-jeux", color = DiscordTextWhite, fontSize = 12.sp) },
+                                leadingIcon = { Icon(Icons.Default.SportsEsports, contentDescription = null, tint = DiscordBlurple, modifier = Modifier.size(16.dp)) },
+                                modifier = Modifier.testTag("chat_minigames_button")
                             )
                         }
                         item {
@@ -1222,6 +1308,11 @@ fun ChatView(
                                     val executed = onExecuteSlashCommand(payload)
                                     if (!executed) onSendMessage(payload, null, null, 0)
                                 }
+                            },
+                            onOpenViewOnce = { msg ->
+                                if (!msg.imageUrl.isNullOrBlank()) {
+                                    viewOncePreviewMsg = msg
+                                }
                             }
                         )
                     }
@@ -1353,6 +1444,44 @@ fun ChatView(
                             clipboardManager.setText(AnnotatedString(targetMsg.text))
                             selectedMessageForActions = null
                         },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                    )
+                }
+
+                ListItem(
+                    headlineContent = { Text("Transférer vers d'autres salons/MP", color = DiscordTextWhite) },
+                    leadingContent = { Icon(Icons.Default.ForwardToInbox, contentDescription = null, tint = DiscordBlurple) },
+                    modifier = Modifier
+                        .clickable {
+                            onOpenForwardSheet(targetMsg)
+                            selectedMessageForActions = null
+                        }
+                        .testTag("sheet_forward_message"),
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                )
+
+                ListItem(
+                    headlineContent = { Text("Accusés de lecture", color = DiscordTextWhite) },
+                    leadingContent = { Icon(Icons.Default.DoneAll, contentDescription = null, tint = Color(0xFF38BDF8)) },
+                    modifier = Modifier
+                        .clickable {
+                            messageForReadReceipts = targetMsg
+                            selectedMessageForActions = null
+                        }
+                        .testTag("sheet_read_receipts"),
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                )
+
+                if (targetMsg.sender.id != currentUserId && targetMsg.sender.id != "user_me") {
+                    ListItem(
+                        headlineContent = { Text("Offrir des Orbs", color = DiscordAmber) },
+                        leadingContent = { Icon(Icons.Default.Toll, contentDescription = null, tint = DiscordAmber) },
+                        modifier = Modifier
+                            .clickable {
+                                messageForTipOrbs = targetMsg
+                                selectedMessageForActions = null
+                            }
+                            .testTag("sheet_tip_orbs"),
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                     )
                 }
@@ -1507,6 +1636,45 @@ fun ChatView(
             )
         }
     }
+
+    if (showEphemeralDialog) {
+        EphemeralTimerDialog(
+            currentDurationSec = ephemeralDurationSec,
+            onSelectDuration = onSetEphemeralTimer,
+            onDismiss = { showEphemeralDialog = false }
+        )
+    }
+
+    messageForReadReceipts?.let { receiptMsg ->
+        MessageReadReceiptsDialog(
+            message = receiptMsg,
+            knownMembers = members,
+            onDismiss = { messageForReadReceipts = null }
+        )
+    }
+
+    messageForTipOrbs?.let { tipMsg ->
+        MessageTipOrbsDialog(
+            message = tipMsg,
+            currentOrbsBalance = orbsBalance,
+            onTipOrbs = { amount -> onTipOrbsOnMessage(tipMsg, amount) },
+            onDismiss = { messageForTipOrbs = null }
+        )
+    }
+
+    viewOncePreviewMsg?.let { voMsg ->
+        val imgUrl = voMsg.imageUrl
+        if (!imgUrl.isNullOrBlank()) {
+            ViewOnceFullScreenDialog(
+                imageUrl = imgUrl,
+                senderName = voMsg.sender.name,
+                onDismiss = {
+                    onOpenViewOnce(voMsg)
+                    viewOncePreviewMsg = null
+                }
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -1528,7 +1696,8 @@ fun MessageItem(
     pollViewModel: PollViewModel? = null,
     pollUiState: PollUiState? = null,
     onOpenAdvancedPollStats: (AdvancedPoll, Boolean) -> Unit = { _, _ -> },
-    onBotQuickReplyClick: (String) -> Unit = {}
+    onBotQuickReplyClick: (String) -> Unit = {},
+    onOpenViewOnce: (Message) -> Unit = {}
 ) {
     val palette = ravenPalette()
     val isMine = message.sender.id == currentUserId || message.sender.id == "user_me"
@@ -1797,6 +1966,51 @@ fun MessageItem(
                             modifier = Modifier.size(13.dp)
                         )
                     }
+
+                    if (message.ephemeralExpiresAtMs != null) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.Timer,
+                            contentDescription = "Message éphémère",
+                            tint = DiscordAmber,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+
+                    if (isMine) {
+                        Spacer(modifier = Modifier.width(5.dp))
+                        if (message.isOfflineQueued) {
+                            Icon(
+                                imageVector = Icons.Default.Schedule,
+                                contentDescription = "En attente de réseau",
+                                tint = DiscordAmber,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        } else {
+                            val isReadByOther = message.readByIds.any { it != currentUserId && it != "user_me" }
+                            Icon(
+                                imageVector = if (isReadByOther) Icons.Default.DoneAll else Icons.Default.Done,
+                                contentDescription = if (isReadByOther) "Lu" else "Envoyé",
+                                tint = if (isReadByOther) Color(0xFF38BDF8) else DiscordTextMuted,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                }
+
+                if (!message.forwardedFrom.isNullOrBlank()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(top = 2.dp)
+                    ) {
+                        Icon(Icons.Default.ForwardToInbox, contentDescription = null, tint = DiscordTextMuted, modifier = Modifier.size(12.dp))
+                        Text(
+                            text = "Transféré • ${message.forwardedFrom}",
+                            color = DiscordTextMuted,
+                            fontSize = 11.sp
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(2.dp))
@@ -1826,8 +2040,15 @@ fun MessageItem(
                     )
                 }
 
-                // Image preview with Coil
-                if (!message.imageUrl.isNullOrBlank()) {
+                // View-Once Photo or Normal Image preview with Coil
+                if (message.isViewOnce) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    ViewOnceMediaCard(
+                        message = message,
+                        currentUserId = currentUserId,
+                        onOpenViewOnce = { onOpenViewOnce(message) }
+                    )
+                } else if (!message.imageUrl.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(6.dp))
                     AsyncImage(
                         model = message.imageUrl,
@@ -1841,57 +2062,30 @@ fun MessageItem(
                     )
                 }
 
-                // Audio Voice Note Player with animated waveform
+                // Interactive Waveform Audio Voice Note Player (1x / 1.5x / 2x)
                 if (!message.audioUrl.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(6.dp))
-                    var isPlayingThis by remember { mutableStateOf(false) }
+                    VoiceNoteBubbleCard(
+                        audioUrl = message.audioUrl,
+                        durationSec = message.audioDurationSec,
+                        waveformAmplitudes = message.waveformAmplitudes,
+                        audioPlayer = audioPlayer
+                    )
+                }
 
+                if (message.totalOrbsTipped > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
                     Surface(
-                        color = palette.cardBg,
-                        shape = RoundedCornerShape(12.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, palette.border),
-                        modifier = Modifier.fillMaxWidth(0.88f)
+                        color = DiscordAmber.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(10.dp)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            IconButton(
-                                onClick = {
-                                    if (isPlayingThis) {
-                                        audioPlayer.stop()
-                                        isPlayingThis = false
-                                    } else {
-                                        audioPlayer.play(message.audioUrl) {
-                                            isPlayingThis = false
-                                        }
-                                        isPlayingThis = true
-                                    }
-                                },
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(DiscordBlurple)
-                            ) {
-                                Icon(
-                                    imageVector = if (isPlayingThis) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlayingThis) "Pause" else "Écouter",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(10.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                VoiceWaveformVisualizer(isPlaying = isPlayingThis)
-                                Spacer(modifier = Modifier.height(3.dp))
-                                Text(
-                                    text = if (isPlayingThis) "Lecture en cours..." else "Note vocale • ${if (message.audioDurationSec > 0) "${message.audioDurationSec}s" else "Audio"}",
-                                    color = palette.textMuted,
-                                    fontSize = 11.sp
-                                )
-                            }
+                            Icon(Icons.Default.Toll, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(12.dp))
+                            Text("+${message.totalOrbsTipped} Orbs reçus", color = DiscordAmber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }

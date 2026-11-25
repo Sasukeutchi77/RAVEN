@@ -74,7 +74,11 @@ data class AppSettingsState(
     val showActivityStatus: Boolean = true,
     val mentionNotifications: Boolean = true,
     val localNotificationsEnabled: Boolean = true,
-    val platformLayoutOverride: PlatformLayoutOverride = PlatformLayoutOverride.FORCE_DESKTOP
+    val platformLayoutOverride: PlatformLayoutOverride = PlatformLayoutOverride.FORCE_DESKTOP,
+    val requireCodeOnAppLaunch: Boolean = false,
+    val biometricUnlockEnabled: Boolean = false,
+    val lockedConversationIds: Set<String> = emptySet(),
+    val simulateOfflineMode: Boolean = false
 )
 
 enum class GlobalSearchFilter(val label: String) {

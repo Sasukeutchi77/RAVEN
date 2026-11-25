@@ -28,6 +28,15 @@ object StoryFirestoreSync {
         put("textColorHex", story.textColorHex)
         put("visibility", story.visibility.name)
         put("allowedViewerIds", story.allowedViewerIds.distinct().take(200))
+        story.allowedServerId?.takeIf { it.isNotBlank() }?.let { put("allowedServerId", it) }
+        story.stickerText?.takeIf { it.isNotBlank() }?.let { put("stickerText", it.take(120)) }
+        put("stickerStyle", story.stickerStyle)
+        story.quickPollQuestion?.takeIf { it.isNotBlank() }?.let { put("quickPollQuestion", it.take(140)) }
+        if (story.quickPollOptions.isNotEmpty()) put("quickPollOptions", story.quickPollOptions.take(4))
+        if (story.quickPollVotes.isNotEmpty()) put("quickPollVotes", story.quickPollVotes)
+        if (story.quickPollVotedByIds.isNotEmpty()) put("quickPollVotedByIds", story.quickPollVotedByIds)
+        story.musicTrackTitle?.takeIf { it.isNotBlank() }?.let { put("musicTrackTitle", it.take(100)) }
+        story.musicTrackArtist?.takeIf { it.isNotBlank() }?.let { put("musicTrackArtist", it.take(100)) }
         put("durationHours", story.durationHours.coerceIn(1, 168))
         put("createdAtMs", story.createdAtMs)
         put("expiresAtMs", story.expiresAtMs)
@@ -47,6 +56,15 @@ object StoryFirestoreSync {
         val allowed = (data["allowedViewerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
         val viewerIds = (data["viewerIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
         val likedByIds = (data["likedByIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+        val quickPollOptions = (data["quickPollOptions"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+        val quickPollVotedByIds = (data["quickPollVotedByIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+        val rawPollVotes = (data["quickPollVotes"] as? Map<*, *>)
+            ?.mapNotNull { (k, v) ->
+                val key = k as? String ?: return@mapNotNull null
+                val count = (v as? Number)?.toInt() ?: 0
+                key to count
+            }?.toMap() ?: emptyMap()
+
         return StoryItem(
             id = doc.id,
             authorId = authorId,
@@ -65,13 +83,22 @@ object StoryFirestoreSync {
             textColorHex = (data["textColorHex"] as? Number)?.toLong() ?: 0xFFFFFFFFL,
             visibility = visibility,
             allowedViewerIds = allowed,
+            allowedServerId = data["allowedServerId"] as? String,
             durationHours = (data["durationHours"] as? Number)?.toInt() ?: 24,
             createdAtMs = (data["createdAtMs"] as? Number)?.toLong() ?: 0L,
             expiresAtMs = (data["expiresAtMs"] as? Number)?.toLong() ?: 0L,
             viewCount = (data["viewCount"] as? Number)?.toInt() ?: viewerIds.size,
             viewerIds = viewerIds,
             likesCount = (data["likesCount"] as? Number)?.toInt() ?: likedByIds.size,
-            likedByIds = likedByIds
+            likedByIds = likedByIds,
+            stickerText = data["stickerText"] as? String,
+            stickerStyle = (data["stickerStyle"] as? String).orEmpty().ifBlank { "GLASS" },
+            quickPollQuestion = data["quickPollQuestion"] as? String,
+            quickPollOptions = quickPollOptions,
+            quickPollVotes = rawPollVotes,
+            quickPollVotedByIds = quickPollVotedByIds,
+            musicTrackTitle = data["musicTrackTitle"] as? String,
+            musicTrackArtist = data["musicTrackArtist"] as? String
         )
     }
 
@@ -142,6 +169,24 @@ object StoryFirestoreSync {
                 mapOf(
                     "likedByIds" to nextLikedByIds,
                     "likesCount" to nextLikesCount,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+        )
+    }
+
+    fun voteQuickPollBlocking(
+        db: FirebaseFirestore,
+        storyId: String,
+        nextVotes: Map<String, Int>,
+        nextVotedByIds: List<String>
+    ) {
+        val storyRef = db.collection(COLLECTION_STORIES).document(storyId)
+        Tasks.await(
+            storyRef.update(
+                mapOf(
+                    "quickPollVotes" to nextVotes,
+                    "quickPollVotedByIds" to nextVotedByIds,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             )

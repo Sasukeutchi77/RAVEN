@@ -76,6 +76,13 @@ class StoryViewModel(private val repo: StoryRepository) : ViewModel() {
         visibility: StoryVisibility,
         customAllowedViewerIds: Set<String>,
         durationHours: Int,
+        allowedServerId: String? = null,
+        stickerText: String? = null,
+        stickerStyle: String = "GLASS",
+        quickPollQuestion: String? = null,
+        quickPollOptions: List<String> = emptyList(),
+        musicTrackTitle: String? = null,
+        musicTrackArtist: String? = null,
         onPublished: (StoryItem) -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -87,7 +94,14 @@ class StoryViewModel(private val repo: StoryRepository) : ViewModel() {
                 secondaryColorHex = secondaryColorHex,
                 visibility = visibility,
                 customAllowedViewerIds = customAllowedViewerIds,
-                durationHours = durationHours
+                durationHours = durationHours,
+                allowedServerId = allowedServerId,
+                stickerText = stickerText,
+                stickerStyle = stickerStyle,
+                quickPollQuestion = quickPollQuestion,
+                quickPollOptions = quickPollOptions,
+                musicTrackTitle = musicTrackTitle,
+                musicTrackArtist = musicTrackArtist
             )
             _busy.value = false
             res.onSuccess { created ->
@@ -107,6 +121,13 @@ class StoryViewModel(private val repo: StoryRepository) : ViewModel() {
         visibility: StoryVisibility,
         customAllowedViewerIds: Set<String>,
         durationHours: Int,
+        allowedServerId: String? = null,
+        stickerText: String? = null,
+        stickerStyle: String = "GLASS",
+        quickPollQuestion: String? = null,
+        quickPollOptions: List<String> = emptyList(),
+        musicTrackTitle: String? = null,
+        musicTrackArtist: String? = null,
         onPublished: (StoryItem) -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -118,7 +139,14 @@ class StoryViewModel(private val repo: StoryRepository) : ViewModel() {
                 caption = caption,
                 visibility = visibility,
                 customAllowedViewerIds = customAllowedViewerIds,
-                durationHours = durationHours
+                durationHours = durationHours,
+                allowedServerId = allowedServerId,
+                stickerText = stickerText,
+                stickerStyle = stickerStyle,
+                quickPollQuestion = quickPollQuestion,
+                quickPollOptions = quickPollOptions,
+                musicTrackTitle = musicTrackTitle,
+                musicTrackArtist = musicTrackArtist
             )
             _busy.value = false
             res.onSuccess { created ->
@@ -153,6 +181,12 @@ class StoryViewModel(private val repo: StoryRepository) : ViewModel() {
             res.onFailure { err ->
                 _feedback.value = null to (err.message ?: "Impossible d'aimer cette story.")
             }
+        }
+    }
+
+    fun voteStoryQuickPoll(storyId: String, option: String) {
+        viewModelScope.launch {
+            repo.voteOnStoryQuickPoll(storyId, option)
         }
     }
 

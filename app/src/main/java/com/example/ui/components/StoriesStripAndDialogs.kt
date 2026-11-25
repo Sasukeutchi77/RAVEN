@@ -313,6 +313,8 @@ private fun StoryAuthorAvatarTile(
 @Composable
 fun CreateStoryDialog(
     friends: List<User>,
+    servers: List<Server> = emptyList(),
+    jukeboxTracks: List<MusicTrack> = emptyList(),
     isBusy: Boolean,
     onDismiss: () -> Unit,
     onPublishText: (
@@ -322,7 +324,14 @@ fun CreateStoryDialog(
         secondaryColorHex: Long,
         visibility: StoryVisibility,
         customAllowedIds: Set<String>,
-        durationHours: Int
+        durationHours: Int,
+        allowedServerId: String?,
+        stickerText: String?,
+        stickerStyle: String,
+        quickPollQuestion: String?,
+        quickPollOptions: List<String>,
+        musicTrackTitle: String?,
+        musicTrackArtist: String?
     ) -> Unit,
     onPublishMedia: (
         uri: Uri,
@@ -330,10 +339,16 @@ fun CreateStoryDialog(
         caption: String,
         visibility: StoryVisibility,
         customAllowedIds: Set<String>,
-        durationHours: Int
+        durationHours: Int,
+        allowedServerId: String?,
+        stickerText: String?,
+        stickerStyle: String,
+        quickPollQuestion: String?,
+        quickPollOptions: List<String>,
+        musicTrackTitle: String?,
+        musicTrackArtist: String?
     ) -> Unit
 ) {
-    val context = LocalContext.current
     var selectedMode by remember { mutableStateOf(StoryMediaType.TEXT) }
     var textContent by remember { mutableStateOf("") }
     var caption by remember { mutableStateOf("") }
@@ -342,7 +357,22 @@ fun CreateStoryDialog(
     var selectedVisibility by remember { mutableStateOf(StoryVisibility.FRIENDS) }
     var selectedDuration by remember { mutableStateOf(StoryDurationOption.TWENTY_FOUR_HOURS) }
     var chosenCustomFriendIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedAllowedServerId by remember { mutableStateOf(servers.firstOrNull()?.id) }
+
+    // Story Enrichment: Sticker, Quick Poll, Background Music
+    var stickerText by remember { mutableStateOf("") }
+    var stickerStyle by remember { mutableStateOf("PILL") }
+    var includePoll by remember { mutableStateOf(false) }
+    var pollQuestion by remember { mutableStateOf("") }
+    var pollOptionA by remember { mutableStateOf("Oui 🔥") }
+    var pollOptionB by remember { mutableStateOf("Non 👀") }
+    var selectedTrackId by remember { mutableStateOf<String?>(null) }
+
     var validationError by remember { mutableStateOf<String?>(null) }
+
+    val selectedTrack = remember(selectedTrackId, jukeboxTracks) {
+        jukeboxTracks.find { it.id == selectedTrackId }
+    }
 
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -421,15 +451,32 @@ fun CreateStoryDialog(
                                 .padding(14.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = textContent.ifBlank { "Aperçu de votre story..." },
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center,
-                                maxLines = 4,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = textContent.ifBlank { "Aperçu de votre story..." },
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 3,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (stickerText.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Surface(
+                                        color = if (stickerStyle == "NEON") Color(0xFF00E5FF) else Color.White,
+                                        shape = RoundedCornerShape(16.dp)
+                                    ) {
+                                        Text(
+                                            text = stickerText,
+                                            color = Color.Black,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -537,6 +584,97 @@ fun CreateStoryDialog(
                     modifier = Modifier.fillMaxWidth().testTag("create_story_caption_input")
                 )
 
+                // Sticker & Music enrichment card
+                Surface(
+                    color = DiscordDarkInput,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("AUTOCOLLANT, SONDAGE & MUSIQUE", color = DiscordBlurple, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        OutlinedTextField(
+                            value = stickerText,
+                            onValueChange = { stickerText = it.take(32) },
+                            label = { Text("Sticker / Tag (ex. Live, Mood, Paris)", color = DiscordTextMuted, fontSize = 11.sp) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("create_story_sticker_input")
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("PILL" to "Classique", "NEON" to "Néon", "AMBER" to "Or").forEach { (styleId, label) ->
+                                FilterChip(
+                                    selected = stickerStyle == styleId,
+                                    onClick = { stickerStyle = styleId },
+                                    label = { Text(label, fontSize = 11.sp) }
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(Icons.Default.Poll, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(16.dp))
+                                Text("Sondage rapide", color = DiscordTextWhite, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            Switch(
+                                checked = includePoll,
+                                onCheckedChange = { includePoll = it },
+                                modifier = Modifier.testTag("create_story_poll_switch")
+                            )
+                        }
+                        if (includePoll) {
+                            OutlinedTextField(
+                                value = pollQuestion,
+                                onValueChange = { pollQuestion = it.take(90) },
+                                label = { Text("Question du sondage", color = DiscordTextMuted, fontSize = 11.sp) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().testTag("create_story_poll_question")
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedTextField(
+                                    value = pollOptionA,
+                                    onValueChange = { pollOptionA = it.take(30) },
+                                    label = { Text("Option 1", fontSize = 10.sp) },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                OutlinedTextField(
+                                    value = pollOptionB,
+                                    onValueChange = { pollOptionB = it.take(30) },
+                                    label = { Text("Option 2", fontSize = 10.sp) },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        if (jukeboxTracks.isNotEmpty()) {
+                            Text("Ambiance Jukebox", color = DiscordTextMuted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                item {
+                                    FilterChip(
+                                        selected = selectedTrackId == null,
+                                        onClick = { selectedTrackId = null },
+                                        label = { Text("Aucune", fontSize = 11.sp) }
+                                    )
+                                }
+                                items(jukeboxTracks.take(6), key = { it.id }) { track ->
+                                    FilterChip(
+                                        selected = selectedTrackId == track.id,
+                                        onClick = { selectedTrackId = track.id },
+                                        label = { Text("🎵 ${track.title}", fontSize = 11.sp, maxLines = 1) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Availability duration chips
                 Text("Durée de disponibilité", color = DiscordTextWhite, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -572,6 +710,24 @@ fun CreateStoryDialog(
                             Column {
                                 Text(vis.label, color = DiscordTextWhite, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                                 Text(vis.subtitle, color = DiscordTextMuted, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+
+                // Server members selector
+                if (selectedVisibility == StoryVisibility.SERVER_MEMBERS) {
+                    Text("Serveur autorisé :", color = DiscordTextMuted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    if (servers.isEmpty()) {
+                        Text("Aucun serveur disponible.", color = DiscordRed, fontSize = 12.sp)
+                    } else {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            items(servers, key = { it.id }) { server ->
+                                FilterChip(
+                                    selected = selectedAllowedServerId == server.id,
+                                    onClick = { selectedAllowedServerId = server.id },
+                                    label = { Text(server.name, fontSize = 11.sp) }
+                                )
                             }
                         }
                     }
@@ -619,6 +775,17 @@ fun CreateStoryDialog(
                         validationError = "Sélectionnez au moins un utilisateur autorisé."
                         return@Button
                     }
+                    if (selectedVisibility == StoryVisibility.SERVER_MEMBERS && selectedAllowedServerId.isNullOrBlank()) {
+                        validationError = "Sélectionnez un serveur autorisé."
+                        return@Button
+                    }
+                    val pollQ = if (includePoll && pollQuestion.isNotBlank()) pollQuestion.trim() else null
+                    val pollOpts = if (pollQ != null) {
+                        listOf(pollOptionA.trim().ifBlank { "Oui" }, pollOptionB.trim().ifBlank { "Non" })
+                    } else emptyList()
+                    val serverIdArg = if (selectedVisibility == StoryVisibility.SERVER_MEMBERS) selectedAllowedServerId else null
+                    val stickerArg = stickerText.trim().takeIf { it.isNotBlank() }
+
                     when (selectedMode) {
                         StoryMediaType.TEXT -> {
                             if (textContent.isBlank()) {
@@ -632,7 +799,14 @@ fun CreateStoryDialog(
                                 selectedPalette.secondaryHex,
                                 selectedVisibility,
                                 chosenCustomFriendIds,
-                                selectedDuration.hours
+                                selectedDuration.hours,
+                                serverIdArg,
+                                stickerArg,
+                                stickerStyle,
+                                pollQ,
+                                pollOpts,
+                                selectedTrack?.title,
+                                selectedTrack?.artist
                             )
                         }
                         StoryMediaType.IMAGE, StoryMediaType.VIDEO -> {
@@ -647,7 +821,14 @@ fun CreateStoryDialog(
                                 caption,
                                 selectedVisibility,
                                 chosenCustomFriendIds,
-                                selectedDuration.hours
+                                selectedDuration.hours,
+                                serverIdArg,
+                                stickerArg,
+                                stickerStyle,
+                                pollQ,
+                                pollOpts,
+                                selectedTrack?.title,
+                                selectedTrack?.artist
                             )
                         }
                     }

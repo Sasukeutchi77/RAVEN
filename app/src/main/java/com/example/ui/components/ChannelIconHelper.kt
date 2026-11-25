@@ -26,10 +26,12 @@ fun resolveCatalogIconVector(
         "photo" -> Icons.Default.PhotoLibrary
         "help" -> Icons.Default.SupportAgent
         "rocket" -> Icons.Default.RocketLaunch
+        "forum" -> Icons.Default.Forum
         else -> when (fallbackType) {
             ChannelType.STAGE -> Icons.Default.Podcasts
             ChannelType.VOICE -> Icons.Default.VolumeUp
             ChannelType.ANNOUNCEMENT -> Icons.Default.Campaign
+            ChannelType.FORUM -> Icons.Default.Forum
             else -> Icons.Default.Tag
         }
     }
@@ -45,6 +47,7 @@ fun resolveChannelIconVector(channel: Channel): ImageVector {
         channel.type == ChannelType.STAGE -> Icons.Default.Podcasts
         channel.type == ChannelType.VOICE -> Icons.Default.VolumeUp
         channel.type == ChannelType.ANNOUNCEMENT -> Icons.Default.Campaign
+        channel.type == ChannelType.FORUM -> Icons.Default.Forum
         else -> Icons.Default.Tag
     }
 }

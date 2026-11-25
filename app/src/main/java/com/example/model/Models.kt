@@ -18,7 +18,8 @@ enum class ChannelType {
     TEXT,
     VOICE,
     ANNOUNCEMENT,
-    STAGE
+    STAGE,
+    FORUM
 }
 
 data class User(
@@ -53,6 +54,9 @@ data class User(
     val clanTag: String? = "RVN",
     val clanBadgeIcon: String = "bolt",
     val unlockedStickers: List<String> = listOf("stk_wave", "stk_gg", "stk_hype", "stk_heart"),
+    val purchasedShopItemIds: List<String> = listOf("theme_nebula", "dec_magic_mist"),
+    val favoriteShopItemIds: List<String> = emptyList(),
+    val equippedChatThemeId: String? = null,
     val lastActiveAtMs: Long = System.currentTimeMillis(),
     val lastActivityLabel: String = ""
 )
@@ -60,7 +64,8 @@ data class User(
 data class Reaction(
     val emoji: String = "",
     val count: Int = 0,
-    val userReacted: Boolean = false
+    val userReacted: Boolean = false,
+    val reactedUserIds: List<String> = emptyList()
 )
 
 data class Message(
@@ -74,6 +79,7 @@ data class Message(
     val imageUrl: String? = null,
     val audioUrl: String? = null,
     val audioDurationSec: Int = 0,
+    val waveformAmplitudes: List<Int> = emptyList(),
     val attachmentName: String? = null,
     val attachmentType: String? = null,
     val attachmentSizeLabel: String? = null,
@@ -85,7 +91,14 @@ data class Message(
     val isEdited: Boolean = false,
     val threadCount: Int = 0,
     val isBotMessage: Boolean = false,
-    val botQuickReplies: List<BotQuickReply> = emptyList()
+    val botQuickReplies: List<BotQuickReply> = emptyList(),
+    val ephemeralExpiresAtMs: Long? = null,
+    val isViewOnce: Boolean = false,
+    val viewedByIds: List<String> = emptyList(),
+    val readByIds: List<String> = emptyList(),
+    val forwardedFrom: String? = null,
+    val totalOrbsTipped: Int = 0,
+    val isOfflineQueued: Boolean = false
 )
 
 data class Channel(
@@ -153,7 +166,10 @@ data class Server(
     val isClosed: Boolean = false,
     val closedByUid: String? = null,
     val closedByName: String? = null,
-    val closedAtMs: Long? = null
+    val closedAtMs: Long? = null,
+    val requireRulesAcceptance: Boolean = false,
+    val acceptedRulesMemberIds: List<String> = emptyList(),
+    val treasuryOrbs: Int = 0
 )
 
 data class DirectConversation(

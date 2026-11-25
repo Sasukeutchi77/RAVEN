@@ -339,14 +339,24 @@ fun RichMessageText(
 @Composable
 fun LinkPreviewCard(text: String) {
     val url = remember(text) {
-        Regex("https?://\\S+").find(text)?.value
+        Regex("https?://\\S+").find(text)?.value?.trimEnd('.', ',', ')', ']')
     } ?: return
+    val parsedUri = remember(url) {
+        runCatching { android.net.Uri.parse(url) }.getOrNull()
+    }
+    val isValidWebUrl = remember(parsedUri) {
+        val scheme = parsedUri?.scheme?.lowercase()
+        val host = parsedUri?.host
+        (scheme == "https" || scheme == "http") &&
+            !host.isNullOrBlank() &&
+            parsedUri.userInfo.isNullOrBlank()
+    }
+    if (!isValidWebUrl) return
 
     val palette = ravenPalette()
     val uriHandler = LocalUriHandler.current
-    val host = remember(url) {
-        url.removePrefix("https://").removePrefix("http://").substringBefore("/")
-    }
+    var showInsecureConfirm by remember(url) { mutableStateOf(false) }
+    val host = remember(parsedUri) { parsedUri?.host.orEmpty() }
     val siteTitle = remember(host) {
         when {
             host.contains("github", ignoreCase = true) -> "GitHub • Dépôt & Code"
@@ -354,6 +364,37 @@ fun LinkPreviewCard(text: String) {
             host.contains("youtube", ignoreCase = true) || host.contains("youtu.be", ignoreCase = true) -> "YouTube • Vidéo"
             else -> host.replaceFirstChar { it.uppercase() }
         }
+    }
+
+    if (showInsecureConfirm) {
+        AlertDialog(
+            onDismissRequest = { showInsecureConfirm = false },
+            containerColor = palette.cardBg,
+            title = { Text("Lien non chiffré (HTTP)", color = palette.textPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Ce lien utilise HTTP sans chiffrement ($host). Voulez-vous vraiment l'ouvrir ?",
+                    color = palette.textSecondary,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showInsecureConfirm = false
+                        try { uriHandler.openUri(url) } catch (_: Exception) {}
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DiscordBlurple)
+                ) {
+                    Text("Ouvrir", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showInsecureConfirm = false }) {
+                    Text("Annuler", color = palette.textMuted)
+                }
+            }
+        )
     }
 
     Surface(
@@ -365,9 +406,13 @@ fun LinkPreviewCard(text: String) {
             .padding(top = 6.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable {
-                try {
-                    uriHandler.openUri(url)
-                } catch (_: Exception) {}
+                if (parsedUri?.scheme.equals("https", ignoreCase = true)) {
+                    try {
+                        uriHandler.openUri(url)
+                    } catch (_: Exception) {}
+                } else {
+                    showInsecureConfirm = true
+                }
             }
             .testTag("link_preview_card")
     ) {

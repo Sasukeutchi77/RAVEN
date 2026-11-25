@@ -108,6 +108,39 @@ object SuperBadgesCatalog {
             unlockedDate = "À débloquer",
             isEquipped = false,
             isUnlocked = false
+        ),
+        SuperBadge(
+            id = "ORBS_NEOPHYTE",
+            title = "Néophyte des Orbs",
+            subtitle = "Soutien de la boutique Raven",
+            description = "Badge exclusif prismatique débloqué dans la boutique Raven Orbs.",
+            iconKey = "orbs_neophyte",
+            rarity = BadgeRarity.RARE,
+            unlockedDate = "Boutique Orbs",
+            isEquipped = false,
+            isUnlocked = false
+        ),
+        SuperBadge(
+            id = "CYBER_LEGEND",
+            title = "Légende Cyber-Orbs",
+            subtitle = "Maître du néon technologique",
+            description = "Distinction holographique obtenue via la collection Cyber & Mecha de la boutique Orbs.",
+            iconKey = "cyber_legend",
+            rarity = BadgeRarity.EPIC,
+            unlockedDate = "Boutique Orbs",
+            isEquipped = false,
+            isUnlocked = false
+        ),
+        SuperBadge(
+            id = "VOID_MONARCH",
+            title = "Monarque du Néant",
+            subtitle = "Collectionneur Astral Suprême",
+            description = "Emblème impérial de l'éclipse réservé aux détenteurs des reliques légendaires Orbs.",
+            iconKey = "void_monarch",
+            rarity = BadgeRarity.LEGENDARY,
+            unlockedDate = "Boutique Orbs",
+            isEquipped = false,
+            isUnlocked = false
         )
     )
 }

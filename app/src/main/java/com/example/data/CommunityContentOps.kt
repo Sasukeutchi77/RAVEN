@@ -352,6 +352,7 @@ suspend fun CommunityRepository.createChannel(
         ChannelType.ANNOUNCEMENT -> "announcement"
         ChannelType.VOICE -> "mic"
         ChannelType.STAGE -> "stage"
+        ChannelType.FORUM -> "forum"
         ChannelType.TEXT -> "tag"
     }
     val ch = Channel(
