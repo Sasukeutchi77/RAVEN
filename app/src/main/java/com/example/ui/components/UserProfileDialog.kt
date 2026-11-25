@@ -38,6 +38,7 @@ import com.example.model.UserRole
 import com.example.model.UserStatus
 import com.example.ui.theme.*
 import com.example.util.CloudinaryHelper
+import com.example.util.FirebaseConfigManager
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
@@ -101,6 +102,8 @@ fun UserProfileDialog(
     var showStatusPicker by remember { mutableStateOf(false) }
 
     val googleWebClientId = remember(context) { resolveDefaultWebClientId(context) }
+    val firebaseStatus = remember(context) { FirebaseConfigManager.inspectStatus(context) }
+    var cloudinaryRefreshTick by remember { mutableIntStateOf(0) }
     var authUser by remember {
         mutableStateOf(try { Firebase.auth.currentUser } catch (e: Exception) { null })
     }
@@ -856,6 +859,30 @@ fun UserProfileDialog(
                                 fontSize = 11.sp
                             )
                         }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        HorizontalDivider(color = DiscordDarkBorder)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "DIAGNOSTIC CONFIGURATION FIREBASE",
+                            color = DiscordTextMuted,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = buildString {
+                                append("Projet : ${firebaseStatus.projectId.ifBlank { "Non défini" }}")
+                                append(" • Base : ${firebaseStatus.databaseId.ifBlank { "Aucune" }.take(22)}")
+                                if (firebaseStatus.databaseId.length > 22) append("…")
+                            },
+                            color = DiscordTextLight,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = "Source DB : ${firebaseStatus.databaseSource} • OAuth : ${firebaseStatus.webClientIdSource} • FCM : ${if (firebaseStatus.hasFcmSender) "Prêt" else "Absent"}",
+                            color = if (firebaseStatus.isFullyConfigured) DiscordGreen else DiscordAmber,
+                            fontSize = 10.sp
+                        )
                     }
                 }
 
@@ -892,11 +919,14 @@ fun UserProfileDialog(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Cloudinary Config Option
+                val isCloudinaryActive = remember(cloudinaryRefreshTick) { CloudinaryHelper.isConfigured() }
+                val cloudinarySource = remember(cloudinaryRefreshTick) { CloudinaryHelper.configSourceLabel(context) }
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { showCloudinaryDialog = true },
+                        .clickable { showCloudinaryDialog = true }
+                        .testTag("profile_cloudinary_card"),
                     color = DiscordDarkCard
                 ) {
                     Row(
@@ -904,18 +934,18 @@ fun UserProfileDialog(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                             Icon(Icons.Default.CloudUpload, contentDescription = null, tint = DiscordBlurple)
                             Spacer(modifier = Modifier.width(12.dp))
                             Column {
                                 Text("Hébergeur Cloudinary", color = DiscordTextWhite, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    text = if (CloudinaryHelper.isConfigured()) {
-                                        "Actif • Cloud: ${CloudinaryHelper.cloudName}"
+                                    text = if (isCloudinaryActive) {
+                                        "Actif • ${CloudinaryHelper.cloudName} (${CloudinaryHelper.uploadFolder}) • $cloudinarySource"
                                     } else {
-                                        "Mode Local (configurez votre cloud)"
+                                        "$cloudinarySource • Configurez Secrets ou ce menu"
                                     },
-                                    color = if (CloudinaryHelper.isConfigured()) DiscordGreen else DiscordTextMuted,
+                                    color = if (isCloudinaryActive) DiscordGreen else DiscordTextMuted,
                                     fontSize = 11.sp
                                 )
                             }
@@ -955,9 +985,15 @@ fun UserProfileDialog(
 
     // Cloudinary Dialog
     if (showCloudinaryDialog) {
-        var cloudNameInput by remember { mutableStateOf(CloudinaryHelper.cloudName) }
-        var presetInput by remember { mutableStateOf(CloudinaryHelper.uploadPreset) }
+        var cloudNameInput by remember {
+            mutableStateOf(if (CloudinaryHelper.isConfigured()) CloudinaryHelper.cloudName else "")
+        }
+        var presetInput by remember {
+            mutableStateOf(if (CloudinaryHelper.isConfigured()) CloudinaryHelper.uploadPreset else "")
+        }
+        var folderInput by remember { mutableStateOf(CloudinaryHelper.uploadFolder) }
         var configError by remember { mutableStateOf<String?>(null) }
+        val hasEnvDefaults = CloudinaryHelper.isBuildConfigConfigured()
 
         AlertDialog(
             onDismissRequest = { showCloudinaryDialog = false },
@@ -966,8 +1002,12 @@ fun UserProfileDialog(
             text = {
                 Column {
                     Text(
-                        text = "Entrez vos paramètres Cloudinary pour héberger photos d'avatar, bannières et pièces jointes :",
-                        color = DiscordTextMuted,
+                        text = if (hasEnvDefaults) {
+                            "Variables Secrets (.env / BuildConfig) détectées. Vous pouvez les surcharger manuellement ci-dessous :"
+                        } else {
+                            "Entrez vos paramètres Cloudinary (ou renseignez CLOUDINARY_CLOUD_NAME et CLOUDINARY_UPLOAD_PRESET dans Secrets) :"
+                        },
+                        color = if (hasEnvDefaults) DiscordGreen else DiscordTextMuted,
                         fontSize = 12.sp
                     )
                     Spacer(modifier = Modifier.height(10.dp))
@@ -975,6 +1015,7 @@ fun UserProfileDialog(
                         value = cloudNameInput,
                         onValueChange = { cloudNameInput = it; configError = null },
                         label = { Text("Cloud Name", color = DiscordTextMuted) },
+                        placeholder = { Text("mon_cloud_raven", color = DiscordTextDark) },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = DiscordDarkInput,
@@ -989,6 +1030,22 @@ fun UserProfileDialog(
                         value = presetInput,
                         onValueChange = { presetInput = it; configError = null },
                         label = { Text("Upload Preset (unsigned)", color = DiscordTextMuted) },
+                        placeholder = { Text("raven_unsigned", color = DiscordTextDark) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = DiscordDarkInput,
+                            unfocusedContainerColor = DiscordDarkInput,
+                            focusedBorderColor = DiscordBlurple,
+                            focusedTextColor = DiscordTextWhite,
+                            unfocusedTextColor = DiscordTextLight
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = folderInput,
+                        onValueChange = { folderInput = it; configError = null },
+                        label = { Text("Dossier cible (optionnel)", color = DiscordTextMuted) },
+                        placeholder = { Text(CloudinaryHelper.DEFAULT_UPLOAD_FOLDER, color = DiscordTextDark) },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = DiscordDarkInput,
@@ -1002,12 +1059,28 @@ fun UserProfileDialog(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(configError.orEmpty(), color = DiscordRed, fontSize = 11.sp)
                     }
+                    if (CloudinaryHelper.isManualOverride(context)) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(
+                            onClick = {
+                                CloudinaryHelper.resetToBuildConfig(context)
+                                cloudinaryRefreshTick++
+                                showCloudinaryDialog = false
+                            },
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Icon(Icons.Default.RestartAlt, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Revenir aux variables Secrets (.env)", color = DiscordAmber, fontSize = 11.sp)
+                        }
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (CloudinaryHelper.saveConfig(context, cloudNameInput, presetInput)) {
+                        if (CloudinaryHelper.saveConfig(context, cloudNameInput, presetInput, folderInput)) {
+                            cloudinaryRefreshTick++
                             showCloudinaryDialog = false
                         } else {
                             configError = "Format invalide : utilisez uniquement lettres, chiffres, '-' ou '_'."

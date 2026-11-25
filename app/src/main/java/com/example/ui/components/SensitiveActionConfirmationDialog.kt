@@ -40,11 +40,10 @@ import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
-internal fun resolveDefaultWebClientId(context: Context): String? {
-    val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
-    if (resId == 0) return null
-    return runCatching { context.getString(resId) }.getOrNull()?.takeIf { it.isNotBlank() }
-}
+import com.example.util.FirebaseConfigManager
+
+internal fun resolveDefaultWebClientId(context: Context): String? =
+    FirebaseConfigManager.resolveWebClientId(context)
 
 @Composable
 fun SensitiveActionConfirmationDialog(

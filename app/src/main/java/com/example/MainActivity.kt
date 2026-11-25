@@ -19,6 +19,7 @@ import com.example.ui.RavenApp
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.RavenAppViewModel
 import com.example.util.CloudinaryHelper
+import com.example.util.FirebaseConfigManager
 import com.example.widget.RavenHomeWidgetProvider
 import com.google.firebase.messaging.FirebaseMessaging
 
@@ -45,6 +46,7 @@ class MainActivity : ComponentActivity() {
             }
         })
 
+        FirebaseConfigManager.ensureFirebaseInitialized(applicationContext)
         CloudinaryHelper.init(applicationContext)
         try {
             FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->

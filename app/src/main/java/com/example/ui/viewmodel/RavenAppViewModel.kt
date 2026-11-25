@@ -3,8 +3,8 @@ package com.example.ui.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.R
 import com.example.data.ChatRepository
+import com.example.util.FirebaseConfigManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,11 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 class RavenAppViewModel(application: Application) : AndroidViewModel(application) {
 
     val repository: ChatRepository by lazy {
-        val dbId = try {
-            application.getString(R.string.firestore_database_id)
-        } catch (_: Exception) {
-            null
-        }
+        val dbId = FirebaseConfigManager.resolveFirestoreDatabaseId(application)
         ChatRepository(
             scope = viewModelScope,
             databaseId = dbId,

@@ -771,12 +771,16 @@ fun ChatView(
                         onSend = {
                             val recordedPath = audioRecorder.stopRecording()
                             val amps = recordingAmplitudes.toList()
+                            val dur = recordingTimerSec
                             isRecordingAudio = false
                             if (recordedPath != null) {
-                                if (onSendRichMessage != null) {
-                                    onSendRichMessage("", null, recordedPath, recordingTimerSec, amps, false)
-                                } else {
-                                    onSendMessage("", null, recordedPath, recordingTimerSec)
+                                coroutineScope.launch {
+                                    val resolvedAudioUrl = CloudinaryHelper.uploadAudioFile(recordedPath)
+                                    if (onSendRichMessage != null) {
+                                        onSendRichMessage("", null, resolvedAudioUrl, dur, amps, false)
+                                    } else {
+                                        onSendMessage("", null, resolvedAudioUrl, dur)
+                                    }
                                 }
                             }
                         }

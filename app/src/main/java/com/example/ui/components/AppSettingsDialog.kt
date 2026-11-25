@@ -11,11 +11,13 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -25,6 +27,8 @@ import com.example.model.AppThemeMode
 import com.example.model.PlatformLayoutOverride
 import com.example.model.User
 import com.example.ui.theme.*
+import com.example.util.CloudinaryHelper
+import com.example.util.FirebaseConfigManager
 import com.example.util.LocalRavenPlatform
 import com.example.util.RavenPlatformKind
 import com.example.util.RavenPlatformProfile
@@ -59,6 +63,9 @@ fun AppSettingsDialog(
 ) {
     val palette = ravenPalette()
     val scrollState = rememberScrollState()
+    val context = LocalContext.current
+    val firebaseStatus = remember(context) { FirebaseConfigManager.inspectStatus(context) }
+    val cloudinarySource = remember(context) { CloudinaryHelper.configSourceLabel(context) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -512,6 +519,54 @@ fun AppSettingsDialog(
                         Text("Restaurer", color = palette.textPrimary, fontSize = 12.sp)
                     }
                 }
+                HorizontalDivider(color = palette.border, modifier = Modifier.padding(vertical = 10.dp))
+                Text(
+                    text = "CONFIGURATION FIREBASE & CLOUDINARY",
+                    color = palette.textMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.testTag("settings_cloud_config_badges")
+                ) {
+                    PlatformCapabilityBadge(
+                        label = if (firebaseStatus.isFullyConfigured) {
+                            "Firebase : ${firebaseStatus.projectId}"
+                        } else {
+                            "Firebase incomplet"
+                        },
+                        active = firebaseStatus.isFullyConfigured,
+                        palette = palette
+                    )
+                    PlatformCapabilityBadge(
+                        label = "DB : ${firebaseStatus.databaseSource}",
+                        active = firebaseStatus.databaseId.isNotBlank(),
+                        palette = palette
+                    )
+                    PlatformCapabilityBadge(
+                        label = if (CloudinaryHelper.isConfigured()) {
+                            "Cloudinary : ${CloudinaryHelper.cloudName}"
+                        } else {
+                            "Cloudinary : Mode local"
+                        },
+                        active = CloudinaryHelper.isConfigured(),
+                        palette = palette
+                    )
+                    PlatformCapabilityBadge(
+                        label = "Source média : $cloudinarySource",
+                        active = CloudinaryHelper.isConfigured(),
+                        palette = palette
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Base Firestore : ${firebaseStatus.databaseId.ifBlank { "Non définie" }} • Dossier Cloudinary : ${CloudinaryHelper.uploadFolder}",
+                    color = palette.textMuted,
+                    fontSize = 10.sp
+                )
             }
 
             // Smart Offline Mode & Queue

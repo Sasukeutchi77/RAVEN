@@ -555,12 +555,16 @@ fun DirectMessagesView(
                             onSend = {
                                 val path = audioRecorder.stopRecording()
                                 val amps = recordingAmplitudes.toList()
+                                val dur = recordingTimerSec
                                 isRecordingAudio = false
                                 if (path != null) {
-                                    if (onSendRichMessage != null) {
-                                        onSendRichMessage(activeConversation.id, "", null, path, recordingTimerSec, amps, false)
-                                    } else {
-                                        onSendMessage(activeConversation.id, "", null, path, recordingTimerSec)
+                                    coroutineScope.launch {
+                                        val resolvedAudioUrl = CloudinaryHelper.uploadAudioFile(path)
+                                        if (onSendRichMessage != null) {
+                                            onSendRichMessage(activeConversation.id, "", null, resolvedAudioUrl, dur, amps, false)
+                                        } else {
+                                            onSendMessage(activeConversation.id, "", null, resolvedAudioUrl, dur)
+                                        }
                                     }
                                 }
                             }

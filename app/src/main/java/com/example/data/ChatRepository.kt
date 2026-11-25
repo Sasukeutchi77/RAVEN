@@ -230,7 +230,9 @@ class ChatRepository(
 
     private val firestore: FirebaseFirestore? by lazy {
         injectedFirestore ?: try {
-            if (!databaseId.isNullOrBlank()) {
+            if (appContext != null) {
+                com.example.util.FirebaseConfigManager.getFirestoreInstance(appContext, databaseId)
+            } else if (!databaseId.isNullOrBlank()) {
                 FirebaseFirestore.getInstance(databaseId)
             } else null
         } catch (e: Exception) {
