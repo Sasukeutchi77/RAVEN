@@ -93,8 +93,20 @@ jobs:
             gradle :app:assembleDebug --no-configuration-cache --stacktrace
           fi
 
+      - name: Verify Debug APK
+        run: |
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK_PATH"
+          unzip -tqq "$APK_PATH"
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
+          if [ -x "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --verbose "$APK_PATH"
+          fi
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: raven-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          compression-level: 0
+          if-no-files-found: error
