@@ -74,6 +74,9 @@ jobs:
           EOF
           fi
           touch .env
+          if [ -s .env ]; then
+            printf '\n' >> .env
+          fi
           for key in CLOUDINARY_CLOUD_NAME CLOUDINARY_UPLOAD_PRESET CLOUDINARY_UPLOAD_FOLDER FIREBASE_DATABASE_ID FIREBASE_WEB_CLIENT_ID FIREBASE_PROJECT_ID FIREBASE_APP_ID FIREBASE_API_KEY FIREBASE_MESSAGING_SENDER_ID FIREBASE_STORAGE_BUCKET; do
             val="$(printenv "$key" || true)"
             if [ -n "$val" ]; then
