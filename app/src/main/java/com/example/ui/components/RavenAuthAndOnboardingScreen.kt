@@ -221,7 +221,7 @@ fun RavenAuthAndOnboardingScreen(
         if (typedGmail.isNotBlank() && !AuthGateRepository.isValidGmailAddress(typedGmail)) {
             onAuthError("Adresse invalide : utilisez uniquement une adresse @gmail.com.")
         } else if (googleWebClientId == null) {
-            onAuthError("Connexion Gmail indisponible : configuration google-services.json absente.")
+            onAuthError("Connexion Gmail indisponible : ajoutez app/google-services.json ou FIREBASE_WEB_CLIENT_ID dans Secrets/.env.")
         } else {
             onAuthError(null)
             isCredentialBusy = true
@@ -262,7 +262,7 @@ fun RavenAuthAndOnboardingScreen(
     val launchGmailReauthForCodeReset: () -> Unit = {
         val clientId = googleWebClientId
         if (clientId == null) {
-            onAuthError("Ré-authentification Gmail indisponible : google-services.json manquant.")
+            onAuthError("Ré-authentification Gmail indisponible : ajoutez app/google-services.json ou FIREBASE_WEB_CLIENT_ID.")
         } else {
             onAuthError(null)
             isCredentialBusy = true
@@ -816,7 +816,7 @@ private fun SignInGmailCard(
 
             if (!googleConfigured) {
                 AuthBanner(
-                    text = "Configuration Google Sign-In absente (google-services.json).",
+                    text = "Configuration Google Sign-In absente : ajoutez app/google-services.json (OAuth Web) ou FIREBASE_WEB_CLIENT_ID dans Secrets/.env.",
                     isError = true
                 )
             }

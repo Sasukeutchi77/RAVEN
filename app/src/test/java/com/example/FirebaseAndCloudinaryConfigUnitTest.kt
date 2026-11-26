@@ -49,6 +49,8 @@ class FirebaseAndCloudinaryConfigUnitTest {
         assertEquals(context.packageName, status.packageName)
         assertEquals(dbId, status.databaseId)
         assertEquals("firebase_applet_config.xml", status.databaseSource)
+        assertTrue(status.hasWebClientId)
+        assertFalse(FirebaseConfigManager.resolveWebClientId(context).isNullOrBlank())
     }
 
     @Test

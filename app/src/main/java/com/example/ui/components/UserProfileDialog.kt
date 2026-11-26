@@ -784,7 +784,7 @@ fun UserProfileDialog(
                                     onClick = {
                                         val clientId = googleWebClientId
                                         if (clientId == null) {
-                                            authStatusMessage = "Connexion Google indisponible : configuration Firebase (google-services.json) absente."
+                                            authStatusMessage = "Connexion Google indisponible : ajoutez app/google-services.json ou FIREBASE_WEB_CLIENT_ID dans Secrets/.env."
                                             return@Button
                                         }
                                         authStatusMessage = null
@@ -848,7 +848,7 @@ fun UserProfileDialog(
                         if (authUser == null && googleWebClientId == null) {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "Connexion Google désactivée : fichier google-services.json (OAuth Web) absent.",
+                                text = "Connexion Google désactivée : ajoutez app/google-services.json (OAuth Web) ou FIREBASE_WEB_CLIENT_ID dans Secrets/.env.",
                                 color = DiscordTextMuted,
                                 fontSize = 11.sp
                             )
