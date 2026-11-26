@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.example.model.*
+import com.example.util.FirebaseConfigManager
 import com.example.util.JukeboxAudioEngine
 import com.example.util.RemoteVoicePeerState
 import com.example.util.VoiceConnectionPhase
@@ -242,7 +243,7 @@ class ChatRepository(
     }
 
     private fun currentAuth(): FirebaseAuth? = injectedAuth ?: try {
-        Firebase.auth
+        appContext?.let { FirebaseConfigManager.getAuthInstance(it) } ?: Firebase.auth
     } catch (_: Exception) {
         null
     }
@@ -1642,11 +1643,12 @@ class ChatRepository(
             "createdAtMs" to createdAtMs,
             "createdAt" to FieldValue.serverTimestamp()
         )
-        newMessage.sender.avatarUrl?.takeIf {
-            it.isNotBlank() && (it.startsWith("https://") || it.startsWith("http://") || it.startsWith("/"))
-        }?.let { payload["senderAvatarUrl"] = it.take(900) }
-        newMessage.imageUrl?.takeIf { it.isNotBlank() }?.let { payload["imageUrl"] = it }
-        newMessage.audioUrl?.takeIf { it.isNotBlank() }?.let { payload["audioUrl"] = it }
+        com.example.util.FirebaseConfigManager.sanitizeSyncMediaUrl(newMessage.sender.avatarUrl, 900)
+            ?.let { payload["senderAvatarUrl"] = it }
+        com.example.util.FirebaseConfigManager.sanitizeSyncMediaUrl(newMessage.imageUrl, 900)
+            ?.let { payload["imageUrl"] = it }
+        com.example.util.FirebaseConfigManager.sanitizeSyncMediaUrl(newMessage.audioUrl, 900)
+            ?.let { payload["audioUrl"] = it }
         if (newMessage.audioDurationSec > 0) payload["audioDurationSec"] = newMessage.audioDurationSec
         if (newMessage.waveformAmplitudes.isNotEmpty()) {
             payload["waveformAmplitudes"] = newMessage.waveformAmplitudes.take(128)
@@ -2564,7 +2566,8 @@ class ChatRepository(
                 put("name", theme.name)
                 put("primaryColor", theme.primaryColor)
                 put("secondaryColor", theme.secondaryColor ?: theme.primaryColor)
-                theme.imageUrl?.takeIf { it.isNotBlank() }?.let { put("imageUrl", it) }
+                com.example.util.FirebaseConfigManager.sanitizeSyncMediaUrl(theme.imageUrl, 800)
+                    ?.let { put("imageUrl", it) }
                 put("opacity", theme.opacity.toDouble())
             }
         }
@@ -2579,20 +2582,29 @@ class ChatRepository(
         }
 
         val friendPrivacy = friendBridgeHook?.privacySettings?.value ?: FriendPrivacySettings()
+        val safeName = user.name.trim().take(64).ifBlank { "Membre" }
+        val safeTag = user.tag.trim().take(16)
+        val safeBio = user.bio.take(500)
+        val safePronouns = user.pronouns.take(40)
+        val safeCustomStatus = user.customStatus.take(160)
+        val safeClanTag = (user.clanTag ?: "RVN").trim().take(8)
+        val safeAvatarUrl = com.example.util.FirebaseConfigManager.sanitizeSyncMediaUrl(user.avatarUrl, 800)
+        val safeBannerUrl = com.example.util.FirebaseConfigManager.sanitizeSyncMediaUrl(user.bannerUrl, 800)
+
         val data = hashMapOf<String, Any>(
             "userId" to authUser.uid,
-            "name" to user.name,
-            "tag" to user.tag,
-            "bio" to user.bio,
-            "pronouns" to user.pronouns,
+            "name" to safeName,
+            "tag" to safeTag,
+            "bio" to safeBio,
+            "pronouns" to safePronouns,
             "status" to user.status.name,
-            "customStatus" to user.customStatus,
+            "customStatus" to safeCustomStatus,
             "customStatusEmoji" to user.customStatusEmoji,
             "avatarColor" to user.avatarColor,
             "bannerColor" to user.bannerColor,
-            "activity" to user.activity,
+            "activity" to user.activity.take(120),
             "lastActiveAtMs" to user.lastActiveAtMs,
-            "lastActivityLabel" to user.lastActivityLabel.ifBlank { user.activity },
+            "lastActivityLabel" to user.lastActivityLabel.ifBlank { user.activity }.take(120),
             "friendRequestPolicy" to friendPrivacy.friendRequestPolicy.name,
             "allowDmsFrom" to friendPrivacy.allowDmsFrom.name,
             "showOnlineStatus" to friendPrivacy.showOnlineStatus,
@@ -2610,8 +2622,8 @@ class ChatRepository(
             "chatDisplayStyle" to settings.chatDisplayStyle.name,
             "glassmorphismEnabled" to settings.glassmorphismEnabled,
             "audioEqPreset" to settings.audioEqPreset.name,
-            "clanTag" to (user.clanTag ?: "RVN"),
-            "clanBadgeIcon" to user.clanBadgeIcon,
+            "clanTag" to safeClanTag,
+            "clanBadgeIcon" to user.clanBadgeIcon.take(40),
             "soundEffectsEnabled" to settings.soundEffectsEnabled,
             "voiceNoiseSuppression" to settings.voiceNoiseSuppression,
             "localNotificationsEnabled" to settings.localNotificationsEnabled,
@@ -2624,36 +2636,36 @@ class ChatRepository(
             "chatBackgrounds" to bgSerialized,
             "serverFolders" to foldersSerialized
         )
-        user.avatarUrl?.let { data["avatarUrl"] = it }
-        user.bannerUrl?.let { data["bannerUrl"] = it }
-        user.email?.let { data["email"] = it }
+        safeAvatarUrl?.let { data["avatarUrl"] = it }
+        safeBannerUrl?.let { data["bannerUrl"] = it }
+        user.email?.trim()?.take(160)?.takeIf { it.isNotBlank() }?.let { data["email"] = it }
         user.avatarDecoration?.let { data["avatarDecoration"] = it }
         user.profileEffect?.let { data["profileEffect"] = it }
         user.equippedChatThemeId?.let { data["equippedChatThemeId"] = it }
-        cachedFcmToken?.let { data["fcmToken"] = it }
+        cachedFcmToken?.take(512)?.let { data["fcmToken"] = it }
 
         val publicProfile = hashMapOf<String, Any>(
             "userId" to authUser.uid,
-            "name" to user.name,
-            "tag" to user.tag,
-            "bio" to user.bio.take(200),
+            "name" to safeName,
+            "tag" to safeTag,
+            "bio" to safeBio.take(200),
             "avatarColor" to user.avatarColor,
             "xp" to user.xp,
             "level" to user.level,
-            "clanTag" to (user.clanTag ?: "RVN"),
-            "clanBadgeIcon" to user.clanBadgeIcon,
+            "clanTag" to safeClanTag,
+            "clanBadgeIcon" to user.clanBadgeIcon.take(40),
             "friendRequestPolicy" to friendPrivacy.friendRequestPolicy.name,
             "allowDmsFrom" to friendPrivacy.allowDmsFrom.name,
             "showOnlineStatus" to friendPrivacy.showOnlineStatus,
             "showLastActivity" to friendPrivacy.showLastActivity,
             "status" to (if (friendPrivacy.showOnlineStatus) user.status.name else UserStatus.OFFLINE.name),
-            "customStatus" to (if (friendPrivacy.showOnlineStatus) user.customStatus.take(120) else ""),
+            "customStatus" to (if (friendPrivacy.showOnlineStatus) safeCustomStatus.take(120) else ""),
             "lastActiveAtMs" to (if (friendPrivacy.showLastActivity) user.lastActiveAtMs else 0L),
             "lastActivityLabel" to (if (friendPrivacy.showLastActivity) user.lastActivityLabel.ifBlank { user.activity }.take(120) else ""),
             "isPublic" to true,
             "updatedAt" to FieldValue.serverTimestamp()
         )
-        user.avatarUrl?.let { publicProfile["avatarUrl"] = it }
+        safeAvatarUrl?.let { publicProfile["avatarUrl"] = it }
 
         _isCloudSyncing.value = true
         scope.launch(Dispatchers.IO) {
@@ -2734,8 +2746,10 @@ class ChatRepository(
                         "memberIds" to (srv.members.map { if (it.id == "user_me") authUser.uid else it.id } + authUser.uid).distinct()
                     )
                     srv.customBannerColorHex?.let { srvPayload["customBannerColorHex"] = it }
-                    srv.imageUrl?.let { srvPayload["imageUrl"] = it }
-                    srv.bannerUrl?.let { srvPayload["bannerUrl"] = it }
+                    com.example.util.FirebaseConfigManager.sanitizeSyncMediaUrl(srv.imageUrl, 800)
+                        ?.let { srvPayload["imageUrl"] = it }
+                    com.example.util.FirebaseConfigManager.sanitizeSyncMediaUrl(srv.bannerUrl, 800)
+                        ?.let { srvPayload["bannerUrl"] = it }
                     Tasks.await(db.collection("servers").document(srv.id).set(srvPayload))
                 }
                 _lastCloudSyncTime.value = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
@@ -2883,6 +2897,9 @@ class ChatRepository(
                             _chatBackgrounds.value = _chatBackgrounds.value + loadedBackgrounds
                         }
                     }
+                    _lastCloudSyncTime.value = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                } else {
+                    syncFullStateToFirestore()
                 }
                 // Restore user member/owned servers (aligned query: memberIds array-contains)
                 val srvDocs = Tasks.await(

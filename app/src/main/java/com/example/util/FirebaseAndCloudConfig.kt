@@ -4,8 +4,11 @@ import android.content.Context
 import android.util.Log
 import com.example.BuildConfig
 import com.example.R
+import com.google.firebase.Firebase
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
 
 data class FirebaseConfigStatus(
@@ -36,8 +39,21 @@ object FirebaseConfigManager {
     private const val TAG = "FirebaseConfig"
     private const val VARIANT_APP_NAME = "raven_variant"
 
+    internal fun stripSurroundingQuotes(value: String?): String {
+        val trimmed = value?.trim().orEmpty()
+        return if (
+            trimmed.length >= 2 &&
+            ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+                (trimmed.startsWith("'") && trimmed.endsWith("'")))
+        ) {
+            trimmed.substring(1, trimmed.length - 1).trim()
+        } else {
+            trimmed
+        }
+    }
+
     fun isPlaceholderOrBlank(value: String?): Boolean {
-        val clean = value?.trim().orEmpty()
+        val clean = stripSurroundingQuotes(value)
         if (clean.isBlank()) return true
         val upper = clean.uppercase()
         return upper == "DEMO" ||
@@ -51,8 +67,27 @@ object FirebaseConfigManager {
     }
 
     internal fun validBuildConfigOrNull(raw: String?): String? {
-        val clean = raw?.trim().orEmpty()
+        val clean = stripSurroundingQuotes(raw)
         return clean.takeIf { !isPlaceholderOrBlank(it) }
+    }
+
+    /**
+     * Valide et assainit une URL média avant synchronisation Firestore afin de respecter
+     * les règles isValidSafeMediaUrl() et la limite de taille des documents.
+     */
+    fun sanitizeSyncMediaUrl(url: String?, maxLen: Int = 800): String? {
+        val clean = url?.trim().orEmpty()
+        if (clean.isBlank() || clean.length > maxLen) return null
+        val lower = clean.lowercase()
+        if (lower.startsWith("javascript:") ||
+            lower.startsWith("vbscript:") ||
+            lower.startsWith("data:") ||
+            lower.startsWith("content://") ||
+            clean.contains("..")
+        ) {
+            return null
+        }
+        return clean
     }
 
     private fun readStringResource(context: Context, name: String): String? {
@@ -60,7 +95,7 @@ object FirebaseConfigManager {
         if (resId == 0) return null
         return runCatching { context.getString(resId) }
             .getOrNull()
-            ?.trim()
+            ?.let(::stripSurroundingQuotes)
             ?.takeIf { !isPlaceholderOrBlank(it) }
     }
 
@@ -74,7 +109,7 @@ object FirebaseConfigManager {
         validBuildConfigOrNull(BuildConfig.FIREBASE_DATABASE_ID)?.let { return it }
         return runCatching { context.getString(R.string.firestore_database_id) }
             .getOrNull()
-            ?.trim()
+            ?.let(::stripSurroundingQuotes)
             ?.takeIf { !isPlaceholderOrBlank(it) }
     }
 
@@ -95,10 +130,14 @@ object FirebaseConfigManager {
                     .firstOrNull { it.name == VARIANT_APP_NAME }
                 if (existingVariant != null) return true
 
+                val projectId = validBuildConfigOrNull(BuildConfig.FIREBASE_PROJECT_ID) ?: return false
+                val appId = validBuildConfigOrNull(BuildConfig.FIREBASE_APP_ID) ?: return false
+                val apiKey = validBuildConfigOrNull(BuildConfig.FIREBASE_API_KEY) ?: return false
+
                 val optionsBuilder = FirebaseOptions.Builder()
-                    .setProjectId(BuildConfig.FIREBASE_PROJECT_ID.trim())
-                    .setApplicationId(BuildConfig.FIREBASE_APP_ID.trim())
-                    .setApiKey(BuildConfig.FIREBASE_API_KEY.trim())
+                    .setProjectId(projectId)
+                    .setApplicationId(appId)
+                    .setApiKey(apiKey)
 
                 validBuildConfigOrNull(BuildConfig.FIREBASE_MESSAGING_SENDER_ID)?.let {
                     optionsBuilder.setGcmSenderId(it)
@@ -137,8 +176,30 @@ object FirebaseConfigManager {
         }
     }
 
+    /**
+     * Retourne l'instance FirebaseAuth alignée sur le même FirebaseApp que Firestore
+     * (projet par défaut ou variante custom .env), évitant toute erreur PERMISSION_DENIED.
+     */
+    fun getAuthInstance(context: Context): FirebaseAuth? {
+        return try {
+            val app = getConfiguredApp(context)
+            if (app != null) {
+                FirebaseAuth.getInstance(app)
+            } else {
+                Firebase.auth
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to obtain FirebaseAuth: ${e.message}")
+            try {
+                Firebase.auth
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
     fun getFirestoreInstance(context: Context, explicitDatabaseId: String? = null): FirebaseFirestore? {
-        val dbId = explicitDatabaseId?.trim()?.takeIf { !isPlaceholderOrBlank(it) }
+        val dbId = explicitDatabaseId?.let(::stripSurroundingQuotes)?.takeIf { !isPlaceholderOrBlank(it) }
             ?: resolveFirestoreDatabaseId(context)
             ?: return null
         return try {
@@ -158,7 +219,7 @@ object FirebaseConfigManager {
         val customVariant = hasCustomFirebaseVariant()
         val envDbId = validBuildConfigOrNull(BuildConfig.FIREBASE_DATABASE_ID)
         val xmlDbId = runCatching { context.getString(R.string.firestore_database_id) }
-            .getOrNull()?.trim()?.takeIf { !isPlaceholderOrBlank(it) }
+            .getOrNull()?.let(::stripSurroundingQuotes)?.takeIf { !isPlaceholderOrBlank(it) }
         val resolvedDbId = envDbId ?: xmlDbId.orEmpty()
         val dbSource = when {
             envDbId != null -> "Secrets (.env / BuildConfig)"

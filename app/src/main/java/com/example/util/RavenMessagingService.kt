@@ -21,7 +21,7 @@ class RavenMessagingService : FirebaseMessagingService() {
                 .putString("fcm_token", cleanToken)
                 .apply()
 
-            val uid = Firebase.auth.currentUser?.uid ?: return
+            val uid = FirebaseConfigManager.getAuthInstance(applicationContext)?.currentUser?.uid ?: return
             val db = FirebaseConfigManager.getFirestoreInstance(applicationContext) ?: return
             db.collection("users")
                 .document(uid)

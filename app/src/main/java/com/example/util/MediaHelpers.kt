@@ -8,6 +8,9 @@ import android.os.Build
 import android.util.Log
 import com.example.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -48,13 +51,20 @@ object CloudinaryHelper {
     var uploadPreset: String = DEFAULT_UPLOAD_PRESET
     var uploadFolder: String = DEFAULT_UPLOAD_FOLDER
 
+    private val _lastUploadError = MutableStateFlow<String?>(null)
+    val lastUploadError: StateFlow<String?> = _lastUploadError.asStateFlow()
+
+    fun clearLastUploadError() {
+        _lastUploadError.value = null
+    }
+
     fun isValidConfigToken(value: String): Boolean {
-        val clean = value.trim()
+        val clean = FirebaseConfigManager.stripSurroundingQuotes(value)
         return CONFIG_IDENTIFIER_REGEX.matches(clean) && !FirebaseConfigManager.isPlaceholderOrBlank(clean)
     }
 
     fun isValidFolderToken(value: String): Boolean {
-        val clean = value.trim()
+        val clean = FirebaseConfigManager.stripSurroundingQuotes(value)
         if (clean.isEmpty()) return true
         return SAFE_FOLDER_REGEX.matches(clean) &&
             !clean.contains("..") &&
@@ -64,13 +74,15 @@ object CloudinaryHelper {
     }
 
     internal fun resolveBuildConfigCloudName(): String? =
-        BuildConfig.CLOUDINARY_CLOUD_NAME.trim().takeIf { isValidConfigToken(it) }
+        FirebaseConfigManager.stripSurroundingQuotes(BuildConfig.CLOUDINARY_CLOUD_NAME)
+            .takeIf { isValidConfigToken(it) }
 
     internal fun resolveBuildConfigPreset(): String? =
-        BuildConfig.CLOUDINARY_UPLOAD_PRESET.trim().takeIf { isValidConfigToken(it) }
+        FirebaseConfigManager.stripSurroundingQuotes(BuildConfig.CLOUDINARY_UPLOAD_PRESET)
+            .takeIf { isValidConfigToken(it) }
 
     internal fun resolveBuildConfigFolder(): String =
-        BuildConfig.CLOUDINARY_UPLOAD_FOLDER.trim()
+        FirebaseConfigManager.stripSurroundingQuotes(BuildConfig.CLOUDINARY_UPLOAD_FOLDER)
             .takeIf { it.isNotBlank() && isValidFolderToken(it) }
             ?: DEFAULT_UPLOAD_FOLDER
 
@@ -106,9 +118,9 @@ object CloudinaryHelper {
                 val savedName = prefs.getString(KEY_CLOUD_NAME, DEFAULT_CLOUD_NAME) ?: DEFAULT_CLOUD_NAME
                 val savedPreset = prefs.getString(KEY_UPLOAD_PRESET, DEFAULT_UPLOAD_PRESET) ?: DEFAULT_UPLOAD_PRESET
                 val savedFolder = prefs.getString(KEY_UPLOAD_FOLDER, envFolder) ?: envFolder
-                cloudName = if (isValidConfigToken(savedName)) savedName.trim() else (envName ?: DEFAULT_CLOUD_NAME)
-                uploadPreset = if (isValidConfigToken(savedPreset)) savedPreset.trim() else (envPreset ?: DEFAULT_UPLOAD_PRESET)
-                uploadFolder = if (isValidFolderToken(savedFolder)) savedFolder.trim().ifBlank { envFolder } else envFolder
+                cloudName = if (isValidConfigToken(savedName)) FirebaseConfigManager.stripSurroundingQuotes(savedName) else (envName ?: DEFAULT_CLOUD_NAME)
+                uploadPreset = if (isValidConfigToken(savedPreset)) FirebaseConfigManager.stripSurroundingQuotes(savedPreset) else (envPreset ?: DEFAULT_UPLOAD_PRESET)
+                uploadFolder = if (isValidFolderToken(savedFolder)) FirebaseConfigManager.stripSurroundingQuotes(savedFolder).ifBlank { envFolder } else envFolder
             } else {
                 cloudName = envName ?: DEFAULT_CLOUD_NAME
                 uploadPreset = envPreset ?: DEFAULT_UPLOAD_PRESET
@@ -119,6 +131,7 @@ object CloudinaryHelper {
             uploadPreset = envPreset ?: DEFAULT_UPLOAD_PRESET
             uploadFolder = envFolder
         }
+        _lastUploadError.value = null
     }
 
     fun saveConfig(
@@ -127,9 +140,9 @@ object CloudinaryHelper {
         preset: String,
         folder: String = uploadFolder
     ): Boolean {
-        val cleanName = name.trim()
-        val cleanPreset = preset.trim()
-        val cleanFolder = folder.trim()
+        val cleanName = FirebaseConfigManager.stripSurroundingQuotes(name)
+        val cleanPreset = FirebaseConfigManager.stripSurroundingQuotes(preset)
+        val cleanFolder = FirebaseConfigManager.stripSurroundingQuotes(folder)
         if (cleanName.isNotEmpty() && !isValidConfigToken(cleanName)) return false
         if (cleanPreset.isNotEmpty() && !isValidConfigToken(cleanPreset)) return false
         if (!isValidFolderToken(cleanFolder)) return false
@@ -142,6 +155,7 @@ object CloudinaryHelper {
         cloudName = cleanName.ifBlank { envName ?: DEFAULT_CLOUD_NAME }
         uploadPreset = cleanPreset.ifBlank { envPreset ?: DEFAULT_UPLOAD_PRESET }
         uploadFolder = cleanFolder.ifBlank { envFolder }
+        _lastUploadError.value = null
 
         try {
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -175,6 +189,70 @@ object CloudinaryHelper {
             uploadPreset != DEFAULT_UPLOAD_PRESET &&
             isValidConfigToken(cloudName) &&
             isValidConfigToken(uploadPreset)
+
+    /**
+     * Vérifie la validité du cloudName et de l'endpoint Cloudinary sans téléverser de fichier.
+     */
+    suspend fun testConfiguration(
+        overrideCloudName: String = cloudName,
+        overridePreset: String = uploadPreset
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val targetCloud = FirebaseConfigManager.stripSurroundingQuotes(overrideCloudName)
+        val targetPreset = FirebaseConfigManager.stripSurroundingQuotes(overridePreset)
+        if (!isValidConfigToken(targetCloud) || !isValidConfigToken(targetPreset) ||
+            targetCloud == DEFAULT_CLOUD_NAME || targetPreset == DEFAULT_UPLOAD_PRESET
+        ) {
+            return@withContext false to "Paramètres Cloudinary incomplets ou invalides."
+        }
+        try {
+            val probeBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("upload_preset", targetPreset)
+                .build()
+            val request = Request.Builder()
+                .url("https://api.cloudinary.com/v1_1/$targetCloud/image/upload")
+                .post(probeBody)
+                .build()
+            httpClient.newCall(request).execute().use { response ->
+                val rawBody = response.body?.string().orEmpty()
+                val errMsg = runCatching {
+                    JSONObject(rawBody).optJSONObject("error")?.optString("message")
+                }.getOrNull().orEmpty()
+                when {
+                    response.code == 400 && errMsg.contains("Missing required parameter", ignoreCase = true) -> {
+                        _lastUploadError.value = null
+                        true to "Connexion Cloudinary OK ($targetCloud • $targetPreset)."
+                    }
+                    errMsg.contains("preset", ignoreCase = true) -> {
+                        val msg = "Upload Preset invalide ou non signé : $errMsg"
+                        _lastUploadError.value = msg
+                        false to msg
+                    }
+                    response.code == 401 || response.code == 404 || errMsg.contains("cloud_name", ignoreCase = true) -> {
+                        val msg = "Cloud Name introuvable ou refusé (${response.code}) : ${errMsg.ifBlank { targetCloud }}"
+                        _lastUploadError.value = msg
+                        false to msg
+                    }
+                    else -> {
+                        val msg = "Réponse Cloudinary HTTP ${response.code} : ${errMsg.ifBlank { "vérifiez vos paramètres" }}"
+                        _lastUploadError.value = msg
+                        false to msg
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            val msg = "Impossible de joindre Cloudinary : ${e.localizedMessage ?: "erreur réseau"}"
+            _lastUploadError.value = msg
+            false to msg
+        }
+    }
+
+    private fun extractCloudinaryError(code: Int, rawBody: String): String {
+        val apiMsg = runCatching {
+            JSONObject(rawBody).optJSONObject("error")?.optString("message")
+        }.getOrNull().orEmpty()
+        return if (apiMsg.isNotBlank()) "Cloudinary HTTP $code : $apiMsg" else "Cloudinary HTTP $code"
+    }
 
     suspend fun uploadImage(context: Context, imageUri: Uri): String =
         persistImage(context, imageUri, subDir = null)
@@ -219,16 +297,27 @@ object CloudinaryHelper {
                 .build()
 
             httpClient.newCall(request).execute().use { response ->
+                val rawBody = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
-                    val json = JSONObject(response.body?.string().orEmpty())
+                    val json = JSONObject(rawBody)
                     val secureUrl = json.optString("secure_url", "").trim()
-                    if (secureUrl.startsWith("https://")) secureUrl else file.absolutePath
+                    if (secureUrl.startsWith("https://")) {
+                        _lastUploadError.value = null
+                        if (safeSubDir == null) file.delete()
+                        secureUrl
+                    } else {
+                        _lastUploadError.value = "URL sécurisée manquante dans la réponse Cloudinary."
+                        file.absolutePath
+                    }
                 } else {
-                    Log.w("Cloudinary", "Upload failed: ${response.code}, falling back to local file")
+                    val err = extractCloudinaryError(response.code, rawBody)
+                    _lastUploadError.value = err
+                    Log.w("Cloudinary", "Upload failed ($err), falling back to local file")
                     file.absolutePath
                 }
             }
         } catch (e: Exception) {
+            _lastUploadError.value = e.localizedMessage ?: "Erreur lors de l'envoi vers Cloudinary"
             Log.e("Cloudinary", "Error uploading to Cloudinary", e)
             destFile?.takeIf { it.exists() && it.length() > 0L }?.absolutePath.orEmpty()
         }
@@ -258,16 +347,23 @@ object CloudinaryHelper {
                 .build()
 
             httpClient.newCall(request).execute().use { response ->
+                val rawBody = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
-                    val json = JSONObject(response.body?.string().orEmpty())
+                    val json = JSONObject(rawBody)
                     val secureUrl = json.optString("secure_url", "").trim()
-                    if (secureUrl.startsWith("https://")) secureUrl else cleanPath
+                    if (secureUrl.startsWith("https://")) {
+                        _lastUploadError.value = null
+                        secureUrl
+                    } else cleanPath
                 } else {
-                    Log.w("Cloudinary", "Audio upload failed: ${response.code}, keeping local audio file")
+                    val err = extractCloudinaryError(response.code, rawBody)
+                    _lastUploadError.value = err
+                    Log.w("Cloudinary", "Audio upload failed ($err), keeping local audio file")
                     cleanPath
                 }
             }
         } catch (e: Exception) {
+            _lastUploadError.value = e.localizedMessage ?: "Erreur d'envoi audio Cloudinary"
             Log.e("Cloudinary", "Error uploading audio to Cloudinary", e)
             cleanPath
         }
@@ -308,15 +404,22 @@ object CloudinaryHelper {
                 .build()
 
             httpClient.newCall(request).execute().use { response ->
+                val rawBody = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
-                    val json = JSONObject(response.body?.string().orEmpty())
+                    val json = JSONObject(rawBody)
                     val secureUrl = json.optString("secure_url", "").trim()
-                    if (secureUrl.startsWith("https://")) secureUrl else file.absolutePath
+                    if (secureUrl.startsWith("https://")) {
+                        _lastUploadError.value = null
+                        file.delete()
+                        secureUrl
+                    } else file.absolutePath
                 } else {
+                    _lastUploadError.value = extractCloudinaryError(response.code, rawBody)
                     file.absolutePath
                 }
             }
         } catch (e: Exception) {
+            _lastUploadError.value = e.localizedMessage ?: "Erreur d'envoi fichier Cloudinary"
             Log.e("Cloudinary", "Error uploading file", e)
             tempFile?.takeIf { it.exists() && it.length() > 0L }?.absolutePath.orEmpty()
         }

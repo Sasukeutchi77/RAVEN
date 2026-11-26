@@ -1,5 +1,6 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 import java.time.Duration
+import java.util.Properties
 
 plugins {
   alias(libs.plugins.android.application)
@@ -21,6 +22,34 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    val requiredEnvDefaults = linkedMapOf(
+      "CLOUDINARY_CLOUD_NAME" to "CLOUDINARY_CLOUD_NAME_PLACEHOLDER",
+      "CLOUDINARY_UPLOAD_PRESET" to "CLOUDINARY_UPLOAD_PRESET_PLACEHOLDER",
+      "CLOUDINARY_UPLOAD_FOLDER" to "raven_media",
+      "FIREBASE_DATABASE_ID" to "FIREBASE_DATABASE_ID_PLACEHOLDER",
+      "FIREBASE_WEB_CLIENT_ID" to "FIREBASE_WEB_CLIENT_ID_PLACEHOLDER",
+      "FIREBASE_PROJECT_ID" to "FIREBASE_PROJECT_ID_PLACEHOLDER",
+      "FIREBASE_APP_ID" to "FIREBASE_APP_ID_PLACEHOLDER",
+      "FIREBASE_API_KEY" to "FIREBASE_API_KEY_PLACEHOLDER",
+      "FIREBASE_MESSAGING_SENDER_ID" to "FIREBASE_MESSAGING_SENDER_ID_PLACEHOLDER",
+      "FIREBASE_STORAGE_BUCKET" to "FIREBASE_STORAGE_BUCKET_PLACEHOLDER"
+    )
+    val loadedSecretKeys = mutableSetOf<String>()
+    listOf(rootProject.file(".env.example"), rootProject.file(".env")).forEach { propFile ->
+      if (propFile.exists() && propFile.isFile) {
+        val props = Properties()
+        propFile.inputStream().use { props.load(it) }
+        props.stringPropertyNames().forEach { loadedSecretKeys.add(it) }
+      }
+    }
+    requiredEnvDefaults.forEach { (key, defaultValue) ->
+      if (!loadedSecretKeys.contains(key)) {
+        val ciEnv = System.getenv(key)?.takeIf { it.isNotBlank() } ?: defaultValue
+        val escaped = ciEnv.replace("\\", "\\\\").replace("\"", "\\\"")
+        buildConfigField("String", key, "\"$escaped\"")
+      }
+    }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -71,11 +100,20 @@ android {
   }
 }
 
-// Configure the Secrets Gradle Plugin to use .env and .env.example files
-// to match the convention used in Web projects.
+// Configure the Secrets Gradle Plugin safely even if .env or .env.example was moved/omitted in CI.
+val hasEnvFile = rootProject.file(".env").exists()
+val hasEnvExampleFile = rootProject.file(".env.example").exists()
 secrets {
-  propertiesFileName = ".env"
-  defaultPropertiesFileName = ".env.example"
+  if (hasEnvFile) {
+    propertiesFileName = ".env"
+  } else if (hasEnvExampleFile) {
+    propertiesFileName = ".env.example"
+  }
+  if (hasEnvExampleFile) {
+    defaultPropertiesFileName = ".env.example"
+  } else if (hasEnvFile) {
+    defaultPropertiesFileName = ".env"
+  }
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }

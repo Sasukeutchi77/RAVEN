@@ -110,4 +110,35 @@ class FirebaseAndCloudinaryConfigUnitTest {
             CloudinaryHelper.uploadAudioFile("/tmp/local_voice_note.m4a")
         )
     }
+
+    @Test
+    fun `sanitizeSyncMediaUrl blocks unsafe schemes path traversal and oversize urls`() {
+        assertNull(FirebaseConfigManager.sanitizeSyncMediaUrl(null))
+        assertNull(FirebaseConfigManager.sanitizeSyncMediaUrl("   "))
+        assertNull(FirebaseConfigManager.sanitizeSyncMediaUrl("content://media/external/images/media/42"))
+        assertNull(FirebaseConfigManager.sanitizeSyncMediaUrl("javascript:alert(1)"))
+        assertNull(FirebaseConfigManager.sanitizeSyncMediaUrl("vbscript:msgbox(1)"))
+        assertNull(FirebaseConfigManager.sanitizeSyncMediaUrl("data:image/png;base64,AAAA"))
+        assertNull(FirebaseConfigManager.sanitizeSyncMediaUrl("https://res.cloudinary.com/cloud/../secret"))
+        val tooLongUrl = "https://res.cloudinary.com/cloud/image/upload/" + "a".repeat(800)
+        assertNull(FirebaseConfigManager.sanitizeSyncMediaUrl(tooLongUrl, maxLen = 800))
+
+        val validUrl = "  https://res.cloudinary.com/ravencloud/image/upload/v1/avatar.jpg  "
+        assertEquals(
+            "https://res.cloudinary.com/ravencloud/image/upload/v1/avatar.jpg",
+            FirebaseConfigManager.sanitizeSyncMediaUrl(validUrl, maxLen = 800)
+        )
+    }
+
+    @Test
+    fun `quoted env values are trimmed cleanly by FirebaseConfigManager and CloudinaryHelper`() {
+        assertTrue(FirebaseConfigManager.isPlaceholderOrBlank("\"YOUR_PROJECT_ID\""))
+        assertTrue(FirebaseConfigManager.isPlaceholderOrBlank("'demo'"))
+        assertFalse(FirebaseConfigManager.isPlaceholderOrBlank("\"raven-prod-cloud\""))
+
+        assertTrue(CloudinaryHelper.isValidConfigToken("\"my_cloud_prod\""))
+        assertTrue(CloudinaryHelper.isValidConfigToken("'preset-v3'"))
+        assertTrue(CloudinaryHelper.isValidFolderToken("\"raven/prod_media\""))
+        assertFalse(CloudinaryHelper.isValidFolderToken("\"../escape\""))
+    }
 }

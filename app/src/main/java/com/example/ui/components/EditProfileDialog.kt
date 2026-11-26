@@ -77,6 +77,7 @@ fun EditProfileDialog(
 
     var isUploadingAvatar by remember { mutableStateOf(false) }
     var isUploadingBanner by remember { mutableStateOf(false) }
+    val lastUploadError by CloudinaryHelper.lastUploadError.collectAsState()
 
     // Launcher for Avatar picker
     val avatarPickerLauncher = rememberLauncherForActivityResult(
@@ -86,7 +87,9 @@ fun EditProfileDialog(
             isUploadingAvatar = true
             coroutineScope.launch {
                 val cloudUrl = CloudinaryHelper.uploadImage(context, uri)
-                avatarUrl = cloudUrl ?: uri.toString()
+                if (cloudUrl.isNotBlank()) {
+                    avatarUrl = cloudUrl
+                }
                 isUploadingAvatar = false
             }
         }
@@ -100,7 +103,9 @@ fun EditProfileDialog(
             isUploadingBanner = true
             coroutineScope.launch {
                 val cloudUrl = CloudinaryHelper.uploadImage(context, uri)
-                bannerUrl = cloudUrl ?: uri.toString()
+                if (cloudUrl.isNotBlank()) {
+                    bannerUrl = cloudUrl
+                }
                 isUploadingBanner = false
             }
         }
@@ -560,13 +565,22 @@ fun EditProfileDialog(
                     color = DiscordDarkSidebar,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        if (!lastUploadError.isNullOrBlank()) {
+                            Text(
+                                text = "Cloudinary : ${lastUploadError.orEmpty()} (copie locale utilisée)",
+                                color = DiscordAmber,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp)
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                         TextButton(onClick = onDismiss) {
                             Text("Annuler", color = DiscordTextLight, fontSize = 14.sp)
                         }
@@ -596,6 +610,7 @@ fun EditProfileDialog(
                         ) {
                             Text("Enregistrer les modifications", color = Color.White, fontWeight = FontWeight.SemiBold)
                         }
+                    }
                     }
                 }
             }

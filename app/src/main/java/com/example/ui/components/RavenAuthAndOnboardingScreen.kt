@@ -129,13 +129,12 @@ import com.example.ui.theme.RavenBodyFontFamily
 import com.example.ui.theme.RavenDisplayFontFamily
 import com.example.ui.theme.ravenPalette
 import com.example.util.CloudinaryHelper
+import com.example.util.FirebaseConfigManager
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-import com.google.firebase.Firebase
 import com.google.firebase.auth.GoogleAuthProvider
-import com.google.firebase.auth.auth
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -181,11 +180,13 @@ fun RavenAuthAndOnboardingScreen(
 
     // Silent startup Credential Manager attempt (separate single-option request for API 36 safety)
     LaunchedEffect(uiState.phase, uiState.skipSilentAutoSignIn, googleWebClientId) {
+        val firebaseAuth = FirebaseConfigManager.getAuthInstance(context)
         if (uiState.phase == AuthOnboardingPhase.SIGN_IN_GMAIL &&
             !uiState.skipSilentAutoSignIn &&
             !attemptedSilentAutoSignIn &&
             googleWebClientId != null &&
-            Firebase.auth.currentUser == null
+            firebaseAuth != null &&
+            firebaseAuth.currentUser == null
         ) {
             attemptedSilentAutoSignIn = true
             val activity = context as? Activity ?: return@LaunchedEffect
@@ -203,7 +204,7 @@ fun RavenAuthAndOnboardingScreen(
                 if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                     val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
                     val firebaseCred = GoogleAuthProvider.getCredential(token, null)
-                    Firebase.auth.signInWithCredential(firebaseCred).await()
+                    firebaseAuth.signInWithCredential(firebaseCred).await()
                     onGmailCredentialSignedIn(prefillCode, true)
                 }
             } catch (e: Exception) {
@@ -227,7 +228,8 @@ fun RavenAuthAndOnboardingScreen(
             scope.launch {
                 try {
                     val activity = context as? Activity
-                    if (activity == null) {
+                    val firebaseAuth = FirebaseConfigManager.getAuthInstance(context)
+                    if (activity == null || firebaseAuth == null) {
                         onAuthError("Impossible d'ouvrir la fenêtre de connexion Gmail.")
                         return@launch
                     }
@@ -240,7 +242,7 @@ fun RavenAuthAndOnboardingScreen(
                     if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                         val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
                         val firebaseCred = GoogleAuthProvider.getCredential(token, null)
-                        Firebase.auth.signInWithCredential(firebaseCred).await()
+                        firebaseAuth.signInWithCredential(firebaseCred).await()
                         onGmailCredentialSignedIn(prefillCode, false)
                     } else {
                         onAuthError("Identifiant Google non reconnu.")
@@ -267,7 +269,7 @@ fun RavenAuthAndOnboardingScreen(
             scope.launch {
                 try {
                     val activity = context as? Activity
-                    val user = Firebase.auth.currentUser
+                    val user = FirebaseConfigManager.getAuthInstance(context)?.currentUser
                     if (activity == null || user == null) {
                         onAuthError("Session Gmail introuvable.")
                         return@launch

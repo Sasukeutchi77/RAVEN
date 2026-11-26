@@ -160,7 +160,7 @@ fun SensitiveActionConfirmationDialog(
                                     if (cred is CustomCredential && cred.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                                         val token = GoogleIdTokenCredential.createFrom(cred.data).idToken
                                         val authCred = GoogleAuthProvider.getCredential(token, null)
-                                        val currentAuthUser = Firebase.auth.currentUser
+                                        val currentAuthUser = FirebaseConfigManager.getAuthInstance(context)?.currentUser
                                         if (currentAuthUser != null) {
                                             currentAuthUser.reauthenticate(authCred).await()
                                             onConfirmWithGoogleReauth(true)

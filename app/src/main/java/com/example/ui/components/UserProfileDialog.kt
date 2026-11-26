@@ -42,9 +42,7 @@ import com.example.util.FirebaseConfigManager
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-import com.google.firebase.Firebase
 import com.google.firebase.auth.GoogleAuthProvider
-import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
@@ -103,9 +101,10 @@ fun UserProfileDialog(
 
     val googleWebClientId = remember(context) { resolveDefaultWebClientId(context) }
     val firebaseStatus = remember(context) { FirebaseConfigManager.inspectStatus(context) }
+    val lastCloudinaryError by CloudinaryHelper.lastUploadError.collectAsState()
     var cloudinaryRefreshTick by remember { mutableIntStateOf(0) }
     var authUser by remember {
-        mutableStateOf(try { Firebase.auth.currentUser } catch (e: Exception) { null })
+        mutableStateOf(try { FirebaseConfigManager.getAuthInstance(context)?.currentUser } catch (e: Exception) { null })
     }
     var isAuthLoading by remember { mutableStateOf(false) }
     var authStatusMessage by remember { mutableStateOf<String?>(null) }
@@ -799,8 +798,10 @@ fun UserProfileDialog(
                                                 if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                                                     val token = GoogleIdTokenCredential.createFrom(credential.data).idToken
                                                     val authCredential = GoogleAuthProvider.getCredential(token, null)
-                                                    Firebase.auth.signInWithCredential(authCredential).await()
-                                                    authUser = Firebase.auth.currentUser
+                                                    val firebaseAuth = FirebaseConfigManager.getAuthInstance(context)
+                                                        ?: throw IllegalStateException("Firebase Auth indisponible")
+                                                    firebaseAuth.signInWithCredential(authCredential).await()
+                                                    authUser = firebaseAuth.currentUser
                                                     onFirebaseAuthChanged()
                                                 }
                                             } catch (e: GetCredentialCancellationException) {
@@ -828,7 +829,7 @@ fun UserProfileDialog(
                                             onSignOut()
                                         } else {
                                             try {
-                                                Firebase.auth.signOut()
+                                                FirebaseConfigManager.getAuthInstance(context)?.signOut()
                                             } catch (e: Exception) {
                                                 Log.w("Auth", "Sign out error", e)
                                             }
@@ -948,6 +949,14 @@ fun UserProfileDialog(
                                     color = if (isCloudinaryActive) DiscordGreen else DiscordTextMuted,
                                     fontSize = 11.sp
                                 )
+                                if (!lastCloudinaryError.isNullOrBlank()) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Dernier envoi : ${lastCloudinaryError.orEmpty()}",
+                                        color = DiscordRed,
+                                        fontSize = 10.sp
+                                    )
+                                }
                             }
                         }
                         Icon(Icons.Default.ChevronRight, contentDescription = null, tint = DiscordTextMuted)
@@ -993,6 +1002,9 @@ fun UserProfileDialog(
         }
         var folderInput by remember { mutableStateOf(CloudinaryHelper.uploadFolder) }
         var configError by remember { mutableStateOf<String?>(null) }
+        var isTestingCloudinary by remember { mutableStateOf(false) }
+        var testResultMessage by remember { mutableStateOf<String?>(null) }
+        var testSucceeded by remember { mutableStateOf(false) }
         val hasEnvDefaults = CloudinaryHelper.isBuildConfigConfigured()
 
         AlertDialog(
@@ -1013,7 +1025,7 @@ fun UserProfileDialog(
                     Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = cloudNameInput,
-                        onValueChange = { cloudNameInput = it; configError = null },
+                        onValueChange = { cloudNameInput = it; configError = null; testResultMessage = null },
                         label = { Text("Cloud Name", color = DiscordTextMuted) },
                         placeholder = { Text("mon_cloud_raven", color = DiscordTextDark) },
                         singleLine = true,
@@ -1028,7 +1040,7 @@ fun UserProfileDialog(
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = presetInput,
-                        onValueChange = { presetInput = it; configError = null },
+                        onValueChange = { presetInput = it; configError = null; testResultMessage = null },
                         label = { Text("Upload Preset (unsigned)", color = DiscordTextMuted) },
                         placeholder = { Text("raven_unsigned", color = DiscordTextDark) },
                         singleLine = true,
@@ -1059,19 +1071,67 @@ fun UserProfileDialog(
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(configError.orEmpty(), color = DiscordRed, fontSize = 11.sp)
                     }
-                    if (CloudinaryHelper.isManualOverride(context)) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        TextButton(
+                    if (!testResultMessage.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = testResultMessage.orEmpty(),
+                            color = if (testSucceeded) DiscordGreen else DiscordRed,
+                            fontSize = 11.sp
+                        )
+                    } else if (!lastCloudinaryError.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Dernière erreur : ${lastCloudinaryError.orEmpty()}",
+                            color = DiscordAmber,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
                             onClick = {
-                                CloudinaryHelper.resetToBuildConfig(context)
-                                cloudinaryRefreshTick++
-                                showCloudinaryDialog = false
+                                if (!isTestingCloudinary) {
+                                    isTestingCloudinary = true
+                                    configError = null
+                                    testResultMessage = null
+                                    coroutineScope.launch {
+                                        val (ok, msg) = CloudinaryHelper.testConfiguration(cloudNameInput, presetInput)
+                                        testSucceeded = ok
+                                        testResultMessage = msg
+                                        isTestingCloudinary = false
+                                    }
+                                }
                             },
-                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                            enabled = !isTestingCloudinary,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("cloudinary_test_button")
                         ) {
-                            Icon(Icons.Default.RestartAlt, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Revenir aux variables Secrets (.env)", color = DiscordAmber, fontSize = 11.sp)
+                            Text(
+                                text = if (isTestingCloudinary) "Test..." else "Tester",
+                                color = DiscordTextWhite,
+                                fontSize = 12.sp
+                            )
+                        }
+                        if (CloudinaryHelper.isManualOverride(context)) {
+                            TextButton(
+                                onClick = {
+                                    CloudinaryHelper.resetToBuildConfig(context)
+                                    cloudinaryRefreshTick++
+                                    showCloudinaryDialog = false
+                                },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            ) {
+                                Icon(Icons.Default.RestartAlt, contentDescription = null, tint = DiscordAmber, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Secrets (.env)", color = DiscordAmber, fontSize = 11.sp)
+                            }
                         }
                     }
                 }
