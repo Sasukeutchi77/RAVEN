@@ -107,10 +107,19 @@ object FirebaseConfigManager {
 
     fun resolveFirestoreDatabaseId(context: Context): String? {
         validBuildConfigOrNull(BuildConfig.FIREBASE_DATABASE_ID)?.let { return it }
-        return runCatching { context.getString(R.string.firestore_database_id) }
+        val xmlDbId = runCatching { context.getString(R.string.firestore_database_id) }
             .getOrNull()
             ?.let(::stripSurroundingQuotes)
             ?.takeIf { !isPlaceholderOrBlank(it) }
+        val activeProjectId = resolveProjectId(context).orEmpty()
+        if (xmlDbId != null &&
+            xmlDbId.startsWith("ai-studio-") &&
+            activeProjectId.isNotBlank() &&
+            activeProjectId != "gen-lang-client-0965686129"
+        ) {
+            return "(default)"
+        }
+        return xmlDbId
     }
 
     fun resolveWebClientId(context: Context): String? {
@@ -217,12 +226,23 @@ object FirebaseConfigManager {
 
     fun inspectStatus(context: Context): FirebaseConfigStatus {
         val customVariant = hasCustomFirebaseVariant()
+        val projectId = resolveProjectId(context).orEmpty()
         val envDbId = validBuildConfigOrNull(BuildConfig.FIREBASE_DATABASE_ID)
         val xmlDbId = runCatching { context.getString(R.string.firestore_database_id) }
             .getOrNull()?.let(::stripSurroundingQuotes)?.takeIf { !isPlaceholderOrBlank(it) }
-        val resolvedDbId = envDbId ?: xmlDbId.orEmpty()
+        val useCustomDefaultDb = envDbId == null &&
+            xmlDbId != null &&
+            xmlDbId.startsWith("ai-studio-") &&
+            projectId.isNotBlank() &&
+            projectId != "gen-lang-client-0965686129"
+        val resolvedDbId = when {
+            envDbId != null -> envDbId
+            useCustomDefaultDb -> "(default)"
+            else -> xmlDbId.orEmpty()
+        }
         val dbSource = when {
             envDbId != null -> "Secrets (.env / BuildConfig)"
+            useCustomDefaultDb -> "Par défaut ((default))"
             xmlDbId != null -> "firebase_applet_config.xml"
             else -> "Non configuré"
         }
@@ -236,7 +256,6 @@ object FirebaseConfigManager {
             else -> "Absent"
         }
 
-        val projectId = resolveProjectId(context).orEmpty()
         val hasFcmSender = validBuildConfigOrNull(BuildConfig.FIREBASE_MESSAGING_SENDER_ID) != null ||
             readStringResource(context, "gcm_defaultSenderId") != null
 

@@ -47,10 +47,15 @@ class FirebaseAndCloudinaryConfigUnitTest {
 
         val status = FirebaseConfigManager.inspectStatus(context)
         assertEquals(context.packageName, status.packageName)
+        assertEquals("chatapp-639f0", status.projectId)
+        assertEquals("(default)", dbId)
         assertEquals(dbId, status.databaseId)
-        assertEquals("firebase_applet_config.xml", status.databaseSource)
+        assertEquals("Par défaut ((default))", status.databaseSource)
         assertTrue(status.hasWebClientId)
-        assertFalse(FirebaseConfigManager.resolveWebClientId(context).isNullOrBlank())
+        assertEquals(
+            "1092056114478-2evp0ueu70tgg5gg11rbk2j0bllk7i1t.apps.googleusercontent.com",
+            FirebaseConfigManager.resolveWebClientId(context)
+        )
     }
 
     @Test
