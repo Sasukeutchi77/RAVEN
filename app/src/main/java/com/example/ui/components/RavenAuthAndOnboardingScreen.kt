@@ -174,6 +174,7 @@ fun RavenAuthAndOnboardingScreen(
     val scope = rememberCoroutineScope()
     val credentialManager = remember(context) { CredentialManager.create(context) }
     val googleWebClientId = remember(context) { resolveDefaultWebClientId(context) }
+    val firebaseDiagnostic = remember(context) { FirebaseConfigManager.inspectStatus(context) }
     var isCredentialBusy by remember { mutableStateOf(false) }
     var attemptedSilentAutoSignIn by remember { mutableStateOf(false) }
     var prefillCode by rememberSaveable { mutableStateOf("") }
@@ -371,6 +372,7 @@ fun RavenAuthAndOnboardingScreen(
                             rememberedAccounts = uiState.rememberedAccounts,
                             isBusy = effectiveBusy,
                             googleConfigured = googleWebClientId != null,
+                            googleConfigDiagnostic = firebaseDiagnostic.projectId.ifBlank { "aucun google-services.json dans l'APK" },
                             errorMessage = uiState.errorMessage,
                             infoMessage = uiState.infoMessage,
                             onAuthIntentChange = { intent ->
@@ -493,6 +495,7 @@ private fun SignInGmailCard(
     rememberedAccounts: List<RememberedGmailAccount>,
     isBusy: Boolean,
     googleConfigured: Boolean,
+    googleConfigDiagnostic: String,
     errorMessage: String?,
     infoMessage: String?,
     onAuthIntentChange: (AuthEntryIntent) -> Unit,
@@ -816,7 +819,7 @@ private fun SignInGmailCard(
 
             if (!googleConfigured) {
                 AuthBanner(
-                    text = "Configuration Google Sign-In absente : ajoutez app/google-services.json (OAuth Web) ou FIREBASE_WEB_CLIENT_ID dans Secrets/.env.",
+                    text = "Configuration Google Sign-In absente ($googleConfigDiagnostic) : ajoutez app/google-services.json (OAuth Web) ou FIREBASE_WEB_CLIENT_ID.",
                     isError = true
                 )
             }

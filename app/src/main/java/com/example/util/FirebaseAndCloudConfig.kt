@@ -91,7 +91,10 @@ object FirebaseConfigManager {
     }
 
     private fun readStringResource(context: Context, name: String): String? {
-        val resId = context.resources.getIdentifier(name, "string", context.packageName)
+        var resId = context.resources.getIdentifier(name, "string", context.packageName)
+        if (resId == 0 && context.packageName != "com.example") {
+            resId = context.resources.getIdentifier(name, "string", "com.example")
+        }
         if (resId == 0) return null
         return runCatching { context.getString(resId) }
             .getOrNull()

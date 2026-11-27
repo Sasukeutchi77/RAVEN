@@ -106,6 +106,19 @@ jobs:
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK_PATH"
           unzip -tqq "$APK_PATH"
+          VALUES_XML="app/build/generated/res/processDebugGoogleServices/values/values.xml"
+          HAS_RES_WEB_CLIENT=0
+          if [ -f "$VALUES_XML" ] && grep -q 'name="default_web_client_id"' "$VALUES_XML"; then
+            HAS_RES_WEB_CLIENT=1
+          fi
+          HAS_ENV_WEB_CLIENT=0
+          if grep -qE '^FIREBASE_WEB_CLIENT_ID=[^[:space:]].*apps\.googleusercontent\.com' .env 2>/dev/null; then
+            HAS_ENV_WEB_CLIENT=1
+          fi
+          if [ "$HAS_RES_WEB_CLIENT" -ne 1 ] && [ "$HAS_ENV_WEB_CLIENT" -ne 1 ]; then
+            echo "::error::APK compilé sans default_web_client_id ! Vérifiez que app/google-services.json (avec client_type: 3) est poussé sur GitHub ou renseignez GOOGLE_SERVICES_JSON / FIREBASE_WEB_CLIENT_ID dans GitHub Secrets."
+            exit 1
+          fi
           APKSIGNER="$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner"
           if [ -x "$APKSIGNER" ]; then
             "$APKSIGNER" verify --verbose "$APK_PATH"
